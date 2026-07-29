@@ -29,9 +29,9 @@ compile(Program, Options) ->
 compile_with_names(Program, Options) ->
     FnReg = maps:get(fn_registry, Options, #{}),
     Incr = maps:get(incrementalize, Options, false),
-    #gdbsp_program{nodes = Nodes, typespecs = TSs} = Program,
+    #gdbsp_program{nodes = Nodes, typespecs = TSs, circuits = Circuits} = Program,
     try
-        case gdbsp_compile_graph:build(Nodes, TSs, FnReg) of
+        case gdbsp_compile_graph:build(Nodes, TSs, FnReg, Circuits) of
             {ok, Graph, NameToId} ->
                 Graph2 = case Incr of
                     true  -> gdbsp_compile_incremental:run(Graph);

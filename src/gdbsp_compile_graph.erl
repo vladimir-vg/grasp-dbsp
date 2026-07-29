@@ -8,7 +8,7 @@
 %%%-------------------------------------------------------------------
 -module(gdbsp_compile_graph).
 
--export([build/3]).
+-export([build/4]).
 
 -include("gdbsp_parse.hrl").
 -include("gdbsp_circuit.hrl").
@@ -24,14 +24,15 @@
 
 -type fn_registry() :: #{binary() := jsx:json_term()}.
 
--spec build([#gdbsp_node_def{}], [#gdbsp_typespec{}], fn_registry()) ->
+-spec build([#gdbsp_node_def{}], [#gdbsp_typespec{}], fn_registry(),
+              [#gdbsp_circuit_def{}]) ->
     {ok, #circuit_graph{}, #{binary() => node_id()}} | {error, term()}.
-build(Nodes, Typespecs, FnReg) ->
+build(Nodes, Typespecs, FnReg, CircuitDefs) ->
     case resolve_names(Nodes, Typespecs) of
         {ok, NameTable} ->
             case topo_sort(NameTable) of
                 {ok, Order} ->
-                    {Graph, NameToId} = construct(NameTable, Order, FnReg),
+                    {Graph, NameToId} = construct(NameTable, Order, FnReg, CircuitDefs),
                     {ok, Graph, NameToId};
                 {error, _} = Err -> Err
             end;
@@ -81,7 +82,10 @@ typespecs_to_map(Typespecs) ->
 
 topo_sort(NameTable) ->
     InDeg = maps:map(fun(_N, Info) ->
-        length(node_refs_from_args(Info#node_info.args, NameTable))
+        case Info#node_info.op of
+            delay -> 0;
+            _ -> length(node_refs_from_args(Info#node_info.args, NameTable))
+        end
     end, NameTable),
     Consumers = build_consumers(NameTable),
     AllNames = maps:keys(NameTable),
@@ -128,27 +132,29 @@ topo_loop(Queue, InDeg, Consumers, NameTable, Acc) ->
 %% Graph construction
 %%====================================================================
 
-construct(NameTable, Order, FnReg) ->
-    {Graph, IdMap} = lists:foldl(fun(Name, {G, IdMapAcc}) ->
+construct(NameTable, Order, FnReg, CircuitDefs) ->
+    {Graph0, IdMap} = lists:foldl(fun(Name, {G, IdMapAcc}) ->
         Info = maps:get(Name, NameTable),
-        {G2, NodeId} = build_node(G, Info, IdMapAcc, NameTable, FnReg),
+        {G2, NodeId} = build_node(G, Info, IdMapAcc, NameTable, FnReg, CircuitDefs),
         {G2, IdMapAcc#{Name => NodeId}}
     end, {new_graph(), #{}}, Order),
-    {Graph, IdMap}.
+    {Graph0, IdMap}.
 
 new_graph() ->
     #circuit_graph{next_id = 1, nodes = #{}, schemas = #{}}.
 
-build_node(G, Info, IdMap, NameTable, FnReg) ->
-    #node_info{name = _Name, op = Op, args = Args, typespec = TS} = Info,
+build_node(G, Info, IdMap, NameTable, FnReg, CircuitDefs) ->
+    #node_info{name = Name, op = Op, args = Args, typespec = TS} = Info,
     InputIds = resolve_input_ids(Args, IdMap, NameTable),
     case Op of
+        fixpoint ->
+            build_fixpoint_graph(G, Name, Args, InputIds, TS, NameTable, FnReg, CircuitDefs);
         join ->
             build_join_graph(G, Args, InputIds, TS, NameTable, FnReg);
         aggregate ->
             build_aggregate_graph(G, Args, InputIds, NameTable, FnReg);
         _ ->
-            {OpTuple, SubNodes} = make_operator(G, _Name, Op, Args, InputIds, TS, NameTable, IdMap, FnReg),
+            {OpTuple, SubNodes} = make_operator(G, Name, Op, Args, InputIds, TS, NameTable, IdMap, FnReg),
             {G2, FinalId} = add_with_sub_nodes(G, OpTuple, InputIds, SubNodes),
             Schema = compute_schema(Op, Args, InputIds, TS, NameTable, G2),
             G3 = set_schema(G2, FinalId, Schema),
@@ -330,9 +336,58 @@ build_aggregate_graph(G, Args, InputIds, _NameTable, FnReg) ->
                           nodes = maps:put(UnwrapId, UnwrapNode, G2#circuit_graph.nodes)},
     G4 = set_schema(G3, UnwrapId, AggSchema),
     {G4, UnwrapId}.
-
 %%====================================================================
-%% Function resolution
+%% Fixpoint graph construction — Rec/Coord subgraph
+%%====================================================================
+
+build_fixpoint_graph(G, FpName, Args, _InputIds, _TS, _NameTable, _FnReg, CircuitDefs) ->
+    [CircuitNameArg | _KwArgs] = Args,
+    CircuitName = case CircuitNameArg of
+        {var, N} -> N;
+        _ -> throw({compile_error, {fixpoint, bad_circuit_name}})
+    end,
+    DefMap = maps:from_list(
+        [{D#gdbsp_circuit_def.name, D} || D <- CircuitDefs]),
+    {ok, Def} = maps:find(CircuitName, DefMap),
+    #gdbsp_circuit_def{params = Params, body = BodyNodes} = Def,
+    BodyNodeNames = [N || #gdbsp_node_def{name = N} <- BodyNodes],
+
+    Prefix = <<FpName/binary, "_">>,
+    SccId = G#circuit_graph.next_id,
+    SelfRefKws = [Kw || Kw <- maps:keys(Params),
+                        lists:member(atom_to_binary(Kw, utf8), BodyNodeNames)],
+
+    NextId0 = G#circuit_graph.next_id + 1000,
+    {G1, RecIds, _NextId1} =
+        lists:foldl(
+            fun(Kw, {GA, RIds, NxId}) ->
+                KwBin = atom_to_binary(Kw, utf8),
+                RecName = <<Prefix/binary, KwBin/binary>>,
+                RecId = NxId,
+                RecNode = #circuit_node{
+                    id = RecId,
+                    op = {rec, RecName, SccId},
+                    inputs = [],
+                    meta = #{sourced => true, scc_body => true}},
+                GA2 = GA#circuit_graph{
+                    next_id = NxId + 1,
+                    nodes = maps:put(RecId, RecNode, GA#circuit_graph.nodes)},
+                {GA2, RIds#{Kw => RecId}, NxId + 1}
+            end,
+            {G, #{}, NextId0},
+            SelfRefKws
+        ),
+
+    FinalId = case maps:size(RecIds) of
+        0 -> G#circuit_graph.next_id;
+        _ -> hd(lists:reverse(maps:values(RecIds)))
+    end,
+
+    Schema = [],
+    G2 = set_schema(G1, FinalId, Schema),
+    {G2, FinalId}.
+
+
 %%====================================================================
 
 resolve_fn(FnName, FnReg) ->

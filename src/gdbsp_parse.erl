@@ -98,14 +98,19 @@ try_node_def_no_multi(Line0, St) ->
 try_node_def_single(Line, St) ->
     case binary:split(Line, <<" := ">>) of
         [Name, OpCall] ->
-            case binary:split(trim(OpCall), <<"(">>) of
-                [Op, <<")">>] ->
+            TrimmedCall = trim(OpCall),
+            case split_op_inner(TrimmedCall) of
+                {Op, <<")">>} ->
                     {done, mk_node(Name, Op, [], St)};
-                [Op, ArgsBin] ->
-                    {_, Inner} = take_single_line_args(ArgsBin),
-                    Args = parse_args(Inner),
-                    {done, mk_node(Name, Op, Args, St)};
-                _ -> false
+                {Op, Inner} ->
+                    case extract_parens_content(Inner) of
+                        {closed, InnerClean} ->
+                            Args = parse_args(InnerClean),
+                            {done, mk_node(Name, Op, Args, St)};
+                        {open, _} ->
+                            {done, mk_node(Name, Op, [], St)}
+                    end;
+                false -> false
             end;
         _ -> false
     end.

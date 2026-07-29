@@ -1,15 +1,12 @@
 %%%-------------------------------------------------------------------
-%%% @doc Pre-processing pass: expands fixpoint calls into inline operators.
+%%% @doc Pre-processing pass: expands fixpoint calls.
 %%%
-%%% Stage 1 only handles trivial fixpoints (no self-referential params),
-%%% compiled as macro expansion.
+%%% Trivial fixpoints (no self-referential params): macro expansion
+%%% into inline operators.
 %%%
-%%% Phase 1: For each fixpoint node, look up circuit definition and
-%%% substitute body nodes with resolved arguments. Prefix body node
-%%% names to avoid collisions.
-%%%
-%%% Phase 2: Resolve circuit_access nodes — replace fp.field with the
-%%% prefixed body node name.
+%%% Self-referential fixpoints: pass through to the graph compiler
+%%% which creates Rec/Coord circuit nodes. Access map entries are
+%%% registered so circuit_access nodes get resolved.
 %%% @end
 %%%-------------------------------------------------------------------
 -module(gdbsp_compile_fixpoint).
@@ -48,9 +45,9 @@ expand_fixpoints([], _CircuitMap, AccMap) ->
 expand_fixpoints([#gdbsp_node_def{op = fixpoint, name = FpName, args = Args,
                                    line = L} | Rest],
                   CircuitMap, AccMap) ->
-    {BodyNodes, NewAccMap} = expand_one_fixpoint(FpName, Args, L, CircuitMap, AccMap),
+    {OutNodes, NewAccMap} = expand_one_fixpoint(FpName, Args, L, CircuitMap, AccMap),
     {RestNodes, AccMap2} = expand_fixpoints(Rest, CircuitMap, NewAccMap),
-    {BodyNodes ++ RestNodes, AccMap2};
+    {OutNodes ++ RestNodes, AccMap2};
 expand_fixpoints([Node | Rest], CircuitMap, AccMap) ->
     {RestNodes, AccMap2} = expand_fixpoints(Rest, CircuitMap, AccMap),
     {[Node | RestNodes], AccMap2}.
@@ -69,39 +66,34 @@ expand_one_fixpoint(FpName, Args, Line, CircuitMap, AccMap) ->
             #gdbsp_circuit_def{params = Params, body = BodyNodes} = Def,
             KwMap = build_kw_map(KwArgs, Line),
             ok = validate_fixpoint_args(Params, KwMap, CircuitName, Line),
-            expand_body(FpName, BodyNodes, Params, KwMap, AccMap, Line)
+            BodyNodeNames = [N || #gdbsp_node_def{name = N} <- BodyNodes],
+            SelfRefKw = find_self_ref_kws(Params, BodyNodeNames),
+            case SelfRefKw of
+                [] ->
+                    expand_trivial(FpName, BodyNodes, Params, KwMap, AccMap, Line);
+                _ ->
+                    pass_through_fixpoint(FpName, Args, Line, BodyNodes, AccMap)
+            end
     end.
 
-build_kw_map(KwArgs, Line) ->
-    maps:from_list(
-        lists:map(
-            fun({K, V}) -> {K, V};
-               (Other) -> throw_fixpoint_error(Line, io_lib:format(
-                    "expected keyword argument, got: ~p", [Other]))
-            end,
-            KwArgs
-        )
+find_self_ref_kws(Params, BodyNodeNames) ->
+    maps:fold(
+        fun(Kw, _Internal, Acc) ->
+            KwBin = atom_to_binary(Kw, utf8),
+            case lists:member(KwBin, BodyNodeNames) of
+                true -> [Kw | Acc];
+                false -> Acc
+            end
+        end,
+        [],
+        Params
     ).
 
-validate_fixpoint_args(Params, KwMap, _CircuitName, _Line) ->
-    ParamKeys = maps:keys(Params),
-    KwKeys = maps:keys(KwMap),
-    Missing = ParamKeys -- KwKeys,
-    case Missing of
-        [] -> ok;
-        _ -> throw_fixpoint_error(_Line, io_lib:format(
-                "missing arguments for circuit ~s: ~s",
-                [_CircuitName, join_keys(Missing)]))
-    end,
-    Extra = KwKeys -- ParamKeys,
-    case Extra of
-        [] -> ok;
-        _ -> throw_fixpoint_error(_Line, io_lib:format(
-                "unknown arguments for circuit ~s: ~s",
-                [_CircuitName, join_keys(Extra)]))
-    end.
+%%--------------------------------------------------------------------
+%% Trivial fixpoint — macro expansion
+%%--------------------------------------------------------------------
 
-expand_body(FpName, BodyNodes, Params, KwMap, AccMapIn, _Line) ->
+expand_trivial(FpName, BodyNodes, Params, KwMap, AccMapIn, _Line) ->
     Prefix = <<FpName/binary, "_">>,
     {NewNodes, NewAccMap} = lists:foldl(
         fun(BodyNode, {NodesAcc, MapAcc}) ->
@@ -125,6 +117,23 @@ expand_body(FpName, BodyNodes, Params, KwMap, AccMapIn, _Line) ->
         BodyNodes
     ),
     {lists:reverse(NewNodes), NewAccMap}.
+
+%%--------------------------------------------------------------------
+%% Self-referential fixpoint — pass through to graph compiler
+%%--------------------------------------------------------------------
+
+pass_through_fixpoint(FpName, Args, Line, BodyNodes, AccMap) ->
+    Prefix = <<FpName/binary, "_">>,
+    NewAccMap = lists:foldl(
+        fun(#gdbsp_node_def{name = BodyName}, MapAcc) ->
+            MapAcc#{{FpName, BodyName} => <<Prefix/binary, BodyName/binary>>}
+        end,
+        AccMap,
+        BodyNodes
+    ),
+    Node = #gdbsp_node_def{name = FpName, op = fixpoint,
+                            args = Args, line = Line},
+    {[Node], NewAccMap}.
 
 substitute_params(Args, SubMap) ->
     lists:map(
@@ -200,6 +209,35 @@ resolve_access_typespecs(TSs, _AccessMap) ->
 
 build_circuit_map(Circuits) ->
     maps:from_list([{Def#gdbsp_circuit_def.name, Def} || Def <- Circuits]).
+
+build_kw_map(KwArgs, Line) ->
+    maps:from_list(
+        lists:map(
+            fun({K, V}) -> {K, V};
+               (Other) -> throw_fixpoint_error(Line, io_lib:format(
+                    "expected keyword argument, got: ~p", [Other]))
+            end,
+            KwArgs
+        )
+    ).
+
+validate_fixpoint_args(Params, KwMap, _CircuitName, _Line) ->
+    ParamKeys = maps:keys(Params),
+    KwKeys = maps:keys(KwMap),
+    Missing = ParamKeys -- KwKeys,
+    case Missing of
+        [] -> ok;
+        _ -> throw_fixpoint_error(_Line, io_lib:format(
+                "missing arguments for circuit ~s: ~s",
+                [_CircuitName, join_keys(Missing)]))
+    end,
+    Extra = KwKeys -- ParamKeys,
+    case Extra of
+        [] -> ok;
+        _ -> throw_fixpoint_error(_Line, io_lib:format(
+                "unknown arguments for circuit ~s: ~s",
+                [_CircuitName, join_keys(Extra)]))
+    end.
 
 throw_fixpoint_error(Line, Msg) when is_list(Msg) ->
     throw({fixpoint_error, {Line, list_to_binary(Msg)}});

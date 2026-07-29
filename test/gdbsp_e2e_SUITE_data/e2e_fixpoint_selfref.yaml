@@ -1,0 +1,16 @@
+- source: |
+    circuit simple(base: input, result: r):
+        result := distinct(plus(input, r))
+
+    src := source("data")
+    src :: stream(struct("v": i64))
+    fp := fixpoint simple(base: src, result: src)
+    out := fp.result
+
+  input:
+    - data:
+        - [1, {v: "42"}]
+
+  expected:
+    - out:
+        - [1, {v: "42"}]

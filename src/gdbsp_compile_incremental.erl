@@ -198,14 +198,8 @@ insert_integrates([InputId | RestInputs], [Mode | RestModes], ParentId,
         insert_integrates(RestInputs, RestModes, ParentId, AccNodes, AccNextId, ModeMap),
     case Mode of
         delta ->
-            InputNode = maps:get(InputId, AccNodes),
-            IsSccBody = maps:get(scc_body, InputNode#circuit_node.meta, false),
-            IntOp = case IsSccBody of
-                true -> {integrate, #{scc_internal => true}};
-                false -> {integrate}
-            end,
             IntId = NextId1,
-            IntNode = #circuit_node{id = IntId, op = IntOp,
+            IntNode = #circuit_node{id = IntId, op = {integrate},
                                     inputs = [InputId],
                                     meta = #{serves => ParentId}},
             Nodes2 = maps:put(IntId, IntNode, Nodes1),
