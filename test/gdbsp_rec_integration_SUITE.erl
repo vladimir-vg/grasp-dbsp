@@ -3,9 +3,12 @@
 %%% Tests the Rec↔Coord message protocol: wiring → source feeding →
 %%% iteration → fixpoint → consumer output.
 %%%
-%%% Uses two stub processes to simulate body operators:
-%%%   body_in  — receives deltas from Rec (body_input), forwards barrier ones to body_out
+%%% Uses stub processes to simulate body operators:
+%%%   body_in  — receives deltas from Rec, forwards barrier ones to body_out
 %%%   body_out — receives from body_in, echoes back to Rec as body_output
+%%%
+%%% For mutual recursion, body_in tracks seen barrier tags to prevent
+%%% infinite echo loops across cross-body edges.
 %%% @end
 %%%-------------------------------------------------------------------
 -module(gdbsp_rec_integration_SUITE).
@@ -19,13 +22,15 @@
 -export([
     sourced_single_rec_basic/1,
     sourced_single_rec_epoch_transition/1,
-    sourceless_rec_basic/1
+    sourceless_rec_basic/1,
+    mutual_recursion_two_recs/1
 ]).
 
 all() -> [
     sourced_single_rec_basic,
     sourced_single_rec_epoch_transition,
-    sourceless_rec_basic
+    sourceless_rec_basic,
+    mutual_recursion_two_recs
 ].
 
 init_per_suite(Config) -> Config.
@@ -85,15 +90,15 @@ mk_delta(Epoch, Deltas, From) ->
 mk_barrier_delta(Epoch, Tag, Deltas, From) ->
     {delta, #{epoch => Epoch, barrier => Tag}, Deltas, From}.
 
-%% Spawn body_in + body_out pair and wire them.
-%% body_in receives from Rec, forwards barrier deltas to body_out.
-%% body_out echoes back to Rec as body_output.
+%%====================================================================
+%% Simple body stubs (single Rec)
+%%====================================================================
+
 body_entry_exit_pair(RecPid) ->
     BodyOut = spawn_link(fun() -> body_out_stub(RecPid) end),
     BodyIn = spawn_link(fun() -> body_in_stub(BodyOut) end),
     {BodyIn, BodyOut}.
 
-%% body_in: receives from Rec, forwards barrrier deltas to body_out
 body_in_stub(BodyOut) ->
     receive
         stop -> BodyOut ! stop, ok;
@@ -107,7 +112,6 @@ body_in_stub(BodyOut) ->
         _ -> body_in_stub(BodyOut)
     end.
 
-%% body_out: receives from body_in, echoes back to Rec
 body_out_stub(RecPid) ->
     receive
         stop -> ok;
@@ -115,6 +119,62 @@ body_out_stub(RecPid) ->
             RecPid ! {delta, Meta, Deltas, self()},
             body_out_stub(RecPid);
         _ -> body_out_stub(RecPid)
+    end.
+
+%%====================================================================
+%% Mutual body stubs (two Recs, cross-connected)
+%%====================================================================
+
+mutual_body_pair(Rec1Pid, Rec2Pid) ->
+    BodyOut1 = spawn_link(fun() -> body_out_stub(Rec1Pid) end),
+    BodyOut2 = spawn_link(fun() -> body_out_stub(Rec2Pid) end),
+    BodyIn1 = spawn_link(fun() -> mutual_init() end),
+    BodyIn2 = spawn_link(fun() -> mutual_init() end),
+    BodyIn1 ! {pair, BodyIn2},
+    BodyIn2 ! {pair, BodyIn1},
+    BodyIn1 ! {body_out, BodyOut1},
+    BodyIn2 ! {body_out, BodyOut2},
+    {BodyIn1, BodyOut1, BodyIn2, BodyOut2}.
+
+mutual_init() ->
+    receive
+        {pair, Peer} -> mutual_init2(Peer)
+    end.
+
+mutual_init2(Peer) ->
+    receive
+        {body_out, Out} -> mutual_loop(Peer, Out, undefined, [], undefined, [])
+    end.
+
+%% Peer=other body_in, Out=my body_out
+%% RcvTag/RcvData=my own Rec's barrier
+%% SyncTag/SyncData=peer's barrier
+mutual_loop(Peer, Out, RcvTag, RcvData, SyncTag, SyncData) ->
+    receive
+        stop -> Out ! stop, Peer ! stop, ok;
+        {sync, PeerTag, PeerData} ->
+            case RcvTag of
+                PeerTag ->
+                    Out ! {delta, #{barrier => PeerTag}, RcvData ++ PeerData, self()},
+                    mutual_loop(Peer, Out, undefined, [], undefined, []);
+                _ ->
+                    mutual_loop(Peer, Out, RcvTag, RcvData, PeerTag, PeerData)
+            end;
+        {delta, Meta, Deltas, _From} ->
+            case maps:find(barrier, Meta) of
+                {ok, Tag} ->
+                    Peer ! {sync, Tag, Deltas},
+                    case SyncTag of
+                        Tag ->
+                            Out ! {delta, Meta, Deltas ++ SyncData, self()},
+                            mutual_loop(Peer, Out, undefined, [], undefined, []);
+                        _ ->
+                            mutual_loop(Peer, Out, Tag, Deltas, SyncTag, SyncData)
+                    end;
+                error ->
+                    mutual_loop(Peer, Out, RcvTag, RcvData, SyncTag, SyncData)
+            end;
+        _ -> mutual_loop(Peer, Out, RcvTag, RcvData, SyncTag, SyncData)
     end.
 
 %%====================================================================
@@ -208,3 +268,52 @@ sourceless_rec_basic(_Config) ->
 
     cleanup([RecPid, CoordPid, Consumer, BodyIn, BodyOut]).
 
+%%====================================================================
+%% Mutual recursion: r1(x) ← init(x), r1(x) ← r2(x), r2(x) ← r1(x)
+%%====================================================================
+
+mutual_recursion_two_recs(_Config) ->
+    Consumer1 = start_collector(),
+    Consumer2 = start_collector(),
+
+    {ok, Rec1} = gdbsp_rec_proc:start_link(#{name => <<"r1">>, scc_id => 0}),
+    {ok, Rec2} = gdbsp_rec_proc:start_link(#{name => <<"r2">>, scc_id => 0}),
+
+    %% Build 4 mutual stubs: BodyIn1, BodyOut1, BodyIn2, BodyOut2
+    %% BodyOut1 → Rec1 (body_output) + BodyIn2 (cross → r2 body)
+    %% BodyOut2 → Rec2 (body_output) + BodyIn1 (cross → r1 body)
+    %% body_in tracks seen barrier tags → prevents infinite echo loops
+    {BodyIn1, BodyOut1, BodyIn2, BodyOut2} = mutual_body_pair(Rec1, Rec2),
+
+    gen_server:call(Rec1, {set_body_inputs, [BodyIn1]}),
+    gen_server:call(Rec1, {set_body_output, BodyOut1}),
+    gen_server:call(Rec2, {set_body_inputs, [BodyIn2]}),
+    gen_server:call(Rec2, {set_body_output, BodyOut2}),
+
+    {ok, CoordPid} = gdbsp_rec_coord_proc:start_link(#{
+        scc_id => 0,
+        sourced => #{Rec1 => #{name => <<"r1">>}},
+        sourceless => #{Rec2 => #{name => <<"r2">>}}}),
+    gen_server:call(Rec1, {set_coordinator, CoordPid}),
+    gen_server:call(Rec2, {set_coordinator, CoordPid}),
+    gen_server:call(Rec1, {set_consumer, Consumer1}),
+    gen_server:call(Rec2, {set_consumer, Consumer2}),
+
+    %% Source feeds Rec1 with init data
+    Src = self(),
+    gen_server:call(Rec1, {set_source, Src}),
+    Rec1 ! mk_delta(0, [{1, <<"x">>}], Src),
+    Rec1 ! mk_barrier_delta(0, epoch_done, [], Src),
+    gen_server:cast(CoordPid, {activate}),
+
+    %% Both Recs should produce the same output
+    Deltas1 = await(Consumer1, 2),
+    All1 = lists:flatmap(fun({delta, _, Ds, _}) -> Ds end, Deltas1),
+    true = lists:member({1, <<"x">>}, All1),
+
+    Deltas2 = await(Consumer2, 2),
+    All2 = lists:flatmap(fun({delta, _, Ds, _}) -> Ds end, Deltas2),
+    true = lists:member({1, <<"x">>}, All2),
+
+    cleanup([Rec1, Rec2, CoordPid, Consumer1, Consumer2,
+             BodyIn1, BodyOut1, BodyIn2, BodyOut2]).
