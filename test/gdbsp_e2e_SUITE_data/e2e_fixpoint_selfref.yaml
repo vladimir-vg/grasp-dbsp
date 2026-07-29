@@ -1,6 +1,6 @@
 - source: |
     circuit simple(base: input, result: r):
-        result := distinct(plus(input, r))
+        result := distinct(r)
 
     src := source("data")
     src :: stream(struct("v": i64))

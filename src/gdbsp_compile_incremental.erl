@@ -37,11 +37,17 @@ run(G = #circuit_graph{nodes = Nodes, next_id = NextId}) ->
 -spec topological_sort(#circuit_graph{}) -> {ok, [node_id()]} | {error, cycle}.
 topological_sort(#circuit_graph{nodes = Nodes}) ->
     ConsumerIndex = build_consumer_index(Nodes),
+    case do_topological_sort(Nodes, ConsumerIndex, false) of
+        {ok, Sorted} -> {ok, Sorted};
+        {error, cycle} -> do_topological_sort(Nodes, ConsumerIndex, true)
+    end.
+
+do_topological_sort(Nodes, ConsumerIndex, ExcludeDelayEdges) ->
     AllIds = maps:keys(Nodes),
-    InDegree = init_indegree(Nodes),
+    InDegree = init_indegree(Nodes, ExcludeDelayEdges),
     Queue = [Id || Id <- AllIds, maps:get(Id, InDegree) =:= 0],
     case topo_loop(queue:from_list(Queue), InDegree, Nodes,
-                   ConsumerIndex, []) of
+                   ConsumerIndex, ExcludeDelayEdges, []) of
         {sorted, Result} when length(Result) =:= length(AllIds) ->
             {ok, lists:reverse(Result)};
         {sorted, _Result} ->
@@ -61,32 +67,59 @@ build_consumer_index(Nodes) ->
         #{},
         Nodes).
 
-init_indegree(Nodes) ->
+init_indegree(Nodes, ExcludeDelayEdges) ->
     maps:map(
-        fun(_ToId, #circuit_node{inputs = ToInputs}) ->
-            length(lists:usort(ToInputs))
-        end,
-        Nodes).
+        fun(_ToId, #circuit_node{op = ToOp, inputs = ToInputs}) ->
+            IsRecOutput = element(1, ToOp) =:= rec_output,
+            lists:foldl(
+                fun(FromId, Count) ->
+                    case maps:find(FromId, Nodes) of
+                        {ok, #circuit_node{op = FromOp}} ->
+                            ShouldSkip = ExcludeDelayEdges
+                                andalso element(1, FromOp) =:= rec,
+                            case ShouldSkip of
+                                false -> Count + 1;
+                                true when IsRecOutput -> Count + 1;
+                                true -> Count
+                            end;
+                        error -> Count
+                    end
+                end, 0, lists:usort(ToInputs))
+        end, Nodes).
 
-topo_loop(Queue, InDegree, Nodes, ConsumerIndex, Acc) ->
+topo_loop(Queue, InDegree, Nodes, ConsumerIndex, ExcludeDelayEdges, Acc) ->
     case queue:out(Queue) of
         {empty, _} ->
             {sorted, Acc};
         {{value, Id}, RestQ} ->
             NewAcc = [Id | Acc],
+            Node = maps:get(Id, Nodes),
+            IsRec = element(1, Node#circuit_node.op) =:= rec,
+            ShouldSkip = ExcludeDelayEdges andalso IsRec,
             {NewQ, NewIndeg} = lists:foldl(
                 fun(ConsumerId, {Q, Indeg}) ->
-                    NewD = maps:get(ConsumerId, Indeg) - 1,
-                    Indeg2 = maps:put(ConsumerId, NewD, Indeg),
-                    case NewD of
-                        0 -> {queue:in(ConsumerId, Q), Indeg2};
-                        _ -> {Q, Indeg2}
+                    Skip = case ShouldSkip of
+                        true ->
+                            #circuit_node{op = COp} = maps:get(ConsumerId, Nodes),
+                            element(1, COp) =/= rec_output;
+                        false -> false
+                    end,
+                    case Skip of
+                        true ->
+                            {Q, Indeg};
+                        false ->
+                            NewD = maps:get(ConsumerId, Indeg) - 1,
+                            Indeg2 = maps:put(ConsumerId, NewD, Indeg),
+                            case NewD of
+                                0 -> {queue:in(ConsumerId, Q), Indeg2};
+                                _ -> {Q, Indeg2}
+                            end
                     end
                 end,
                 {RestQ, InDegree},
                 maps:get(Id, ConsumerIndex, [])
             ),
-            topo_loop(NewQ, NewIndeg, Nodes, ConsumerIndex, NewAcc)
+            topo_loop(NewQ, NewIndeg, Nodes, ConsumerIndex, ExcludeDelayEdges, NewAcc)
     end.
 
 %%====================================================================
@@ -199,7 +232,15 @@ insert_integrates([InputId | RestInputs], [Mode | RestModes], ParentId,
     case Mode of
         delta ->
             IntId = NextId1,
-            IntNode = #circuit_node{id = IntId, op = {integrate},
+            SccInternal = case maps:find(InputId, AccNodes) of
+                {ok, #circuit_node{meta = #{scc_body := true}}} -> true;
+                _ -> false
+            end,
+            IntOp = case SccInternal of
+                true -> {integrate, #{scc_internal => true}};
+                false -> {integrate}
+            end,
+            IntNode = #circuit_node{id = IntId, op = IntOp,
                                     inputs = [InputId],
                                     meta = #{serves => ParentId}},
             Nodes2 = maps:put(IntId, IntNode, Nodes1),

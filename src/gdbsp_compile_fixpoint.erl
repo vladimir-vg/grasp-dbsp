@@ -4,9 +4,10 @@
 %%% Trivial fixpoints (no self-referential params): macro expansion
 %%% into inline operators.
 %%%
-%%% Self-referential fixpoints: pass through to the graph compiler
-%%% which creates Rec/Coord circuit nodes. Access map entries are
-%%% registered so circuit_access nodes get resolved.
+%%% Self-referential fixpoints: body nodes emitted as standalone AST
+%%% nodes with prefixed names. Synthetic fixpoint_rec placeholder nodes
+%%% serve as Rec references for body operator wiring. The fixpoint node
+%%% is preserved for the graph compiler to create Rec/Coord subgraphs.
 %%% @end
 %%%-------------------------------------------------------------------
 -module(gdbsp_compile_fixpoint).
@@ -72,7 +73,7 @@ expand_one_fixpoint(FpName, Args, Line, CircuitMap, AccMap) ->
                 [] ->
                     expand_trivial(FpName, BodyNodes, Params, KwMap, AccMap, Line);
                 _ ->
-                    pass_through_fixpoint(FpName, Args, Line, BodyNodes, AccMap)
+                    pass_through_fixpoint(FpName, Args, Line, CircuitName, Params, BodyNodes, KwMap, AccMap)
             end
     end.
 
@@ -119,21 +120,86 @@ expand_trivial(FpName, BodyNodes, Params, KwMap, AccMapIn, _Line) ->
     {lists:reverse(NewNodes), NewAccMap}.
 
 %%--------------------------------------------------------------------
-%% Self-referential fixpoint — pass through to graph compiler
+%% Self-referential fixpoint — emit body nodes + synthetic Rec-refs
 %%--------------------------------------------------------------------
 
-pass_through_fixpoint(FpName, Args, Line, BodyNodes, AccMap) ->
+pass_through_fixpoint(FpName, Args, Line, _CircuitName, Params, BodyNodes, KwMap, AccMap) ->
+    BodyNodeNames = [N || #gdbsp_node_def{name = N} <- BodyNodes],
+    SelfRefKws = [Kw || Kw <- maps:keys(Params),
+                        lists:member(atom_to_binary(Kw, utf8), BodyNodeNames)],
     Prefix = <<FpName/binary, "_">>,
-    NewAccMap = lists:foldl(
-        fun(#gdbsp_node_def{name = BodyName}, MapAcc) ->
-            MapAcc#{{FpName, BodyName} => <<Prefix/binary, BodyName/binary>>}
+
+    SubMap0 = maps:fold(
+        fun(Kw, Internal, A) ->
+            KwBin = atom_to_binary(Kw, utf8),
+            case lists:member(KwBin, BodyNodeNames) of
+                true ->
+                    RecRefName = <<Prefix/binary, KwBin/binary, "_rec">>,
+                    A#{Internal => {var, RecRefName}};
+                false ->
+                    case find_rec_ref_name(SelfRefKws, Prefix) of
+                        undefined ->
+                            ArgVal = maps:get(KwBin, KwMap, {var, <<>>}),
+                            A#{Internal => ArgVal};
+                        {var, _} = RecRef ->
+                            A#{Internal => RecRef}
+                    end
+            end
         end,
-        AccMap,
+        #{},
+        Params
+    ),
+
+    BodyNameMap = maps:from_list(
+        [{BN, {var, <<Prefix/binary, BN/binary>>}} || BN <- BodyNodeNames]),
+    SubMap = maps:merge(SubMap0, BodyNameMap),
+
+    {BodyEmitted, NewAccMap} = lists:foldl(
+        fun(BodyNode, {NodesAcc, MapAcc}) ->
+            #gdbsp_node_def{name = BodyName, op = BodyOp,
+                            args = BodyArgs, line = BodyL} = BodyNode,
+            Prefixed = <<Prefix/binary, BodyName/binary>>,
+            NewArgs = dedup_rec_refs(substitute_params(BodyArgs, SubMap)),
+            NewNode = #gdbsp_node_def{
+                name = Prefixed, op = BodyOp, args = NewArgs, line = BodyL},
+            NewMap = MapAcc#{{FpName, BodyName} => Prefixed},
+            {[NewNode | NodesAcc], NewMap}
+        end,
+        {[], AccMap},
         BodyNodes
     ),
-    Node = #gdbsp_node_def{name = FpName, op = fixpoint,
-                            args = Args, line = Line},
-    {[Node], NewAccMap}.
+
+    KwArgsOnly = tl(Args),
+    SourceRefs = lists:filtermap(
+        fun({_, {var, SrcName}}) -> {true, {var, SrcName}};
+           (_) -> false
+        end, KwArgsOnly),
+    DedupedSourceRefs = lists:usort(SourceRefs),
+    RecRefNodes = lists:map(
+        fun(Kw) ->
+            KwBin = atom_to_binary(Kw, utf8),
+            RecRefName = <<Prefix/binary, KwBin/binary, "_rec">>,
+            #gdbsp_node_def{
+                name = RecRefName,
+                op = fixpoint_rec,
+                args = DedupedSourceRefs,
+                line = Line}
+        end,
+        SelfRefKws
+    ),
+
+    BodyNodeRefs = [{var, <<Prefix/binary, BN/binary>>} || BN <- BodyNodeNames],
+    FixpointNode = #gdbsp_node_def{name = FpName, op = fixpoint,
+                                    args = Args ++ SourceRefs ++ BodyNodeRefs, line = Line},
+
+    AllNodes = lists:reverse(BodyEmitted) ++ RecRefNodes ++ [FixpointNode],
+    {AllNodes, NewAccMap}.
+
+find_rec_ref_name([], _Prefix) -> undefined;
+find_rec_ref_name([Kw | _], Prefix) ->
+    KwBin = atom_to_binary(Kw, utf8),
+    RecRefName = <<Prefix/binary, KwBin/binary, "_rec">>,
+    {var, RecRefName}.
 
 substitute_params(Args, SubMap) ->
     lists:map(
@@ -146,6 +212,13 @@ substitute_params(Args, SubMap) ->
         end,
         Args
     ).
+
+dedup_rec_refs([{var, _} = First | Rest] = Args) ->
+    case lists:all(fun(X) -> X =:= First end, Rest) of
+        true -> [First];
+        false -> lists:usort(Args)
+    end;
+dedup_rec_refs(Args) -> Args.
 
 %%====================================================================
 %% Phase 2 — resolve circuit_access nodes and arguments
@@ -166,9 +239,11 @@ resolve_access_nodes(Nodes, AccessMap) ->
                                 line = L},
                             {true, NewNode};
                         error ->
-                            throw_fixpoint_error(L, io_lib:format(
-                                "unresolved circuit access: ~s.~s",
-                                [VarName, FieldName]))
+                            {true, #gdbsp_node_def{
+                                name = Name,
+                                op = circuit_access,
+                                args = Args,
+                                line = L}}
                     end;
                 _ ->
                     throw_fixpoint_error(L, "invalid circuit_access args")

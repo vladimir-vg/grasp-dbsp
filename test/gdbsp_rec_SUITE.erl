@@ -24,13 +24,11 @@
     coord_epoch_done_with_iter_sends_diff/1,
     coord_epoch_done_consumer_diff/1,
     coord_iter_barrier_forwards_source/1,
-    coord_iter_reset_mode_sends_state_reset/1,
     coord_epoch_begin_for_sourceless/1,
     body_integrates_feedback/1,
     body_empty_reports_empty/1,
     body_non_empty_reports_non_empty/1,
     body_negative_feedback_exits/1,
-    body_state_reset_clears_and_replays/1,
     drain_source_buf_consolidates/1
 ]).
 
@@ -48,13 +46,11 @@ all() -> [
     coord_epoch_done_with_iter_sends_diff,
     coord_epoch_done_consumer_diff,
     coord_iter_barrier_forwards_source,
-    coord_iter_reset_mode_sends_state_reset,
     coord_epoch_begin_for_sourceless,
     body_integrates_feedback,
     body_empty_reports_empty,
     body_non_empty_reports_non_empty,
     body_negative_feedback_exits,
-    body_state_reset_clears_and_replays,
     drain_source_buf_consolidates
 ].
 
@@ -113,8 +109,7 @@ init_defaults(_Config) ->
     undefined = maps:get(current_source_delta, State),
     false = maps:get(source_done, State),
     [] = maps:get(source_buf, State),
-    undefined = maps:get(has_negatives, State),
-    undefined = maps:get(deferred_iter, State).
+    undefined = maps:get(has_negatives, State).
 
 init_preserves_optional_keys(_Config) ->
     C = coord_pid(),
@@ -258,16 +253,6 @@ coord_iter_barrier_forwards_source(_Config) ->
     undefined = maps:get(current_source_delta, S2),
     [{send, Body, {delta, _, [{1, <<"a">>}], _}}] = Actions.
 
-coord_iter_reset_mode_sends_state_reset(_Config) ->
-    C = coord_pid(), Body = body_pid(),
-    State0 = gdbsp_rec:init_state(#{name => <<"r1">>, scc_id => 0, coordinator => C,
-                                     body_input_pids => [Body]}),
-    State = State0#{epoch => 5},
-    {S2, Actions} = gdbsp_rec:handle_coord(State,
-        {delta, #{epoch => 5, barrier => {iter, 5, 0}, mode => reset}, [], C}, self()),
-    {delta, _, _, _} = maps:get(deferred_iter, S2),
-    [{send, Body, {delta, #{barrier := state_reset}, [], _}}] = Actions.
-
 coord_epoch_begin_for_sourceless(_Config) ->
     C = coord_pid(), Body = body_pid(),
     State = gdbsp_rec:init_state(#{name => <<"r1">>, scc_id => 0, coordinator => C,
@@ -317,22 +302,6 @@ body_negative_feedback_exits(_Config) ->
     catch
         exit:{negative_body_feedback, _, _} -> ok
     end.
-
-body_state_reset_clears_and_replays(_Config) ->
-    Body = body_pid(),
-    State0 = gdbsp_rec:init_state(#{name => <<"r1">>, scc_id => 0,
-                                     body_input_pids => [Body], source_pid => src_pid()}),
-    CID = gdbsp_zset:from_list([{1, <<"a">>}]),
-    BodyDelta = gdbsp_zset:from_list([{1, <<"b">>}]),
-    DefMsg = {delta, #{epoch => 5, barrier => {iter, 5, 0}}, [], self()},
-    State = State0#{epoch => 5, consolidated_input_delta => CID,
-                    consolidated_body_delta => BodyDelta,
-                    deferred_iter => DefMsg},
-    {S2, Actions} = gdbsp_rec:handle_body(State,
-        {delta, #{epoch => 5, barrier => state_reset}, [], body_pid()}, self()),
-    true = gdbsp_zset:is_empty(maps:get(consolidated_body_delta, S2)),
-    undefined = maps:get(deferred_iter, S2),
-    [{send, Body, {delta, _, [{1, <<"a">>}], _}}] = Actions.
 
 %%====================================================================
 %% Drain

@@ -34,9 +34,9 @@ init(InitArgs) ->
 handle_call({set_coordinator, Pid}, _From, State) ->
     {reply, ok, State#{coordinator := Pid}};
 handle_call({set_body_inputs, Pids}, _From, State) ->
-    Name = maps:get(name, State),
-    _ = case maps:find(body_output_pid, State) of
-        {ok, OutPid} when OutPid =/= undefined ->
+    #{name := Name, body_output_pid := BOP} = State,
+    _ = case BOP of
+        OutPid when OutPid =/= undefined ->
             case lists:member(OutPid, Pids) of
                 true -> exit({self_loop_body_entry, Name, OutPid});
                 false -> ok
@@ -45,8 +45,8 @@ handle_call({set_body_inputs, Pids}, _From, State) ->
     end,
     {reply, ok, State#{body_input_pids := Pids}};
 handle_call({set_body_output, Pid}, _From, State) ->
-    Name = maps:get(name, State),
-    case lists:member(Pid, maps:get(body_input_pids, State, [])) of
+    #{name := Name, body_input_pids := BIP} = State,
+    case lists:member(Pid, BIP) of
         true -> exit({self_loop_body_entry, Name, Pid});
         false -> ok
     end,

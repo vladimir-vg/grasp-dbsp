@@ -461,6 +461,7 @@ known_op(<<"project">>)            -> true;
 known_op(<<"antijoin">>)           -> true;
 known_op(<<"circuit_access">>)     -> true;
 known_op(<<"fixpoint">>)           -> true;
+known_op(<<"fixpoint_rec">>)       -> true;
 known_op(_)                        -> false.
 
 parse_node_arg(Arg) when is_binary(Arg) ->

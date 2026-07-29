@@ -80,7 +80,7 @@ build_circuit(Plan, Inputs, Outputs, Gen, OpStates, DoKickoff) ->
     RORefs = [R || R = {rec_output, _, _, _} <- maps:keys(Configs)],
     ROToRec = rec_output_to_rec(Tuples, RORefs),
 
-    CoordPids = spawn_coordinators(RecRefs, Configs, DoKickoff),
+    CoordPids = spawn_coordinators(RecPids, Configs),
 
     Resolve = fun(Ref) ->
         resolve_pid(Ref, RefToPid, ROToRec, Inputs, Outputs)
@@ -148,8 +148,8 @@ rec_output_to_rec(Tuples, RORefs) ->
         end, ROfold, Tuples),
     RecMap.
 
-spawn_coordinators(RecRefs, Configs, _DoKickoff) ->
-    Grouped = group_by_scc(RecRefs, Configs),
+spawn_coordinators(RecPids, Configs) ->
+    Grouped = group_by_scc(RecPids, Configs),
     maps:fold(
         fun(SccId, {Sourced, Sourceless}, Acc) ->
             {ok, Pid} = gdbsp_rec_coord_proc:start_link(#{
@@ -157,19 +157,19 @@ spawn_coordinators(RecRefs, Configs, _DoKickoff) ->
             Acc#{SccId => Pid}
         end, #{}, Grouped).
 
-group_by_scc(RecRefs, Configs) ->
-    lists:foldl(
-        fun({rec, Name, SccId, _} = Ref, Acc) ->
+group_by_scc(RecPids, Configs) ->
+    maps:fold(
+        fun({rec, Name, SccId, _} = Ref, RecPid, Acc) ->
             Config = maps:get(Ref, Configs),
             IsSourced = maps:get(sourced, Config, false),
             {Sourced0, Sourceless0} = maps:get(SccId, Acc, {#{}, #{}}),
             case IsSourced of
                 true ->
-                    Acc#{SccId => {Sourced0#{Ref => #{name => Name}}, Sourceless0}};
+                    Acc#{SccId => {Sourced0#{RecPid => #{name => Name}}, Sourceless0}};
                 false ->
-                    Acc#{SccId => {Sourced0, Sourceless0#{Ref => #{name => Name}}}}
+                    Acc#{SccId => {Sourced0, Sourceless0#{RecPid => #{name => Name}}}}
             end
-        end, #{}, RecRefs).
+        end, #{}, RecPids).
 
 wire_rec_coordinators(RecPids, CoordPids) ->
     maps:foreach(
@@ -185,8 +185,8 @@ wire_rec_body(RecPids, Tuples, Resolve) ->
                                               SR =:= RecRef,
                                               element(1, RR) =:= op],
             gen_server:call(RecPid, {set_body_inputs, BodyInputPids}),
-            BodyOutputPids = [Resolve(SR) || {SR, SL, RR, _RL} <- Tuples,
-                                              RR =:= RecRef, SL =:= body_output],
+            BodyOutputPids = [Resolve(SR) || {SR, _SL, RR, RL} <- Tuples,
+                                              RR =:= RecRef, RL =:= body_output],
             BodyOut = case BodyOutputPids of
                 [Pid | _] -> Pid;
                 [] -> RecPid
@@ -197,8 +197,8 @@ wire_rec_body(RecPids, Tuples, Resolve) ->
 wire_rec_source(RecPids, RecRefs, Tuples, Resolve, Inputs, Outputs, DoKickoff) ->
     maps:foreach(
         fun({rec, Name, SccId, _} = RecRef, RecPid) ->
-            SrcPids = [Resolve(SR) || {SR, SL, RR, _RL} <- Tuples,
-                                        RR =:= RecRef, SL =:= source],
+            SrcPids = [Resolve(SR) || {SR, _SL, RR, RL} <- Tuples,
+                                        RR =:= RecRef, RL =:= source],
             case SrcPids of
                 [SrcPid | _] when SrcPid =/= undefined ->
                     gen_server:call(RecPid, {set_source, SrcPid});
@@ -219,15 +219,26 @@ synthetic_source_done(RecPid) ->
     ok.
 
 wire_output_consumers(RecPids, ROToRec, Tuples, Resolve) ->
+    RecRefToRecPid = maps:from_list([{RecRef, RecPid} || {RecRef, RecPid} <- maps:to_list(RecPids)]),
+    AllOutputPids = lists:usort(
+        [Resolve(RR) || {_SR, _SL, RR, _RL} <- Tuples, element(1, RR) =:= output]),
     maps:foreach(
         fun({rec, _Name, _SccId, _} = RecRef, RecPid) ->
-            OutputConsumers = [Resolve(RR) || {SR, _SL, RR, _RL} <- Tuples,
-                                                SR =:= RecRef,
-                                                element(1, RR) =:= output],
+            DirectOutputs = [Resolve(RR) || {SR, _SL, RR, _RL} <- Tuples,
+                                              SR =:= RecRef,
+                                              element(1, RR) =:= output],
+            RecOutputPairs = [{RO, R} || {RO, R} <- maps:to_list(ROToRec), R =:= RecRef],
+            IndirectOutputs = [Resolve(RR) || {SR, _SL, RR, _RL} <- Tuples,
+                                               element(1, RR) =:= output,
+                                               lists:keyfind(SR, 1, RecOutputPairs) =/= false],
+            AllConsumers = case DirectOutputs ++ IndirectOutputs of
+                [] -> AllOutputPids;
+                Found -> Found
+            end,
             lists:foreach(
                 fun(C) ->
                     gen_server:call(RecPid, {set_consumer, C})
-                end, OutputConsumers)
+                end, AllConsumers)
         end, RecPids).
 
 %%====================================================================

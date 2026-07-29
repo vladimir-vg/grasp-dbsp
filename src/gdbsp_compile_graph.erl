@@ -104,6 +104,8 @@ node_refs_from_args(Args, NameTable) ->
     lists:filtermap(fun
         ({var, Name}) when is_binary(Name) ->
             case maps:is_key(Name, NameTable) of true -> {true, Name}; false -> false end;
+        ({_Kw, {var, Name}}) when is_binary(Name) ->
+            case maps:is_key(Name, NameTable) of true -> {true, Name}; false -> false end;
         (_) -> false
     end, Args).
 
@@ -133,11 +135,16 @@ topo_loop(Queue, InDeg, Consumers, NameTable, Acc) ->
 %%====================================================================
 
 construct(NameTable, Order, FnReg, CircuitDefs) ->
-    {Graph0, IdMap} = lists:foldl(fun(Name, {G, IdMapAcc}) ->
-        Info = maps:get(Name, NameTable),
-        {G2, NodeId} = build_node(G, Info, IdMapAcc, NameTable, FnReg, CircuitDefs),
-        {G2, IdMapAcc#{Name => NodeId}}
-    end, {new_graph(), #{}}, Order),
+    {Graph0, IdMap} = lists:foldl(
+        fun(Name, {G, IdMapAcc}) ->
+            Info = maps:get(Name, NameTable),
+            {G2, NodeId, ExtraIds} = build_node(G, Info, IdMapAcc,
+                                                  NameTable, FnReg, CircuitDefs),
+            {G2, maps:merge(IdMapAcc#{Name => NodeId}, ExtraIds)}
+        end,
+        {new_graph(), #{}},
+        Order
+    ),
     {Graph0, IdMap}.
 
 new_graph() ->
@@ -148,18 +155,26 @@ build_node(G, Info, IdMap, NameTable, FnReg, CircuitDefs) ->
     InputIds = resolve_input_ids(Args, IdMap, NameTable),
     case Op of
         fixpoint ->
-            build_fixpoint_graph(G, Name, Args, InputIds, TS, NameTable, FnReg, CircuitDefs);
+            build_fixpoint_graph(G, Name, Args, TS, NameTable, FnReg, CircuitDefs, IdMap);
+        fixpoint_rec ->
+            build_fixpoint_rec(G, Name);
         join ->
             build_join_graph(G, Args, InputIds, TS, NameTable, FnReg);
         aggregate ->
             build_aggregate_graph(G, Args, InputIds, NameTable, FnReg);
+        circuit_access ->
+            build_legacy_circuit_access(G, Name, Args, IdMap, NameTable);
         _ ->
             {OpTuple, SubNodes} = make_operator(G, Name, Op, Args, InputIds, TS, NameTable, IdMap, FnReg),
             {G2, FinalId} = add_with_sub_nodes(G, OpTuple, InputIds, SubNodes),
             Schema = compute_schema(Op, Args, InputIds, TS, NameTable, G2),
             G3 = set_schema(G2, FinalId, Schema),
-            {G3, FinalId}
+            {G3, FinalId, #{}}
     end.
+
+build_fixpoint_rec(G, _Name) ->
+    {G2, FinalId} = add_with_sub_nodes(G, {integrate}, [], []),
+    {G2, FinalId, #{}}.
 
 %%====================================================================
 %% Input resolution
@@ -304,7 +319,7 @@ build_join_graph(G, Args, InputIds, _TS, _NameTable, _FnReg) ->
 
     Schema = OnFields ++ LeftVal ++ RightVal,
     G5 = set_schema(G4, JoinId, Schema),
-    {G5, JoinId}.
+    {G5, JoinId, #{}}.
 
 %%--------------------------------------------------------------------
 %% Aggregate graph construction — map_index → aggregate → map(unwrap)
@@ -335,13 +350,13 @@ build_aggregate_graph(G, Args, InputIds, _NameTable, FnReg) ->
     G3 = G2#circuit_graph{next_id = UnwrapId + 1,
                           nodes = maps:put(UnwrapId, UnwrapNode, G2#circuit_graph.nodes)},
     G4 = set_schema(G3, UnwrapId, AggSchema),
-    {G4, UnwrapId}.
+    {G4, UnwrapId, #{}}.
 %%====================================================================
 %% Fixpoint graph construction — Rec/Coord subgraph
 %%====================================================================
 
-build_fixpoint_graph(G, FpName, Args, _InputIds, _TS, _NameTable, _FnReg, CircuitDefs) ->
-    [CircuitNameArg | _KwArgs] = Args,
+build_fixpoint_graph(G, FpName, Args, _TS, _NameTable, _FnReg, CircuitDefs, IdMap) ->
+    [CircuitNameArg | KwArgs] = Args,
     CircuitName = case CircuitNameArg of
         {var, N} -> N;
         _ -> throw({compile_error, {fixpoint, bad_circuit_name}})
@@ -351,42 +366,226 @@ build_fixpoint_graph(G, FpName, Args, _InputIds, _TS, _NameTable, _FnReg, Circui
     {ok, Def} = maps:find(CircuitName, DefMap),
     #gdbsp_circuit_def{params = Params, body = BodyNodes} = Def,
     BodyNodeNames = [N || #gdbsp_node_def{name = N} <- BodyNodes],
+    BodyNodeMap = maps:from_list(
+        [{N, D} || D = #gdbsp_node_def{name = N} <- BodyNodes]),
 
     Prefix = <<FpName/binary, "_">>,
     SccId = G#circuit_graph.next_id,
     SelfRefKws = [Kw || Kw <- maps:keys(Params),
                         lists:member(atom_to_binary(Kw, utf8), BodyNodeNames)],
 
-    NextId0 = G#circuit_graph.next_id + 1000,
-    {G1, RecIds, _NextId1} =
-        lists:foldl(
-            fun(Kw, {GA, RIds, NxId}) ->
-                KwBin = atom_to_binary(Kw, utf8),
-                RecName = <<Prefix/binary, KwBin/binary>>,
-                RecId = NxId,
-                RecNode = #circuit_node{
-                    id = RecId,
-                    op = {rec, RecName, SccId},
-                    inputs = [],
-                    meta = #{sourced => true, scc_body => true}},
-                GA2 = GA#circuit_graph{
-                    next_id = NxId + 1,
-                    nodes = maps:put(RecId, RecNode, GA#circuit_graph.nodes)},
-                {GA2, RIds#{Kw => RecId}, NxId + 1}
+    lists:foreach(
+        fun(Kw) ->
+            KwBin = atom_to_binary(Kw, utf8),
+            NodeDef = maps:get(KwBin, BodyNodeMap),
+            case NodeDef#gdbsp_node_def.op of
+                distinct -> ok;
+                _ -> throw({compile_error,
+                            {fixpoint, {missing_distinct, KwBin}}})
+            end
+        end, SelfRefKws),
+
+    BodyPrefixed = maps:from_list(
+        [{BN, <<Prefix/binary, BN/binary>>} || BN <- BodyNodeNames]),
+    BodyOpIds = maps:from_list(
+        lists:filtermap(
+            fun(BN) ->
+                PN = maps:get(BN, BodyPrefixed),
+                case maps:find(PN, IdMap) of
+                    {ok, NodeId} -> {true, {BN, NodeId}};
+                    error -> false
+                end
             end,
-            {G, #{}, NextId0},
-            SelfRefKws
-        ),
+            BodyNodeNames
+        )
+    ),
 
-    FinalId = case maps:size(RecIds) of
-        0 -> G#circuit_graph.next_id;
-        _ -> hd(lists:reverse(maps:values(RecIds)))
+    KwArgsOnly = lists:filter(
+        fun({K, _}) when is_atom(K) -> true; (_) -> false end, KwArgs),
+    KwMap = maps:from_list(
+        lists:map(
+            fun({K, V}) -> {atom_to_binary(K, utf8), V} end, KwArgsOnly)),
+
+    HasBase = lists:any(
+        fun(Kw) -> not lists:member(Kw, SelfRefKws) end,
+        maps:keys(Params)),
+
+    BaseInputIds = lists:filtermap(
+        fun(Kw) ->
+            case lists:member(Kw, SelfRefKws) of
+                true -> false;
+                false ->
+                    KwBin = atom_to_binary(Kw, utf8),
+                    case maps:find(KwBin, KwMap) of
+                        {ok, {var, VarName}} ->
+                            case maps:find(VarName, IdMap) of
+                                {ok, Id} -> {true, Id};
+                                error ->
+                                    throw({compile_error,
+                                           {fixpoint, {unresolved_base_arg, VarName}}})
+                            end;
+                        _ -> false
+                    end
+            end
+        end,
+        maps:keys(Params)),
+
+    {G1, RecIds} = lists:foldl(
+        fun(Kw, {GA, RIds}) ->
+            KwBin = atom_to_binary(Kw, utf8),
+            RecRefName = <<Prefix/binary, KwBin/binary, "_rec">>,
+            case maps:find(RecRefName, IdMap) of
+                {ok, PlaceholderId} ->
+                    BodyOpId = maps:get(KwBin, BodyOpIds),
+                    RecName = <<Prefix/binary, KwBin/binary>>,
+                    RecInputs = lists:usort(BaseInputIds ++ [BodyOpId]),
+                    RecNode = #circuit_node{
+                        id = PlaceholderId,
+                        op = {rec, RecName, SccId},
+                        inputs = RecInputs,
+                        meta = #{sourced => HasBase, scc_body => true}},
+                    Nodes2 = maps:put(PlaceholderId, RecNode, GA#circuit_graph.nodes),
+                    GA2 = GA#circuit_graph{nodes = Nodes2},
+                    {GA2, RIds#{Kw => PlaceholderId}};
+                error ->
+                    throw({compile_error,
+                           {fixpoint, {missing_rec_ref, RecRefName}}})
+            end
+        end,
+        {G, #{}},
+        SelfRefKws
+    ),
+
+    {G2, RecOutputIds} = lists:foldl(
+        fun(Kw, {GA, OutIds}) ->
+            KwBin = atom_to_binary(Kw, utf8),
+            RecId = maps:get(Kw, RecIds),
+            RecOutName = <<Prefix/binary, KwBin/binary>>,
+            RecOutId = GA#circuit_graph.next_id,
+            RecOutNode = #circuit_node{
+                id = RecOutId,
+                op = {rec_output, RecOutName, SccId},
+                inputs = [RecId],
+                meta = #{}},
+            Nodes2 = maps:put(RecOutId, RecOutNode, GA#circuit_graph.nodes),
+            GA2 = GA#circuit_graph{
+                next_id = RecOutId + 1,
+                nodes = Nodes2},
+            Schema = get_schema(GA, maps:get(KwBin, BodyOpIds)),
+            GA3 = set_schema(GA2, RecOutId, Schema),
+            {GA3, OutIds#{KwBin => RecOutId}}
+        end,
+        {G1, #{}},
+        SelfRefKws
+    ),
+
+    ExtraIds = maps:from_list(
+        lists:filtermap(
+            fun(BN) ->
+                case maps:find(BN, RecOutputIds) of
+                    {ok, RecOutId} ->
+                        {true, {maps:get(BN, BodyPrefixed), RecOutId}};
+                    error -> false
+                end
+            end,
+            BodyNodeNames
+        )
+    ),
+
+    RecNodeIds = [Id || {_, Id} <- maps:to_list(RecIds)],
+    G3 = mark_scc_body_nodes(G2, RecNodeIds, RecOutputIds),
+
+    BaseSchema = case BaseInputIds of
+        [FirstBaseId | _] -> get_schema(G3, FirstBaseId);
+        [] -> []
     end,
+    G4 = lists:foldl(
+        fun(RecId, GAcc) -> set_schema(GAcc, RecId, BaseSchema) end,
+        G3, maps:values(RecIds)),
+    G5 = case maps:size(RecOutputIds) of
+        0 -> G4;
+        _ -> lists:foldl(
+            fun(ROId, GAcc) -> set_schema(GAcc, ROId, BaseSchema) end,
+            G4, maps:values(RecOutputIds))
+    end,
+    FinalId = case maps:size(RecOutputIds) of
+        0 -> hd(lists:reverse(maps:values(RecIds)));
+        _ -> hd(lists:reverse(maps:values(RecOutputIds)))
+    end,
+    G6 = set_schema(G5, FinalId, BaseSchema),
+    {G6, FinalId, ExtraIds}.
 
-    Schema = [],
-    G2 = set_schema(G1, FinalId, Schema),
-    {G2, FinalId}.
+%%--------------------------------------------------------------------
+%% Mark body operators as scc_body (downstream of Rec, stops at RecOutput)
+%%--------------------------------------------------------------------
 
+mark_scc_body_nodes(#circuit_graph{nodes = Nodes} = G, RecIds, RecOutputIds) ->
+    RecOutputIdSet = sets:from_list(maps:values(RecOutputIds), [{version, 2}]),
+    RecIdSet = sets:from_list(RecIds, [{version, 2}]),
+    ConsumerIndex = build_consumer_index(Nodes),
+    Nodes2 = mark_forward(Nodes, RecIds, RecIdSet, RecOutputIdSet, ConsumerIndex,
+                          sets:new([{version, 2}])),
+    G#circuit_graph{nodes = Nodes2}.
+
+mark_forward(Nodes, [], _RecIdSet, _RecOutputIdSet, _ConsumerIndex, _Visited) ->
+    Nodes;
+mark_forward(Nodes, [Id | Rest], RecIdSet, RecOutputIdSet, ConsumerIndex, Visited) ->
+    case sets:is_element(Id, Visited) of
+        true ->
+            mark_forward(Nodes, Rest, RecIdSet, RecOutputIdSet, ConsumerIndex, Visited);
+        false ->
+            Visited1 = sets:add_element(Id, Visited),
+            #circuit_node{op = Op, meta = Meta} = maps:get(Id, Nodes),
+            OpTag = element(1, Op),
+            IsRec = OpTag =:= rec,
+            IsRecOutput = OpTag =:= rec_output,
+            IsForeignRec = IsRec andalso not sets:is_element(Id, RecIdSet),
+            AlreadyMarked = maps:is_key(scc_body, Meta),
+            case AlreadyMarked orelse IsForeignRec orelse IsRecOutput of
+                true ->
+                    mark_forward(Nodes, Rest, RecIdSet, RecOutputIdSet, ConsumerIndex, Visited1);
+                false ->
+                    NewMeta = maps:put(scc_body, true, Meta),
+                    Nodes1 = maps:put(Id, (maps:get(Id, Nodes))#circuit_node{meta = NewMeta}, Nodes),
+                    Children = maps:get(Id, ConsumerIndex, []),
+                    mark_forward(Nodes1, Rest ++ Children, RecIdSet, RecOutputIdSet,
+                                 ConsumerIndex, Visited1)
+            end
+    end.
+
+build_consumer_index(Nodes) ->
+    maps:fold(
+        fun(ToId, #circuit_node{inputs = Ins}, Acc) ->
+            lists:foldl(
+                fun(FromId, A) ->
+                    maps:update_with(FromId, fun(L) -> [ToId | L] end, [ToId], A)
+                end,
+                Acc,
+                lists:usort(Ins))
+        end,
+        #{},
+        Nodes).
+
+%%--------------------------------------------------------------------
+%% Legacy circuit_access — resolves via IdMap (fallback for non-fixpoint uses)
+%%--------------------------------------------------------------------
+
+build_legacy_circuit_access(G, _Name, Args, IdMap, _NameTable) ->
+    [{var, VarName}, {var, FieldName}] = Args,
+    ResolvedName = <<VarName/binary, "_", FieldName/binary>>,
+    case maps:find(ResolvedName, IdMap) of
+        {ok, NodeId} ->
+            Id = G#circuit_graph.next_id,
+            Node = #circuit_node{id = Id, op = {plus},
+                                  inputs = [NodeId], meta = #{}},
+            G2 = G#circuit_graph{next_id = Id + 1,
+                                  nodes = maps:put(Id, Node, G#circuit_graph.nodes)},
+            Schema = get_schema(G, NodeId),
+            G3 = set_schema(G2, Id, Schema),
+            {G3, Id, #{}};
+        error ->
+            throw({compile_error, {unresolved_circuit_access, VarName, FieldName}})
+    end.
 
 %%====================================================================
 
