@@ -25,7 +25,9 @@
 -type ref() ::
     {op, reference()} |
     {source, binary(), reference()} |
-    {output, binary(), reference()}.
+    {output, binary(), reference()} |
+    {rec, binary(), non_neg_integer(), reference()} |
+    {rec_output, binary(), non_neg_integer(), reference()}.
 
 -type label() :: term().
 
@@ -90,6 +92,8 @@ assign_refs(Nodes) ->
 -spec node_ref(operator()) -> ref().
 node_ref({source, Name})           -> {source, Name, make_ref()};
 node_ref({output, Name})           -> {output, Name, make_ref()};
+node_ref({rec, Name, SccId})       -> {rec, Name, SccId, make_ref()};
+node_ref({rec_output, Name, SccId}) -> {rec_output, Name, SccId, make_ref()};
 node_ref(_Op)                      -> {op, make_ref()}.
 
 %%====================================================================
@@ -144,6 +148,11 @@ build_configs(Nodes, RefMap, Overrides, ValueMod) ->
 config_for({source, _}, _Inputs, _Ref, _Meta, _Overrides, _ValueMod) ->
     skip;
 config_for({output, _}, _Inputs, _Ref, _Meta, _Overrides, _ValueMod) ->
+    skip;
+config_for({rec, Name, SccId}, _Inputs, _Ref, Meta, _Overrides, _ValueMod) ->
+    IsSourced = maps:get(sourced, Meta, false),
+    {ok, #{name => Name, scc_id => SccId, sourced => IsSourced}};
+config_for({rec_output, _, _}, _Inputs, _Ref, _Meta, _Overrides, _ValueMod) ->
     skip;
 config_for(Op, Inputs, _Ref, Meta, Overrides, ValueMod) ->
     Atom = gdbsp_circuit:op_atom(Op),

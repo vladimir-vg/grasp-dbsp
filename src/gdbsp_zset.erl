@@ -1,9 +1,11 @@
 -module(gdbsp_zset).
 
 -export([
+    new/0,
     from_list/1, to_list/1, is_empty/1, size/1,
     merge/2, subtract_weights/2,
-    apply_deltas/2, normalize_vals/1
+    apply_deltas/2, normalize_vals/1,
+    has_negative_weight/1
 ]).
 
 -type data() :: term().
@@ -97,3 +99,10 @@ apply_deltas(Deltas, ZSet) ->
 
 -spec normalize_vals([{integer(), term()}]) -> [{integer(), term()}].
 normalize_vals(L) -> L.
+
+-spec new() -> zset().
+new() -> #{}.
+
+-spec has_negative_weight(zset()) -> boolean().
+has_negative_weight(Z) ->
+    lists:any(fun({W, _K}) -> W < 0 end, to_list(Z)).

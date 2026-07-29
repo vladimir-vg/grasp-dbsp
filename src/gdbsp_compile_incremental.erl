@@ -141,11 +141,12 @@ process(#circuit_node{id = Id, op = {differentiate}}, _InputModes,
     {AccNodes, AccNextId, maps:put(Id, delta, ModeMap)};
 
 process(#circuit_node{id = Id, op = Op}, InputModes,
-        AccNodes, AccNextId, ModeMap)
+         AccNodes, AccNextId, ModeMap)
   when element(1, Op) =:= map; element(1, Op) =:= filter;
        element(1, Op) =:= flat_map; element(1, Op) =:= neg;
        element(1, Op) =:= plus; element(1, Op) =:= map_index;
-       element(1, Op) =:= delay ->
+       element(1, Op) =:= delay;
+       element(1, Op) =:= rec; element(1, Op) =:= rec_output ->
     OutputMode = merge_modes(InputModes),
     {AccNodes, AccNextId, maps:put(Id, OutputMode, ModeMap)};
 
@@ -197,8 +198,14 @@ insert_integrates([InputId | RestInputs], [Mode | RestModes], ParentId,
         insert_integrates(RestInputs, RestModes, ParentId, AccNodes, AccNextId, ModeMap),
     case Mode of
         delta ->
+            InputNode = maps:get(InputId, AccNodes),
+            IsSccBody = maps:get(scc_body, InputNode#circuit_node.meta, false),
+            IntOp = case IsSccBody of
+                true -> {integrate, #{scc_internal => true}};
+                false -> {integrate}
+            end,
             IntId = NextId1,
-            IntNode = #circuit_node{id = IntId, op = {integrate},
+            IntNode = #circuit_node{id = IntId, op = IntOp,
                                     inputs = [InputId],
                                     meta = #{serves => ParentId}},
             Nodes2 = maps:put(IntId, IntNode, Nodes1),

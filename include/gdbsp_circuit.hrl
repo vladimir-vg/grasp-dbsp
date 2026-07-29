@@ -19,7 +19,9 @@
     {integrate, map()} |
     {differentiate} |
     {delay} |
-    {antijoin, [binary()], [binary()]}.
+    {antijoin, [binary()], [binary()]} |
+    {rec, binary(), non_neg_integer()} |
+    {rec_output, binary(), non_neg_integer()}.
 
 -record(circuit_node, {
     id       :: node_id(),
