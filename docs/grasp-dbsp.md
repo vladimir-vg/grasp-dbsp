@@ -10,6 +10,8 @@ Designed as a compilation target — human-readable, LLM-friendly, with external
 - [compilation.md](compilation.md) — how `.gdbsp` source compiles to a deployable circuit
 - [runtime-model.md](runtime-model.md) — Z-set model, epochs, deltas, barriers, operator state
 - [stdlib.md](stdlib.md) — function and aggregate registry, expression JSON format, value encoding
+- [circuits.md](circuits.md) — circuit definitions: named, parameterised subgraphs with macro expansion
+- [fixpoint-circuits.md](fixpoint-circuits.md) — fixpoint instantiation: iterative convergence within a parent epoch
 
 ## File structure
 
@@ -20,6 +22,8 @@ repeat identically (no-op); a conflicting repeat is an error.
 - Type annotations: `name :: stream(type)` (mandatory for all source nodes)
 - Function declarations: `fn :: function((params) -> ret)`
 - Aggregate function declarations: `fn :: aggregate_function((val) -> ret)`
+- Circuit definitions: `circuit name(key: internal, ...): ...` (see [circuits.md](circuits.md))
+- Fixpoint instantiation: `fp := fixpoint name(key: expr, ...)` (see [fixpoint-circuits.md](fixpoint-circuits.md))
 - Comments: `# text`
 
 Column names in keyword arguments are quoted strings. Node names and function
