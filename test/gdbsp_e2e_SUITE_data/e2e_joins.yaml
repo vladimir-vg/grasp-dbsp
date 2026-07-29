@@ -1,0 +1,56 @@
+- source: |
+    left_src := source("left")
+    left_src :: stream(struct("k": i64, "a": i64))
+    right_src := source("right")
+    right_src :: stream(struct("k": i64, "b": i64))
+    joined := join(left_src, right_src, on: ["k"])
+
+  input:
+    - left:
+        - [1, {k: "1", a: "100"}]
+      right:
+        - [1, {k: "1", b: "200"}]
+    - left:
+        - [-1, {k: "1", a: "100"}]
+
+  expected:
+    - joined:
+        - [1, {k: "1", a: "100", b: "200"}]
+    - joined:
+        - [-1, {k: "1", a: "100", b: "200"}]
+
+- source: |
+    left_src := source("left")
+    left_src :: stream(struct("k1": i64, "k2": i64, "a": i64))
+    right_src := source("right")
+    right_src :: stream(struct("k1": i64, "k2": i64, "b": i64))
+    joined := join(left_src, right_src, on: ["k1", "k2"])
+
+  input:
+    - left:
+        - [1, {k1: "1", k2: "1", a: "100"}]
+        - [1, {k1: "1", k2: "2", a: "200"}]
+      right:
+        - [1, {k1: "1", k2: "1", b: "300"}]
+
+  expected:
+    - joined:
+        - [1, {k1: "1", k2: "1", a: "100", b: "300"}]
+
+- source: |
+    pos := source("pos")
+    pos :: stream(struct("k": i64, "a": i64))
+    neg := source("neg")
+    neg :: stream(struct("k": i64, "b": i64))
+    out := antijoin(pos, neg, on: ["k"])
+
+  input:
+    - pos:
+        - [1, {k: "1", a: "100"}]
+        - [1, {k: "2", a: "200"}]
+      neg:
+        - [1, {k: "1", b: "999"}]
+
+  expected:
+    - out:
+        - [1, {k: "2", a: "200"}]

@@ -1,0 +1,66 @@
+- source: |
+    src := source("data")
+    src :: stream(struct("id": i64, "d": date))
+    out := distinct(src)
+
+  input:
+    - data:
+        - [1, {id: "1", d: {year: "2026", month: "7", day: "28"}}]
+
+  expected:
+    - out:
+        - [1, {id: "1", d: {year: "2026", month: "7", day: "28"}}]
+
+- source: |
+    src := source("data")
+    src :: stream(struct("id": i64, "t": time))
+    out := distinct(src)
+
+  input:
+    - data:
+        - [1, {id: "1", t: {hour: "14", minute: "30", second: "0", microsecond: "500000"}}]
+
+  expected:
+    - out:
+        - [1, {id: "1", t: {hour: "14", minute: "30", second: "0", microsecond: "500000"}}]
+
+- source: |
+    src := source("data")
+    src :: stream(struct("id": i64, "ts": timestamp))
+    out := distinct(src)
+
+  input:
+    - data:
+        - [1, {id: "1", ts: {epoch_microseconds: "1718640000000000"}}]
+
+  expected:
+    - out:
+        - [1, {id: "1", ts: {epoch_microseconds: "1718640000000000"}}]
+
+- source: |
+    src := source("data")
+    src :: stream(struct("id": i64, "tstz": timestamp_with_timezone))
+    out := distinct(src)
+
+  input:
+    - data:
+        - [1, {id: "1", tstz: {epoch_microseconds: "100", offset_seconds: "3600", zone: "Europe/Berlin"}}]
+        - [1, {id: "2", tstz: {epoch_microseconds: "200", offset_seconds: "0"}}]
+
+  expected:
+    - out:
+        - [1, {id: "1", tstz: {epoch_microseconds: "100", offset_seconds: "3600", zone: "Europe/Berlin"}}]
+        - [1, {id: "2", tstz: {epoch_microseconds: "200", offset_seconds: "0"}}]
+
+- source: |
+    src := source("data")
+    src :: stream(struct("id": i64, "iv": interval))
+    out := distinct(src)
+
+  input:
+    - data:
+        - [1, {id: "1", iv: {months: "1", days: "5", microseconds: "3600000000"}}]
+
+  expected:
+    - out:
+        - [1, {id: "1", iv: {months: "1", days: "5", microseconds: "3600000000"}}]

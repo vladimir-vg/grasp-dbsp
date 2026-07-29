@@ -1,0 +1,251 @@
+- source: |
+    src := source("data")
+    src :: stream(struct("x": i64, "y": i64))
+    out := distinct(src)
+
+  input:
+    - data:
+        - [1, {x: "10", y: "20"}]
+
+  expected:
+    - out:
+        - [1, {x: "10", y: "20"}]
+
+- source: |
+    src := source("data")
+    src :: stream(struct("id": i64, "a": i64, "b": i64))
+    out := map(src, rename_fn)
+
+  functions:
+    rename_fn:
+      call: "struct"
+      kwargs:
+        x: {field: "a"}
+        y: {field: "b"}
+
+  input:
+    - data:
+        - [1, {id: "1", a: "100", b: "200"}]
+    - data:
+        - [1, {id: "2", a: "300", b: "400"}]
+
+  expected:
+    - out:
+        - [1, {x: "100", y: "200"}]
+    - out:
+        - [1, {x: "300", y: "400"}]
+
+- source: |
+    src := source("data")
+    src :: stream(struct("name": string("UTF-8"), "dept": i64, "sal": i64))
+    high_sal := filter(src, salary_ge_50k)
+
+  functions:
+    salary_ge_50k:
+      call: "gte"
+      args:
+        - field: "sal"
+        - {type: "i64", value: "50000"}
+
+  input:
+    - data:
+        - [1, {name: "Alice", dept: "10", sal: "60000"}]
+        - [1, {name: "Bob", dept: "20", sal: "35000"}]
+    - data:
+        - [1, {name: "Charlie", dept: "10", sal: "75000"}]
+
+  expected:
+    - high_sal:
+        - [1, {name: "Alice", dept: "10", sal: "60000"}]
+    - high_sal:
+        - [1, {name: "Charlie", dept: "10", sal: "75000"}]
+
+- source: |
+    src := source("data")
+    src :: stream(struct("name": string("UTF-8"), "age": i64, "city": string("UTF-8")))
+    out := project(src, ["name", "city"])
+
+  input:
+    - data:
+        - [1, {name: "Alice", age: "30", city: "NYC"}]
+    - data:
+        - [1, {name: "Bob", age: "25", city: "LA"}]
+
+  expected:
+    - out:
+        - [1, {name: "Alice", city: "NYC"}]
+    - out:
+        - [1, {name: "Bob", city: "LA"}]
+
+- source: |
+    src := source("data")
+    src :: stream(struct("name": string("UTF-8"), "vals": array(i64)))
+    expanded := flat_map(src, unnest_vals)
+    expanded :: stream(struct("name": string("UTF-8"), "v": i64, "vals": array(i64)))
+
+  functions:
+    unnest_vals:
+      field: "vals"
+
+  input:
+    - data:
+        - [1, {name: "Alice", vals: ["10", "20"]}]
+        - [1, {name: "Bob", vals: ["30"]}]
+
+  expected:
+    - expanded:
+        - [1, {name: "Alice", v: "10", vals: ["10", "20"]}]
+        - [1, {name: "Alice", v: "20", vals: ["10", "20"]}]
+        - [1, {name: "Bob", v: "30", vals: ["30"]}]
+
+- source: |
+    src := source("data")
+    src :: stream(struct("id": i64, "val": i64))
+    negated := neg(src)
+    out := plus(src, negated)
+
+  input:
+    - data:
+        - [1, {id: "1", val: "100"}]
+        - [1, {id: "2", val: "200"}]
+    - data:
+        - [-1, {id: "1", val: "100"}]
+
+  expected:
+    - out:
+        - [1, {id: "1", val: "100"}]
+        - [1, {id: "2", val: "200"}]
+        - [-1, {id: "1", val: "100"}]
+        - [-1, {id: "2", val: "200"}]
+    - out:
+        - [-1, {id: "1", val: "100"}]
+        - [1, {id: "1", val: "100"}]
+        - [1, {id: "2", val: "200"}]
+        - [-1, {id: "2", val: "200"}]
+
+- source: |
+    src_a := source("a")
+    src_a :: stream(struct("x": i64))
+    src_b := source("b")
+    src_b :: stream(struct("x": i64))
+    out := plus(src_a, src_b)
+
+  input:
+    - a:
+        - [1, {x: "1"}]
+      b:
+        - [1, {x: "10"}]
+    - a:
+        - [1, {x: "2"}]
+      b:
+        - [1, {x: "20"}]
+        - [1, {x: "30"}]
+
+  expected:
+    - out:
+        - [1, {x: "1"}]
+        - [1, {x: "10"}]
+    - out:
+        - [1, {x: "2"}]
+        - [1, {x: "20"}]
+        - [1, {x: "30"}]
+
+- source: |
+    src := source("data")
+    src :: stream(struct("x": i64))
+    d := delay(src)
+    out := plus(src, d)
+
+  input:
+    - data:
+        - [1, {x: "10"}]
+    - data:
+        - [1, {x: "20"}]
+    - data:
+        - [-1, {x: "10"}]
+
+  expected:
+    - out:
+        # epoch 0: src=10, d=empty
+        - [1, {x: "10"}]
+    - out:
+        # epoch 1: src=20, d=10 (delayed from epoch 0)
+        - [1, {x: "20"}]
+        - [1, {x: "10"}]
+    - out:
+        # epoch 2: src=-10 (retract 10), d=20 (delayed from epoch 1)
+        - [-1, {x: "10"}]
+        - [1, {x: "20"}]
+
+- source: |
+    a := source("a")
+    a :: stream(struct("id": i64, "val": i64))
+    a_delayed := delay(a)
+    out := plus(a, a_delayed)
+
+  input:
+    - a:
+        - [1, {id: "1", val: "100"}]
+    - a:
+        - [1, {id: "2", val: "200"}]
+    - a:
+        - [-1, {id: "1", val: "100"}]
+
+  expected:
+    - out:
+        # epoch 0: a=[{1,100}], delayed=empty
+        - [1, {id: "1", val: "100"}]
+    - out:
+        # epoch 1: a=[{2,200}], delayed=[{1,100}]
+        - [1, {id: "2", val: "200"}]
+        - [1, {id: "1", val: "100"}]
+    - out:
+        # epoch 2: a=[{-1,100}], delayed=[{2,200}]
+        - [-1, {id: "1", val: "100"}]
+        - [1, {id: "2", val: "200"}]
+
+- source: |
+    src := source("data")
+    src :: stream(struct("x": i64, "y": i64))
+    out := distinct(src)
+
+  input:
+    - data:
+        - [1, {x: "10", y: "20"}]
+    - data:
+        - [-1, {x: "10", y: "20"}]
+        - [1, {x: "30", y: "40"}]
+
+  expected:
+    - out:
+        - [1, {x: "10", y: "20"}]
+    - out:
+        - [1, {x: "30", y: "40"}]
+
+- source: |
+    src := source("data")
+    src :: stream(struct("x": i64, "y": i64))
+    f1 := filter(src, ge_10)
+    f2 := filter(f1, lt_100_on_y)
+
+  functions:
+    ge_10:
+      call: "gte"
+      args:
+        - field: "x"
+        - {type: "i64", value: "10"}
+    lt_100_on_y:
+      call: "lt"
+      args:
+        - field: "y"
+        - {type: "i64", value: "100"}
+
+  input:
+    - data:
+        - [1, {x: "5", y: "50"}]
+        - [1, {x: "20", y: "50"}]
+        - [1, {x: "20", y: "200"}]
+
+  expected:
+    - f2:
+        - [1, {x: "20", y: "50"}]

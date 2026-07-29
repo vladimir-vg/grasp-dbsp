@@ -1,0 +1,16 @@
+{application, grasp_dbsp, [
+    {description, "Grasp DBSP — Database Stream Processor runtime"},
+    {vsn, "0.1.0"},
+    {registered, []},
+    {applications, [
+        kernel,
+        stdlib,
+        crypto,
+        jsx,
+        decimal
+    ]},
+    {env, []},
+    {modules, []},
+    {licenses, ["Apache-2.0"]},
+    {links, []}
+]}.

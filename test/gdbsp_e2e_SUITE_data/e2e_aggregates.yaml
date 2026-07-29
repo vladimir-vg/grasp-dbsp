@@ -1,0 +1,91 @@
+- source: |
+    src := source("data")
+    src :: stream(struct("dept": i64, "sal": i64))
+    agg := aggregate(src, sum_sal, by: ["dept"], value: "sal", as: "total")
+
+  functions:
+    sum_sal:
+      aggregate: "agg:sum"
+      args:
+        - field: "sal"
+
+  input:
+    - data:
+        - [1, {dept: "10", sal: "100"}]
+        - [1, {dept: "10", sal: "200"}]
+        - [1, {dept: "20", sal: "50"}]
+
+  expected:
+    - agg:
+        - [1, {dept: "10", total: "300"}]
+        - [1, {dept: "20", total: "50"}]
+
+- source: |
+    src := source("data")
+    src :: stream(struct("dept": i64, "score": f64))
+    agg := aggregate(src, avg_score, by: ["dept"], value: "score", as: "avg")
+
+  functions:
+    avg_score:
+      aggregate: "agg:avg"
+      args:
+        - field: "score"
+
+  input:
+    - data:
+        - [1, {dept: "10", score: "1.5"}]
+        - [1, {dept: "10", score: "2.5"}]
+        - [1, {dept: "20", score: "3.0"}]
+
+  expected:
+    - agg:
+        - [1, {dept: "10", avg: "4.0"}]
+        - [1, {dept: "20", avg: "3.0"}]
+
+- source: |
+    src := source("data")
+    src :: stream(struct("dept": i64, "sal": i64))
+    agg := aggregate(src, sum_sal, by: ["dept"], value: "sal", as: "total")
+
+  functions:
+    sum_sal:
+      aggregate: "agg:sum"
+      args:
+        - field: "sal"
+
+  input:
+    - data:
+        - [1, {dept: "10", sal: "100"}]
+        - [1, {dept: "10", sal: "200"}]
+    - data:
+        - [1, {dept: "10", sal: "50"}]
+        - [1, {dept: "20", sal: "300"}]
+
+  expected:
+    - agg:
+        - [1, {dept: "10", total: "300"}]
+    - agg:
+        - [1, {dept: "10", total: "350"}]
+        - [1, {dept: "20", total: "300"}]
+
+- source: |
+    src := source("data")
+    src :: stream(struct("dept": i64, "city": string("UTF-8"), "sal": i64))
+    agg := aggregate(src, sum_sal, by: ["dept", "city"], value: "sal", as: "total")
+
+  functions:
+    sum_sal:
+      aggregate: "agg:sum"
+      args:
+        - field: "sal"
+
+  input:
+    - data:
+        - [1, {dept: "10", city: "NYC", sal: "100"}]
+        - [1, {dept: "10", city: "NYC", sal: "200"}]
+        - [1, {dept: "10", city: "LA", sal: "50"}]
+
+  expected:
+    - agg:
+        - [1, {dept: "10", city: "NYC", total: "300"}]
+        - [1, {dept: "10", city: "LA", total: "50"}]

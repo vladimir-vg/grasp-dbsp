@@ -1,0 +1,411 @@
+- description: "All 14 operators with interleaved typespecs"
+  input: |
+    emp_src := source("emp")
+    emp_src :: stream(struct("name": string("UTF-8"), "dept": i64, "sal": i64))
+    delayed := delay(emp_src)
+    acc := integrate(delayed)
+    diffs := differentiate(acc)
+    deduped := distinct(diffs)
+    merged := plus(acc, deduped)
+    inverted := neg(merged)
+    mapped := map(inverted, passthrough)
+    filtered := filter(mapped, salary_ge_150)
+    expanded := flat_map(filtered, expand_items)
+    joined := join(mapped, expanded, on: ["name"])
+    aggregated := aggregate(filtered, sum_sal, by: ["dept", "year"], value: "sal", as: "total")
+    leftovers := antijoin(mapped, expanded, on: ["name"])
+    passthrough :: function((struct("from": i64, "to": i64)) -> struct("from": i64, "to": i64))
+    salary_ge_150 :: function((struct("name": string("UTF-8"), "dept": i64, "sal": i64)) -> enum("false","true"))
+    expand_items :: function((struct("id": i64, "items": array(string("UTF-8")))) -> array(struct("id": i64, "item": string("UTF-8"))))
+    sum_sal :: aggregate_function((i64) -> i64)
+  expected:
+    - name: emp_src
+      op: source
+      args:
+        - {string: emp}
+      line: 1
+    - name: emp_src
+      type:
+        stream:
+          struct:
+            name:
+              string:
+                encoding: UTF-8
+            dept: i64
+            sal: i64
+      line: 2
+    - name: delayed
+      op: delay
+      args:
+        - {var: emp_src}
+      line: 3
+    - name: acc
+      op: integrate
+      args:
+        - {var: delayed}
+      line: 4
+    - name: diffs
+      op: differentiate
+      args:
+        - {var: acc}
+      line: 5
+    - name: deduped
+      op: distinct
+      args:
+        - {var: diffs}
+      line: 6
+    - name: merged
+      op: plus
+      args:
+        - {var: acc}
+        - {var: deduped}
+      line: 7
+    - name: inverted
+      op: neg
+      args:
+        - {var: merged}
+      line: 8
+    - name: mapped
+      op: map
+      args:
+        - {var: inverted}
+        - {var: passthrough}
+      line: 9
+    - name: filtered
+      op: filter
+      args:
+        - {var: mapped}
+        - {var: salary_ge_150}
+      line: 10
+    - name: expanded
+      op: flat_map
+      args:
+        - {var: filtered}
+        - {var: expand_items}
+      line: 11
+    - name: joined
+      op: join
+      args:
+        - {var: mapped}
+        - {var: expanded}
+        - {on: [name]}
+      line: 12
+    - name: aggregated
+      op: aggregate
+      args:
+        - {var: filtered}
+        - {var: sum_sal}
+        - {by: [dept, year]}
+        - {value: sal}
+        - {as: total}
+      line: 13
+    - name: leftovers
+      op: antijoin
+      args:
+        - {var: mapped}
+        - {var: expanded}
+        - {on: [name]}
+      line: 14
+    - name: passthrough
+      kind: function
+      params:
+        - struct:
+            from: i64
+            to: i64
+      return:
+        struct:
+          from: i64
+          to: i64
+      line: 15
+    - name: salary_ge_150
+      kind: function
+      params:
+        - struct:
+            name:
+              string:
+                encoding: UTF-8
+            dept: i64
+            sal: i64
+      return:
+        enum: [false, true]
+      line: 16
+    - name: expand_items
+      kind: function
+      params:
+        - struct:
+            id: i64
+            items:
+              array:
+                string:
+                  encoding: UTF-8
+      return:
+        array:
+          struct:
+            id: i64
+            item:
+              string:
+                encoding: UTF-8
+      line: 17
+    - name: sum_sal
+      kind: aggregate_function
+      params:
+        - i64
+      return: i64
+      line: 18
+
+- description: "All type features — scalars, compounds, enum, func/agg decls, type vars"
+  input: |
+    x :: stream(i64)
+    x :: stream(f32)
+    x :: stream(numeric(10, 2))
+    x :: stream(bytes(32))
+    x :: stream(bits(64))
+    x :: stream(string("UTF-8"))
+    x :: stream(string_with_encoding)
+    x :: stream(date)
+    x :: stream(timestamp_with_timezone)
+    x :: stream(interval)
+    x :: stream(enum("red", "green", "blue"))
+    x :: stream(struct("f1": i64, "f2": string("UTF-8")))
+    x :: stream(array(i64))
+    x :: stream(array(i64, 10))
+    x :: stream(map(string("UTF-8"), i64))
+    x :: stream(json)
+    x :: stream(dynamic)
+    fn1 :: function((i64) -> i64)
+    fn2 :: function(() -> string("UTF-8"))
+    fn3 :: function((i64, string("UTF-8")) -> struct("a": i64))
+    count :: aggregate_function((T) -> i64)
+    sum_arr :: aggregate_function((array(i64)) -> i64)
+  expected:
+    - {name: x, type: {stream: i64}, line: 1}
+    - {name: x, type: {stream: f32}, line: 2}
+    - {name: x, type: {stream: {numeric: {precision: 10, scale: 2}}}, line: 3}
+    - {name: x, type: {stream: {bytes: {size: 32}}}, line: 4}
+    - {name: x, type: {stream: {bits: {size: 64}}}, line: 5}
+    - name: x
+      type:
+        stream:
+          string:
+            encoding: UTF-8
+      line: 6
+    - {name: x, type: {stream: string_with_encoding}, line: 7}
+    - {name: x, type: {stream: date}, line: 8}
+    - {name: x, type: {stream: timestamp_with_timezone}, line: 9}
+    - {name: x, type: {stream: interval}, line: 10}
+    - {name: x, type: {stream: {enum: [blue, green, red]}}, line: 11}
+    - name: x
+      type:
+        stream:
+          struct:
+            f1: i64
+            f2:
+              string:
+                encoding: UTF-8
+      line: 12
+    - {name: x, type: {stream: {array: i64}}, line: 13}
+    - {name: x, type: {stream: {array: {element: i64, size: 10}}}, line: 14}
+    - name: x
+      type:
+        stream:
+          map:
+            key:
+              string:
+                encoding: UTF-8
+            value: i64
+      line: 15
+    - {name: x, type: {stream: json}, line: 16}
+    - {name: x, type: {stream: dynamic}, line: 17}
+    - {name: fn1, kind: function, params: [i64], return: i64, line: 18}
+    - name: fn2
+      kind: function
+      params: []
+      return:
+        string:
+          encoding: UTF-8
+      line: 19
+    - name: fn3
+      kind: function
+      params:
+        - i64
+        - string:
+            encoding: UTF-8
+      return:
+        struct:
+          a: i64
+      line: 20
+    - {name: count, kind: aggregate_function, params: [T], return: i64, line: 21}
+    - {name: sum_arr, kind: aggregate_function, params: [{array: i64}], return: i64, line: 22}
+
+- description: "Multi-line node definitions, forward references, comments, blanks"
+  input: |
+    # This is a comment
+    merged := plus(
+      a,
+      b,
+      c,
+      d
+    )
+    c := delay(b)
+    b := neg(a)
+    # more comments
+    a := source("t")
+    a :: stream(struct("id": i64))
+    c :: stream(struct("id": i64))
+    b :: stream(struct("id": i64))
+    merged :: stream(struct("id": i64))
+  expected:
+    - {name: merged, op: plus, args: [{var: a}, {var: b}, {var: c}, {var: d}], line: 2}
+    - {name: c, op: delay, args: [{var: b}], line: 8}
+    - {name: b, op: neg, args: [{var: a}], line: 9}
+    - {name: a, op: source, args: [{string: t}], line: 11}
+    - {name: a, type: {stream: {struct: {id: i64}}}, line: 12}
+    - {name: c, type: {stream: {struct: {id: i64}}}, line: 13}
+    - {name: b, type: {stream: {struct: {id: i64}}}, line: 14}
+    - {name: merged, type: {stream: {struct: {id: i64}}}, line: 15}
+
+- description: "Full transitive closure example from docs"
+  input: |
+    edge_src := source("edge")
+    edge_src :: stream(struct("from": i64, "to": i64))
+    rename_from_to :: function((struct("from": i64, "to": i64)) -> struct("from": i64, "z": i64))
+    rename_edge_for_join :: function((struct("from": i64, "to": i64)) -> struct("joinkey": i64, "from": i64))
+    rename_path_for_join :: function((struct("from": i64, "z": i64)) -> struct("joinkey": i64, "z": i64))
+    path_base := map(edge_src, rename_from_to)
+    path_delayed := delay(path_merged)
+    edge_ready := map(edge_src, rename_edge_for_join)
+    path_ready := map(path_delayed, rename_path_for_join)
+    joined := join(edge_ready, path_ready, on: ["joinkey"])
+    path_merged := plus(path_base, joined)
+    path_deduped := distinct(path_merged)
+    path_state := integrate(path_deduped)
+    path_deltas := differentiate(path_state)
+  expected:
+    - {name: edge_src, op: source, args: [{string: edge}], line: 1}
+    - name: edge_src
+      type:
+        stream:
+          struct:
+            from: i64
+            to: i64
+      line: 2
+    - name: rename_from_to
+      kind: function
+      params:
+        - struct:
+            from: i64
+            to: i64
+      return:
+        struct:
+          from: i64
+          z: i64
+      line: 3
+    - name: rename_edge_for_join
+      kind: function
+      params:
+        - struct:
+            from: i64
+            to: i64
+      return:
+        struct:
+          joinkey: i64
+          from: i64
+      line: 4
+    - name: rename_path_for_join
+      kind: function
+      params:
+        - struct:
+            from: i64
+            z: i64
+      return:
+        struct:
+          joinkey: i64
+          z: i64
+      line: 5
+    - {name: path_base, op: map, args: [{var: edge_src}, {var: rename_from_to}], line: 6}
+    - {name: path_delayed, op: delay, args: [{var: path_merged}], line: 7}
+    - {name: edge_ready, op: map, args: [{var: edge_src}, {var: rename_edge_for_join}], line: 8}
+    - {name: path_ready, op: map, args: [{var: path_delayed}, {var: rename_path_for_join}], line: 9}
+    - {name: joined, op: join, args: [{var: edge_ready}, {var: path_ready}, {on: [joinkey]}], line: 10}
+    - {name: path_merged, op: plus, args: [{var: path_base}, {var: joined}], line: 11}
+    - {name: path_deduped, op: distinct, args: [{var: path_merged}], line: 12}
+    - {name: path_state, op: integrate, args: [{var: path_deduped}], line: 13}
+    - {name: path_deltas, op: differentiate, args: [{var: path_state}], line: 14}
+
+- description: "Full aggregate example from docs"
+  input: |
+    emp_src := source("emp")
+    emp_src :: stream(struct("name": string("UTF-8"), "dept": i64, "year": i64, "sal": i64))
+    salary_ge_150 :: function((struct("name": string("UTF-8"), "dept": i64, "year": i64, "sal": i64)) -> enum("false","true"))
+    sum_sal :: aggregate_function((i64) -> i64)
+    high_paid := filter(emp_src, salary_ge_150)
+    payroll_agg := aggregate(high_paid, sum_sal, by: ["dept", "year"], value: "sal", as: "total")
+  expected:
+    - {name: emp_src, op: source, args: [{string: emp}], line: 1}
+    - name: emp_src
+      type:
+        stream:
+          struct:
+            name:
+              string:
+                encoding: UTF-8
+            dept: i64
+            year: i64
+            sal: i64
+      line: 2
+    - name: salary_ge_150
+      kind: function
+      params:
+        - struct:
+            name:
+              string:
+                encoding: UTF-8
+            dept: i64
+            year: i64
+            sal: i64
+      return:
+        enum: [false, true]
+      line: 3
+    - {name: sum_sal, kind: aggregate_function, params: [i64], return: i64, line: 4}
+    - {name: high_paid, op: filter, args: [{var: emp_src}, {var: salary_ge_150}], line: 5}
+    - {name: payroll_agg, op: aggregate, args: [{var: high_paid}, {var: sum_sal}, {by: [dept, year]}, {value: sal}, {as: total}], line: 6}
+
+- description: "Unknown operator produces parse error"
+  input: |
+    x := bad_op(y)
+  expected_errors:
+    - class: parse_error
+      line: 1
+      contains: "unknown operator"
+
+- description: "Unknown type produces parse error"
+  input: |
+    x :: foobar
+  expected_errors:
+    - class: parse_error
+      line: 1
+      contains: "unknown type"
+
+- description: "Garbage line produces parse error"
+  input: |
+    garbage text here
+  expected_errors:
+    - class: parse_error
+      line: 1
+      contains: "unrecognized declaration"
+
+- description: "Invalid struct field produces parse error"
+  input: |
+    x :: stream(struct("f1" i64))
+  expected_errors:
+    - class: parse_error
+      line: 1
+      contains: "invalid struct field"
+
+- description: "Malformed function declaration produces parse error"
+  input: |
+    f :: function(broken)
+  expected_errors:
+    - class: parse_error
+      line: 1
+      contains: "expected '(' in function declaration"

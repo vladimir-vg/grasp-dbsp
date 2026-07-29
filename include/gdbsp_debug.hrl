@@ -1,0 +1,5 @@
+-ifdef(GRASP_DEBUG).
+-define(DBG(Fmt, Args), ct:pal(Fmt, Args)).
+-else.
+-define(DBG(Fmt, Args), ok).
+-endif.

@@ -1,0 +1,83 @@
+- source: |
+    src := source("data")
+    src :: stream(struct("id": i64, "payload": dynamic))
+    out := distinct(src)
+
+  input:
+    - data:
+        - [1, {id: "1", payload: {type: "i64", value: "10"}}]
+        - [1, {id: "2", payload: {type: "string", value: "hello"}}]
+
+  expected:
+    - out:
+        - [1, {id: "1", payload: {type: "i64", value: "10"}}]
+        - [1, {id: "2", payload: {type: "string", value: "hello"}}]
+
+- source: |
+    src := source("data")
+    src :: stream(struct("name": string("UTF-8"), "age": optional(i64)))
+    out := distinct(src)
+
+  input:
+    - data:
+        - [1, {name: "Alice", age: "30"}]
+        - [1, {name: "Bob", age: NULL}]
+
+  expected:
+    - out:
+        - [1, {name: "Alice", age: "30"}]
+        - [1, {name: "Bob", age: NULL}]
+
+- source: |
+    src := source("data")
+    src :: stream(struct("flag": enum("false", "true"), "val": i64))
+    out := distinct(src)
+
+  input:
+    - data:
+        - [1, {flag: "true", val: "100"}]
+        - [1, {flag: "false", val: "200"}]
+
+  expected:
+    - out:
+        - [1, {flag: "true", val: "100"}]
+        - [1, {flag: "false", val: "200"}]
+
+- source: |
+    src := source("data")
+    src :: stream(struct("id": i64, "price": numeric))
+    out := distinct(src)
+
+  input:
+    - data:
+        - [1, {id: "1", price: "123.45"}]
+
+  expected:
+    - out:
+        - [1, {id: "1", price: "123.45"}]
+
+- source: |
+    src := source("data")
+    src :: stream(struct("id": i64, "data": bytes))
+    out := distinct(src)
+
+  input:
+    - data:
+        - [1, {id: "1", data: {encoding: "base64", value: "AQID"}}]
+
+  expected:
+    - out:
+        - [1, {id: "1", data: {encoding: "base64", value: "AQID"}}]
+
+- source: |
+    src := source("data")
+    src :: stream(struct("id": i64, "text": string_with_encoding))
+    out := distinct(src)
+
+  input:
+    - data:
+        - [1, {id: "1", text: {encoding: "CP1251", value: "hello"}}]
+
+  expected:
+    - out:
+        - [1, {id: "1", text: {encoding: "CP1251", value: "hello"}}]

@@ -1,0 +1,38 @@
+- source: |
+    src := source("data")
+    src :: stream(struct("x": i64))
+    acc := integrate(src)
+
+  input:
+    - data:
+        - [1, {x: "10"}]
+        - [1, {x: "20"}]
+    - data:
+        - [-1, {x: "10"}]
+
+  expected:
+    - acc:
+        - [1, {x: "10"}]
+        - [1, {x: "20"}]
+    - acc:
+        - [-1, {x: "10"}]
+
+- source: |
+    src := source("data")
+    src :: stream(struct("x": i64))
+    acc := integrate(src)
+    out := differentiate(acc)
+
+  input:
+    - data:
+        - [1, {x: "10"}]
+        - [1, {x: "20"}]
+    - data:
+        - [-1, {x: "10"}]
+
+  expected:
+    - out:
+        - [1, {x: "10"}]
+        - [1, {x: "20"}]
+    - out:
+        - [-1, {x: "10"}]

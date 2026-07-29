@@ -1,0 +1,353 @@
+- description: "source node type from typespec"
+  source: |
+    src := source("data")
+    src :: stream(struct("x": i64, "y": i64))
+  expected:
+    src:
+      struct:
+        x: i64
+        y: i64
+
+- description: "filter inherits input type"
+  source: |
+    src := source("data")
+    src :: stream(struct("x": i64, "y": i64))
+    out := filter(src, my_fn)
+  functions:
+    my_fn:
+      call: gte
+      args:
+        - field: x
+        - type: i64
+          value: "0"
+  expected:
+    src:
+      struct:
+        x: i64
+        y: i64
+    out:
+      struct:
+        x: i64
+        y: i64
+
+- description: "distinct inherits input type"
+  source: |
+    src := source("data")
+    src :: stream(struct("x": i64, "y": i64))
+    out := distinct(src)
+  expected:
+    src:
+      struct:
+        x: i64
+        y: i64
+    out:
+      struct:
+        x: i64
+        y: i64
+
+- description: "plus inherits input type"
+  source: |
+    a := source("a")
+    a :: stream(struct("x": i64))
+    b := source("b")
+    b :: stream(struct("x": i64))
+    out := plus(a, b)
+  expected:
+    a:
+      struct:
+        x: i64
+    b:
+      struct:
+        x: i64
+    out:
+      struct:
+        x: i64
+
+- description: "neg inherits input type"
+  source: |
+    src := source("data")
+    src :: stream(struct("x": i64, "y": i64))
+    negated := neg(src)
+  expected:
+    src:
+      struct:
+        x: i64
+        y: i64
+    negated:
+      struct:
+        x: i64
+        y: i64
+
+- description: "project subsets struct fields"
+  source: |
+    src := source("data")
+    src :: stream(struct("name": string("UTF-8"), "age": i64, "city": string("UTF-8")))
+    out := project(src, ["name", "city"])
+  expected:
+    src:
+      struct:
+        name:
+          string:
+            encoding: "UTF-8"
+        age: i64
+        city:
+          string:
+            encoding: "UTF-8"
+    out:
+      struct:
+        name:
+          string:
+            encoding: "UTF-8"
+        city:
+          string:
+            encoding: "UTF-8"
+
+- description: "map with struct constructor determines output type"
+  source: |
+    src := source("data")
+    src :: stream(struct("id": i64, "a": i64, "b": i64))
+    out := map(src, rename_fn)
+  functions:
+    rename_fn:
+      call: struct
+      kwargs:
+        x:
+          field: a
+        y:
+          field: b
+  expected:
+    src:
+      struct:
+        id: i64
+        a: i64
+        b: i64
+    out:
+      struct:
+        x: i64
+        y: i64
+
+- description: "map with field reference"
+  source: |
+    src := source("data")
+    src :: stream(struct("x": i64, "y": string("UTF-8")))
+    out := map(src, pick_x)
+  functions:
+    pick_x:
+      field: x
+  expected:
+    src:
+      struct:
+        x: i64
+        y:
+          string:
+            encoding: "UTF-8"
+    out: i64
+
+- description: "join merges left and right struct types"
+  source: |
+    left_src := source("left")
+    left_src :: stream(struct("k": i64, "a": i64))
+    right_src := source("right")
+    right_src :: stream(struct("k": i64, "b": i64))
+    joined := join(left_src, right_src, on: ["k"])
+  expected:
+    left_src:
+      struct:
+        k: i64
+        a: i64
+    right_src:
+      struct:
+        k: i64
+        b: i64
+    joined:
+      struct:
+        k: i64
+        a: i64
+        b: i64
+
+- description: "aggregate with sum"
+  source: |
+    src := source("data")
+    src :: stream(struct("dept": i64, "sal": i64))
+    agg := aggregate(src, sum_sal, by: ["dept"], value: "sal", as: "total")
+  functions:
+    sum_sal:
+      aggregate: "agg:sum"
+      args:
+        - field: sal
+  expected:
+    src:
+      struct:
+        dept: i64
+        sal: i64
+    agg:
+      struct:
+        dept: i64
+        total: i64
+
+- description: "aggregate with count"
+  source: |
+    src := source("data")
+    src :: stream(struct("dept": i64, "x": string("UTF-8")))
+    agg := aggregate(src, cnt, by: ["dept"], value: "x", as: "cnt")
+  functions:
+    cnt:
+      aggregate: "agg:count"
+      args: []
+  expected:
+    src:
+      struct:
+        dept: i64
+        x:
+          string:
+            encoding: "UTF-8"
+    agg:
+      struct:
+        dept: i64
+        cnt: i64
+
+- description: "chained filter -> distinct preserves type"
+  source: |
+    src := source("data")
+    src :: stream(struct("x": i64, "y": i64))
+    f := filter(src, my_fn)
+    out := distinct(f)
+  functions:
+    my_fn:
+      call: gte
+      args:
+        - field: x
+        - type: i64
+          value: "0"
+  expected:
+    src:
+      struct:
+        x: i64
+        y: i64
+    f:
+      struct:
+        x: i64
+        y: i64
+    out:
+      struct:
+        x: i64
+        y: i64
+
+- description: "neg -> plus chain"
+  source: |
+    src := source("data")
+    src :: stream(struct("id": i64, "val": i64))
+    negated := neg(src)
+    out := plus(src, negated)
+  expected:
+    src:
+      struct:
+        id: i64
+        val: i64
+    negated:
+      struct:
+        id: i64
+        val: i64
+    out:
+      struct:
+        id: i64
+        val: i64
+
+- description: "delay inherits input type"
+  source: |
+    src := source("data")
+    src :: stream(struct("x": i64, "y": i64))
+    d := delay(src)
+  expected:
+    d:
+      struct:
+        x: i64
+        y: i64
+
+- description: "integrate inherits input type"
+  source: |
+    src := source("data")
+    src :: stream(struct("x": i64))
+    i := integrate(src)
+  expected:
+    i:
+      struct:
+        x: i64
+
+- description: "differentiate inherits input type"
+  source: |
+    src := source("data")
+    src :: stream(struct("x": i64))
+    d := differentiate(src)
+  expected:
+    d:
+      struct:
+        x: i64
+
+- description: "flat_map returns input struct type"
+  source: |
+    src := source("data")
+    src :: stream(struct("x": i64, "y": i64))
+    f := flat_map(src, expand_fn)
+  expected:
+    f:
+      struct:
+        x: i64
+        y: i64
+
+- description: "antijoin inherits left input type"
+  source: |
+    left_src := source("left")
+    left_src :: stream(struct("k": i64, "a": i64))
+    right_src := source("right")
+    right_src :: stream(struct("k": i64, "b": i64))
+    aj := antijoin(left_src, right_src, on: ["k"])
+  expected:
+    aj:
+      struct:
+        k: i64
+        a: i64
+
+- description: "map with gte call infers boolean return"
+  source: |
+    src := source("data")
+    src :: stream(struct("x": i64))
+    out := map(src, is_pos)
+  functions:
+    is_pos:
+      call: gte
+      args:
+        - field: x
+        - type: i64
+          value: "0"
+  expected:
+    out: boolean
+
+- description: "map with string:upper call infers string return"
+  source: |
+    src := source("data")
+    src :: stream(struct("name": string("UTF-8")))
+    out := map(src, up)
+  functions:
+    up:
+      call: "string:upper"
+      args:
+        - field: name
+  expected:
+    out: string
+
+- description: "source without type annotation fails"
+  source: |
+    src := source("data")
+  expected_errors:
+    - class: missing_typespec
+      node: src
+
+- description: "cycle without delay fails"
+  source: |
+    src := source("data")
+    src :: stream(struct("x": i64))
+    a := map(b, fn)
+    b := map(a, fn)
+  expected_errors:
+    - class: cycle

@@ -1,0 +1,64 @@
+- source: |
+    src := source("data")
+    src :: stream(struct("id": i64, "val": i64))
+    zero_check := filter(src, nonzero_val)
+    out := distinct(zero_check)
+
+  functions:
+    nonzero_val:
+      call: "neq"
+      args:
+        - field: "val"
+        - {type: "i64", value: "0"}
+
+  input:
+    - data: []
+    - data:
+        - [1, {id: "1", val: "100"}]
+        - [1, {id: "2", val: "200"}]
+    - data: []
+
+  expected_exact:
+    - {}
+    - out:
+        - [1, {id: "1", val: "100"}]
+        - [1, {id: "2", val: "200"}]
+    - {}
+
+- source: |
+    src := source("data")
+    src :: stream(struct("id": i64, "val": i64))
+    out := distinct(src)
+
+  input:
+    - data:
+        - [1, {id: "1", val: "100"}]
+        - [-1, {id: "1", val: "100"}]
+        - [1, {id: "2", val: "200"}]
+
+  expected:
+    - out:
+        - [1, {id: "2", val: "200"}]
+
+- source: |
+    src := source("data")
+    src :: stream(struct("id": i64, "val": i64))
+    f := filter(src, gt_0)
+    out := distinct(f)
+
+  functions:
+    gt_0:
+      call: "gte"
+      args:
+        - field: "val"
+        - {type: "i64", value: "0"}
+
+  input:
+    - data:
+        - [1, {id: "1", val: "100"}]
+        - [1, {id: "2", val: "-50"}]
+        - [-1, {id: "1", val: "100"}]
+        - [-1, {id: "2", val: "-50"}]
+
+  expected_exact:
+    - {}
