@@ -1,0 +1,21 @@
+- source: |
+    circuit join_two(a: left, b: right):
+        result := join(left, right, on: ["via"])
+
+    src_a := source("left")
+    src_a :: stream(struct("via": i64, "la": i64))
+    src_b := source("right")
+    src_b :: stream(struct("via": i64, "lb": i64))
+    fp := fixpoint join_two(a: src_a, b: src_b)
+    out := fp.result
+
+  input:
+    - left:
+        - [1, {via: "1", la: "10"}]
+        - [1, {via: "2", la: "20"}]
+      right:
+        - [1, {via: "1", lb: "100"}]
+
+  expected:
+    - out:
+        - [1, {via: "1", la: "10", lb: "100"}]

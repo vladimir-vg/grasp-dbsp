@@ -1,0 +1,26 @@
+- source: |
+    circuit pass_pos(x: v):
+        result := filter(v, gt_zero)
+
+    src := source("data")
+    src :: stream(struct("val": i64))
+    fp := fixpoint pass_pos(x: src)
+    out := fp.result
+
+  functions:
+    gt_zero:
+      call: "gt"
+      args:
+        - field: "val"
+        - {type: "i64", value: "0"}
+
+  input:
+    - data:
+        - [1, {val: "42"}]
+        - [1, {val: "-5"}]
+        - [1, {val: "100"}]
+
+  expected:
+    - out:
+        - [1, {val: "42"}]
+        - [1, {val: "100"}]

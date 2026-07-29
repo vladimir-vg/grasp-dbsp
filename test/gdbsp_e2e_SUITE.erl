@@ -140,6 +140,79 @@ run_one_fixture(Fixture, _GroupName) ->
     ExpectedEpochs = maybe_deep_binify(maps:get(<<"expected">>, Fixture, [])),
     ExpectedExactEpochs = maybe_deep_binify(maps:get(<<"expected_exact">>, Fixture, [])),
 
+    case maps:find(<<"expected_errors">>, Fixture) of
+        {ok, ExpectedErrorsRaw} ->
+            ExpectedErrors = deep_binify_vals(ExpectedErrorsRaw),
+            run_negative(Source, Functions, ExpectedErrors);
+        error ->
+            run_positive(Source, Functions, InputEpochs, ExpectedEpochs,
+                         ExpectedExactEpochs)
+    end.
+
+run_negative(Source, Functions, ExpectedErrors) ->
+    try
+        %% Use a dummy output name — we expect compilation to fail,
+        %% so this placeholder never actually runs.
+        compile_to_plan(Source, Functions, [<<"dummy">>]),
+        ct:fail("expected compilation to fail but it succeeded")
+    catch
+        Class:Reason:_Stacktrace ->
+            Normalized = normalize_compile_error(Class, Reason),
+            check_expected_errors(Normalized, ExpectedErrors)
+    end.
+
+normalize_compile_error(throw, {fixpoint_error, {_Line, Msg}}) ->
+    #{<<"class">> => <<"fixpoint_error">>, <<"message">> => iolist_to_binary(Msg)};
+normalize_compile_error(throw, {fixpoint_error, {_Line, Msg, _Args}}) ->
+    #{<<"class">> => <<"fixpoint_error">>, <<"message">> => iolist_to_binary(Msg)};
+normalize_compile_error(throw, {compile_error, _} = Reason) ->
+    #{<<"class">> => <<"compile_error">>, <<"detail">> =>
+          list_to_binary(io_lib:format("~p", [Reason]))};
+normalize_compile_error(error, Reason) when is_map(Reason) ->
+    Reason;
+normalize_compile_error(_Class, Reason) ->
+    #{<<"class">> => <<"unexpected_error">>,
+      <<"detail">> => list_to_binary(io_lib:format("~p:~p", [_Class, Reason]))}.
+
+check_expected_errors(_Actual, []) ->
+    ok;
+check_expected_errors(Actual, [Expected | Rest]) ->
+    case error_subset_match(Expected, Actual) of
+        ok -> check_expected_errors(Actual, Rest);
+        {mismatch, Key, ExpVal, ActVal} ->
+            ct:pal("Error mismatch at key ~p: expected ~p, got ~p",
+                   [Key, ExpVal, ActVal]),
+            error({error_mismatch, Key, ExpVal, ActVal})
+    end.
+
+error_subset_match(Expected, Actual) ->
+    maps:fold(
+        fun(Key, ExpVal, ok) ->
+            case maps:find(Key, Actual) of
+                {ok, ActVal} ->
+                    case matches(Key, ExpVal, ActVal) of
+                        true -> ok;
+                        false -> {mismatch, Key, ExpVal, ActVal}
+                    end;
+                error ->
+                    {mismatch, Key, ExpVal, missing}
+            end;
+           (_Key, _ExpVal, Acc) -> Acc
+        end,
+        ok,
+        Expected).
+
+matches(<<"message">>, Exp, Act) ->
+    case binary:match(Act, Exp) of
+        {_, _} -> true;
+        nomatch -> false
+    end;
+matches(_Key, Exp, Act) when is_list(Exp), is_list(Act) ->
+    lists:sort(Exp) =:= lists:sort(Act);
+matches(_Key, Exp, Act) ->
+    Exp =:= Act.
+
+run_positive(Source, Functions, InputEpochs, ExpectedEpochs, ExpectedExactEpochs) ->
     {MatchMode, EpochExpected} = case {ExpectedEpochs, ExpectedExactEpochs} of
         {[], []} -> {subset, []};
         {[_ | _], []} -> {subset, ExpectedEpochs};
@@ -180,7 +253,10 @@ run_one_fixture(Fixture, _GroupName) ->
 
 compile_to_plan(Source, Functions, OutputNames) ->
     {ok, Prog0} = gdbsp_parse:parse_string(Source, #{}),
-    {ok, Prog1} = gdbsp_compile_fixpoint:expand(Prog0),
+    Prog1 = case gdbsp_compile_fixpoint:expand(Prog0) of
+        {ok, P} -> P;
+        {error, {Line, Msg}} -> throw({fixpoint_error, {Line, Msg}})
+    end,
     SourceTypeMap = build_source_type_map(Prog1),
 
     AllTypes = gdbsp_type_infer:infer(

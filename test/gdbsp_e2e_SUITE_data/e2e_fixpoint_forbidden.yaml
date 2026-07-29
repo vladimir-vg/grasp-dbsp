@@ -1,0 +1,32 @@
+- source: |
+    circuit bad(x: input):
+        result := aggregate(x, sum_v, value: "v", as: "total")
+    src := source("data")
+    src :: stream(struct("v": i64))
+    fp := fixpoint bad(x: src)
+    out := fp.result
+  expected_errors:
+    - class: fixpoint_error
+      message: "aggregate"
+
+- source: |
+    circuit bad(x: input):
+        result := neg(x)
+    src := source("data")
+    src :: stream(struct("v": i64))
+    fp := fixpoint bad(x: src)
+    out := fp.result
+  expected_errors:
+    - class: fixpoint_error
+      message: "neg"
+
+- source: |
+    circuit bad(a: input, b: input):
+        result := antijoin(a, b, on: ["v"])
+    src := source("data")
+    src :: stream(struct("v": i64))
+    fp := fixpoint bad(a: src, b: src)
+    out := fp.result
+  expected_errors:
+    - class: fixpoint_error
+      message: "antijoin"

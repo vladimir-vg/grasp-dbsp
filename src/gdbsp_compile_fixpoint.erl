@@ -16,6 +16,8 @@
 
 -include("gdbsp_parse.hrl").
 
+-define(FORBIDDEN_IN_FIXPOINT, [aggregate, neg, antijoin]).
+
 %%====================================================================
 %% Public API
 %%====================================================================
@@ -65,6 +67,7 @@ expand_one_fixpoint(FpName, Args, Line, CircuitMap, AccMap) ->
                 "unknown circuit: ~s", [CircuitName]));
         {ok, Def} ->
             #gdbsp_circuit_def{params = Params, body = BodyNodes} = Def,
+            ok = validate_body_operators(BodyNodes, CircuitName, Line),
             KwMap = build_kw_map(KwArgs, Line),
             ok = validate_fixpoint_args(Params, KwMap, CircuitName, Line),
             BodyNodeNames = [N || #gdbsp_node_def{name = N} <- BodyNodes],
@@ -88,6 +91,28 @@ find_self_ref_kws(Params, BodyNodeNames) ->
         end,
         [],
         Params
+    ).
+
+%%--------------------------------------------------------------------
+%% Forbidden operator validation for fixpoint circuits.
+%%
+%% TODO: when circuit nesting (body nodes referencing other circuits)
+%% is implemented, make this walk transitively through referenced
+%% circuit bodies.
+%%--------------------------------------------------------------------
+
+validate_body_operators(BodyNodes, CircuitName, Line) ->
+    lists:foreach(
+        fun(#gdbsp_node_def{name = NodeName, op = Op}) ->
+            case lists:member(Op, ?FORBIDDEN_IN_FIXPOINT) of
+                true ->
+                    throw_fixpoint_error(Line, io_lib:format(
+                        "operator ~s is not allowed inside fixpoint circuit ~s (node ~s)",
+                        [Op, CircuitName, NodeName]));
+                false -> ok
+            end
+        end,
+        BodyNodes
     ).
 
 %%--------------------------------------------------------------------
@@ -216,7 +241,7 @@ substitute_params(Args, SubMap) ->
 dedup_rec_refs([{var, _} = First | Rest] = Args) ->
     case lists:all(fun(X) -> X =:= First end, Rest) of
         true -> [First];
-        false -> lists:usort(Args)
+        false -> Args
     end;
 dedup_rec_refs(Args) -> Args.
 

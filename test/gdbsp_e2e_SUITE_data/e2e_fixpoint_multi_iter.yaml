@@ -1,0 +1,37 @@
+- source: |
+    circuit countdown(base: input, result: r):
+        filtered := filter(r, gt_zero)
+        next := map(filtered, dec_fn)
+        combined := plus(input, next)
+        result := distinct(combined)
+
+    src := source("data")
+    src :: stream(struct("v": i64))
+    fp := fixpoint countdown(base: src, result: src)
+    out := fp.result
+
+  functions:
+    gt_zero:
+      call: "gt"
+      args:
+        - field: "v"
+        - {type: "i64", value: "0"}
+    dec_fn:
+      call: "struct"
+      kwargs:
+        v:
+          call: "math:sub"
+          args:
+            - field: "v"
+            - {type: "i64", value: "1"}
+
+  input:
+    - data:
+        - [1, {v: "3"}]
+
+  expected:
+    - out:
+        - [2, {v: "0"}]
+        - [2, {v: "1"}]
+        - [2, {v: "2"}]
+        - [2, {v: "3"}]

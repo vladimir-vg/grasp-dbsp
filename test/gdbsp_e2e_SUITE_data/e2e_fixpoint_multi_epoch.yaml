@@ -1,0 +1,21 @@
+- source: |
+    circuit acc(base: input, result: r):
+        result := distinct(r)
+
+    src := source("data")
+    src :: stream(struct("v": i64))
+    fp := fixpoint acc(base: src, result: src)
+    out := fp.result
+
+  input:
+    - data:
+        - [1, {v: "10"}]
+    - data:
+        - [-1, {v: "10"}]
+        - [1, {v: "20"}]
+
+  expected:
+    - out:
+        - [2, {v: "10"}]
+    - out:
+        - [2, {v: "20"}]
