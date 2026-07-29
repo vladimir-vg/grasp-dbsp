@@ -1,0 +1,16 @@
+- source: |
+    circuit identity(x: val):
+        output := distinct(val)
+
+    src := source("data")
+    src :: stream(struct("v": i64))
+    fp := fixpoint identity(x: src)
+    out := fp.output
+
+  input:
+    - data:
+        - [1, {v: "42"}]
+
+  expected:
+    - out:
+        - [1, {v: "42"}]

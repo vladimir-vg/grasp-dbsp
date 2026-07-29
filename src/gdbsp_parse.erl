@@ -7,7 +7,8 @@
 -record(st, {
     line       = 0 :: pos_integer(),
     nodes      = [] :: [#gdbsp_node_def{}],
-    typespecs  = [] :: [#gdbsp_typespec{}]
+    typespecs  = [] :: [#gdbsp_typespec{}],
+    circuits   = [] :: [#gdbsp_circuit_def{}]
 }).
 
 %%====================================================================
@@ -30,7 +31,8 @@ parse_string(Bin, _Opts) ->
         St ->
             Prog = #gdbsp_program{
                 nodes     = lists:reverse(St#st.nodes),
-                typespecs = lists:reverse(St#st.typespecs)
+                typespecs = lists:reverse(St#st.typespecs),
+                circuits  = lists:reverse(St#st.circuits)
             },
             {ok, Prog}
     catch
@@ -53,6 +55,8 @@ parse_lines([Line0 | Rest], St0) ->
     case Line of
         <<"#", _/binary>> -> parse_lines(Rest, St);
         <<>> -> parse_lines(Rest, St);
+        <<"circuit ", _/binary>> ->
+            parse_circuit_def(Line, St, Rest);
         _ ->
             case try_node_def(Line, St, Rest) of
                 {done, St2} ->
@@ -60,6 +64,116 @@ parse_lines([Line0 | Rest], St0) ->
                 false ->
                     parse_decl(Line, St, Rest)
             end
+    end.
+
+parse_circuit_def(Line, St, Rest) ->
+    case parse_circuit_header(Line, St#st.line) of
+        {ok, {Name, Params}} ->
+            {BodyLines, Remaining} = collect_circuit_body(Rest, []),
+            BodyNodes = lists:map(
+                fun(BodyLine) ->
+                    case try_node_def_no_multi(BodyLine, St) of
+                        {ok, Node} -> Node;
+                        {error, ErrLine, ErrMsg} ->
+                            parse_error(ErrLine, "~s", [ErrMsg])
+                    end
+                end,
+                BodyLines),
+            BodySt = St#st{line = St#st.line + length(BodyLines)},
+            Def = #gdbsp_circuit_def{name = Name, params = Params, body = BodyNodes},
+            parse_lines(Remaining,
+                        BodySt#st{circuits = [Def | BodySt#st.circuits]});
+        {error, Reason} ->
+            parse_error(St#st.line, "~s", [Reason])
+    end.
+
+try_node_def_no_multi(Line0, St) ->
+    Line = trim_left(trim_right(Line0)),
+    case try_node_def_single(Line, St) of
+        {done, Node} -> {ok, Node};
+        false -> {error, St#st.line, iolist_to_binary(
+                     io_lib:format("invalid body node: ~s", [Line]))}
+    end.
+
+try_node_def_single(Line, St) ->
+    case binary:split(Line, <<" := ">>) of
+        [Name, OpCall] ->
+            case binary:split(trim(OpCall), <<"(">>) of
+                [Op, <<")">>] ->
+                    {done, mk_node(Name, Op, [], St)};
+                [Op, ArgsBin] ->
+                    {_, Inner} = take_single_line_args(ArgsBin),
+                    Args = parse_args(Inner),
+                    {done, mk_node(Name, Op, Args, St)};
+                _ -> false
+            end;
+        _ -> false
+    end.
+
+take_single_line_args(Bin) ->
+    case binary:match(Bin, <<")">>) of
+        {Pos, 1} ->
+            <<Inner:Pos/binary, ")", _/binary>> = Bin,
+            {closed, Inner};
+        nomatch ->
+            {open, Bin}
+    end.
+
+parse_circuit_header(Line, LineNum) ->
+    %% Line looks like: "circuit name(key1: internal1, key2: internal2):"
+    <<"circuit ", Rest0/binary>> = Line,
+    case binary:split(trim_right(Rest0), <<"(">>) of
+        [Name0, ParamsAndColon] ->
+            Name = trim(Name0),
+            %% ParamsAndColon looks like: "key1: internal1, key2: internal2):"
+            case binary:match(ParamsAndColon, <<"):">>) of
+                {Pos2, _} ->
+                    <<ParamsBin:Pos2/binary, _:2/binary>> = ParamsAndColon,
+                    Params = parse_circuit_params(ParamsBin, LineNum),
+                    {ok, {Name, Params}};
+                nomatch ->
+                    {error, <<"expected '):' after circuit parameters">>}
+            end;
+        _ ->
+            {error, <<"expected '(' after circuit name">>}
+    end.
+
+parse_circuit_params(Bin, _LineNum) ->
+    Pairs = split_top(trim_trailing_comma(Bin), <<",">>),
+    lists:foldl(
+        fun(Pair, Acc) ->
+            TrimPair = trim(Pair),
+            case binary:split(TrimPair, <<":">>) of
+                [Key, Val] ->
+                    KeyAtom = binary_to_atom(trim(Key), utf8),
+                    Acc#{KeyAtom => trim(Val)};
+                _ ->
+                    Acc
+            end
+        end,
+        #{},
+        Pairs
+    ).
+
+collect_circuit_body([], Acc) ->
+    {lists:reverse(Acc), []};
+collect_circuit_body([Line0 | Rest], Acc) ->
+    Line = trim_right(Line0),
+    case Line of
+        <<>> -> {lists:reverse(Acc), Rest};
+        <<"#", _/binary>> -> collect_circuit_body(Rest, Acc);
+        _ ->
+            case is_body_node_line(Line0) of
+                true -> collect_circuit_body(Rest, [Line0 | Acc]);
+                false -> {lists:reverse(Acc), [Line0 | Rest]}
+            end
+    end.
+
+is_body_node_line(Line0) ->
+    Line = trim_right(Line0),
+    case binary:match(Line, <<" := ">>) of
+        nomatch -> false;
+        _ -> true
     end.
 
 parse_decl(Line, St, Rest) ->
@@ -82,19 +196,99 @@ parse_decl(Line, St, Rest) ->
 try_node_def(Line, St, Rest) ->
     case binary:split(Line, <<" := ">>) of
         [Name, OpCall] ->
-            case binary:split(trim(OpCall), <<"(">>) of
-                [Op, <<")">>] ->
-                    Node = mk_node(Name, Op, [], St),
-                    {done, parse_lines(Rest, St#st{nodes = [Node | St#st.nodes]})};
-                [Op, _Inner] ->
-                    {Args, Remaining, St2} = collect_node_args(OpCall, Op, St, Rest),
-                    Node = mk_node(Name, Op, Args, St),
-                    {done, parse_lines(Remaining, St2#st{nodes = [Node | St2#st.nodes]})};
+            TrimmedCall = trim(OpCall),
+            case binary:match(TrimmedCall, <<"(">>) of
+                nomatch ->
+                    case binary:match(TrimmedCall, <<".">>) of
+                        nomatch -> false;
+                        _ ->
+                            Node = mk_circuit_access_node(Name, TrimmedCall, St),
+                            {done, parse_lines(Rest, St#st{nodes = [Node | St#st.nodes]})}
+                    end;
                 _ ->
-                    false
+                    case split_op_inner(TrimmedCall) of
+                        {Op, <<")">>} ->
+                            Node = mk_node(Name, Op, [], St),
+                            {done, parse_lines(Rest, St#st{nodes = [Node | St#st.nodes]})};
+                        {Op, Inner} ->
+                            {Args, Remaining, St2} = collect_node_args_inner(OpCall, Op, Inner, St, Rest),
+                            Node = mk_node(Name, Op, Args, St),
+                            {done, parse_lines(Remaining, St2#st{nodes = [Node | St2#st.nodes]})}
+                    end
             end;
         _ ->
             false
+    end.
+
+mk_circuit_access_node(Name, VarField, St) ->
+    case binary:split(VarField, <<".">>) of
+        [VarBin, FieldBin] ->
+            #gdbsp_node_def{
+                name = Name,
+                op   = circuit_access,
+                args = [{var, trim(VarBin)}, {var, trim(FieldBin)}],
+                line = St#st.line
+            };
+        _ ->
+            parse_error(St#st.line, "invalid circuit access: ~s", [VarField])
+    end.
+
+split_op_inner(OpCall) ->
+    case binary:split(OpCall, <<"(">>) of
+        [Op, Inner] ->
+            case Op of
+                <<"fixpoint ", CName/binary>> ->
+                    {<<"fixpoint">>, <<CName/binary, "(", Inner/binary>>};
+                _ ->
+                    {Op, Inner}
+            end;
+        _ ->
+            false
+    end.
+
+collect_node_args_inner(_OpCall, Op, Inner, St, Rest) ->
+    case Op of
+        <<"fixpoint">> ->
+            case binary:match(Inner, <<"(">>) of
+                nomatch ->
+                    {[trim(Inner)], Rest, St};
+                {ParenPos, 1} ->
+                    CName = trim(binary:part(Inner, 0, ParenPos)),
+                    <<_:ParenPos/binary, "(", More/binary>> = Inner,
+                    case content_between_parens(More, 1, 0, <<>>, false) of
+                        {closed, KwArgsStr} ->
+                            KwTokens = parse_args_raw(KwArgsStr),
+                            {[CName | KwTokens], Rest, St};
+                        {open, _} ->
+                            {[CName], Rest, St}
+                    end
+            end;
+        _ ->
+            case extract_parens_content(Inner) of
+                {closed, InnerClean} ->
+                    case is_multiline(InnerClean, Rest) of
+                        {true, Inner2, Remaining} ->
+                            Args = parse_args(Inner2),
+                            Remaining2 = skip_trailing_paren(Remaining),
+                            Consumed = length(Rest) - length(Remaining2),
+                            {Args, Remaining2, St#st{line = St#st.line + Consumed}};
+                        false ->
+                            Args = parse_args(InnerClean),
+                            {Args, Rest, St}
+                    end;
+                {open, _} ->
+                    {[], Rest, St}
+            end
+    end.
+
+extract_parens_content(Inner) ->
+    case binary:match(Inner, <<"(">>) of
+        nomatch ->
+            Stripped = strip_trailing_paren(Inner),
+            {closed, Stripped};
+        {Pos, 1} ->
+            <<_:Pos/binary, "(", More/binary>> = Inner,
+            content_between_parens(More, 1, 0, <<>>, false)
     end.
 
 collect_node_args(OpCall, Op, St, Rest) ->
@@ -260,6 +454,8 @@ known_op(<<"aggregate">>)          -> true;
 known_op(<<"filter">>)             -> true;
 known_op(<<"project">>)            -> true;
 known_op(<<"antijoin">>)           -> true;
+known_op(<<"circuit_access">>)     -> true;
+known_op(<<"fixpoint">>)           -> true;
 known_op(_)                        -> false.
 
 parse_node_arg(Arg) when is_binary(Arg) ->
@@ -272,25 +468,53 @@ parse_node_arg(Arg) when is_binary(Arg) ->
                     KeyBin = binary:part(Trimmed, 0, Pos),
                     ValBin = trim(binary:part(Trimmed, Pos + 1, byte_size(Trimmed) - Pos - 1)),
                     Key = binary_to_atom(KeyBin, utf8),
+                    Val = parse_kw_val(ValBin),
                     case ValBin of
                         <<"[", _/binary>> ->
                             Inner = extract_brackets(ValBin),
                             Items = parse_string_list(Inner),
                             {Key, Items};
                         _ ->
-                            {Key, dequote(ValBin)}
+                            {Key, Val}
                     end;
-                nomatch ->
-                    case Trimmed of
-                        <<"\"", _/binary>> -> {string, dequote(Trimmed)};
-                        _ -> {var, Trimmed}
+                _ ->
+                    case binary:match(Trimmed, <<".">>) of
+                        {DotPos, 1} when DotPos > 0 ->
+                            VarBin = binary:part(Trimmed, 0, DotPos),
+                            FieldBin = binary:part(Trimmed, DotPos + 1,
+                                                    byte_size(Trimmed) - DotPos - 1),
+                            {circuit_access, VarBin, FieldBin};
+                        nomatch ->
+                            case Trimmed of
+                                <<"\"", _/binary>> -> {string, dequote(Trimmed)};
+                                _ -> {var, Trimmed}
+                            end
                     end
+            end
+    end.
+
+parse_kw_val(ValBin) ->
+    Trimmed = trim(ValBin),
+    case binary:match(Trimmed, <<".">>) of
+        {DotPos, 1} when DotPos > 0 ->
+            VarBin = binary:part(Trimmed, 0, DotPos),
+            FieldBin = binary:part(Trimmed, DotPos + 1,
+                                    byte_size(Trimmed) - DotPos - 1),
+            {circuit_access, VarBin, FieldBin};
+        _ ->
+            case Trimmed of
+                <<"\"", _/binary>> -> dequote(Trimmed);
+                _ -> {var, Trimmed}
             end
     end.
 
 %%====================================================================
 %% Arg parsing
 %%====================================================================
+
+parse_args_raw(Bin) ->
+    Tokens = split_top(trim_trailing_comma(Bin), <<",">>),
+    [trim(T) || T <- Tokens, trim(T) =/= <<>>].
 
 parse_args(Bin) ->
     Tokens = split_top(trim_trailing_comma(Bin), <<",">>),

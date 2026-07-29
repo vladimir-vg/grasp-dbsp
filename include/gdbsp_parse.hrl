@@ -16,9 +16,16 @@
     line   :: pos_integer()
 }).
 
+-record(gdbsp_circuit_def, {
+    name   :: binary(),       % circuit name
+    params :: #{atom() => binary()},  % #{Keyword => InternalName}
+    body   :: [#gdbsp_node_def{}]
+}).
+
 -record(gdbsp_program, {
     nodes      :: [#gdbsp_node_def{}],
-    typespecs  :: [#gdbsp_typespec{}]
+    typespecs  :: [#gdbsp_typespec{}],
+    circuits   :: [#gdbsp_circuit_def{}]
 }).
 
 -endif.

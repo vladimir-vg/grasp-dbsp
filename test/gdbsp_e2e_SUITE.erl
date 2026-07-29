@@ -179,17 +179,18 @@ run_one_fixture(Fixture, _GroupName) ->
 %%====================================================================
 
 compile_to_plan(Source, Functions, OutputNames) ->
-    {ok, Prog} = gdbsp_parse:parse_string(Source, #{}),
-    SourceTypeMap = build_source_type_map(Prog),
+    {ok, Prog0} = gdbsp_parse:parse_string(Source, #{}),
+    {ok, Prog1} = gdbsp_compile_fixpoint:expand(Prog0),
+    SourceTypeMap = build_source_type_map(Prog1),
 
     AllTypes = gdbsp_type_infer:infer(
-        Prog#gdbsp_program.nodes,
-        Prog#gdbsp_program.typespecs,
+        Prog1#gdbsp_program.nodes,
+        Prog1#gdbsp_program.typespecs,
         Functions),
     OutputTypes = maps:with(OutputNames, AllTypes),
 
     {ok, Graph0, NameToId} = gdbsp_compile:compile_with_names(
-        Prog, #{fn_registry => Functions, incrementalize => false}),
+        Prog1, #{fn_registry => Functions, incrementalize => false}),
 
     Graph1 = add_output_nodes(Graph0, OutputNames, NameToId),
     Graph2 = gdbsp_compile_incremental:run(Graph1),
