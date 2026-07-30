@@ -321,21 +321,15 @@ expand_selfref(_FpName, NodeName, CircuitName, Params, BodyNodes,
         {LG0, #{}, #{}},
         maps:to_list(Params)),
 
-    %% Build substitution map: internal names → lowered IDs.
-    %% For self-ref params, sub with internal name (not raw ID) so make_operator works.
-    %% For base params, sub with external source name (transparent pass-through).
+    %% Build substitution map: internal names → fixpoint_input node names.
+    %% All params (both base and self-ref) are wired through fixpoint_input
+    %% nodes so that the circuit graph compiler can route them through Rec
+    %% nodes with proper iteration barriers.
     InternalNameMap = maps:fold(
         fun(Kw, Internal, A) ->
             KwBin = atom_to_binary(Kw, utf8),
-            case lists:member(Kw, SelfRefKws) of
-                true ->
-                    A#{Internal => {var, fixpoint_input_name(FpHmac, KwBin)},
-                       KwBin => {var, fixpoint_input_name(FpHmac, KwBin)}};
-                false ->
-                    {ok, {var, ExtName}} = maps:find(Kw, KwMap),
-                    A#{Internal => {var, ExtName},
-                       KwBin => {var, ExtName}}
-            end
+            A#{Internal => {var, fixpoint_input_name(FpHmac, KwBin)},
+               KwBin => {var, fixpoint_input_name(FpHmac, KwBin)}}
         end,
         #{},
         Params),

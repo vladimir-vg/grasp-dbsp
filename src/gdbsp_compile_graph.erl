@@ -464,6 +464,36 @@ construct_one_fixpoint(G0, _FpHmac, FixInfo, LnIdMap, CInputMap,
         {G0, #{}},
         SelfRefParams),
 
+    %% Redirect body-operator inputs that reference base integrate nodes
+    %% (which still carry raw epoch_done barriers) to the Rec node so they
+    %% receive data with proper {iter,E,N} barriers.
+    G1_fixed = case {map_size(RecIds), BaseInputIds} of
+        {0, _} -> G1;
+        {_, []} -> G1;
+        _ ->
+            RecId = hd(maps:values(RecIds)),
+            IntegrateToRec = maps:from_list([{BId, RecId} || BId <- BaseInputIds]),
+            FixedBase = maps:map(
+                fun(_NId, CNode = #circuit_node{inputs = CIns, meta = CMeta}) ->
+                    case maps:is_key(scc_body, CMeta) of
+                        true -> CNode;
+                        false ->
+                            NewIns = lists:map(
+                                fun(InId) ->
+                                    case maps:find(InId, IntegrateToRec) of
+                                        {ok, RecId2} -> RecId2;
+                                        error -> InId
+                                    end
+                                end, CIns),
+                            case NewIns =:= CIns of
+                                true -> CNode;
+                                false -> CNode#circuit_node{inputs = NewIns}
+                            end
+                    end
+                end, G1#circuit_graph.nodes),
+            G1#circuit_graph{nodes = FixedBase}
+    end,
+
     %% Create RecOutput nodes
     {G2, RecOutputIds, BodyToRecOut} = lists:foldl(
         fun({KwBin, ParamInfo}, {GA, OutIds, BToR}) ->
@@ -483,7 +513,7 @@ construct_one_fixpoint(G0, _FpHmac, FixInfo, LnIdMap, CInputMap,
             GA3 = set_schema(GA2, RecOutId, Schema),
             {GA3, OutIds#{KwBin => RecOutId}, BToR#{BodyOutCId => RecOutId}}
         end,
-        {G1, #{}, #{}},
+        {G1_fixed, #{}, #{}},
         SelfRefParams),
 
     RecIdList = [Id || {_, Id} <- maps:to_list(RecIds)] ++
