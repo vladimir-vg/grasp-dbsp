@@ -290,7 +290,7 @@ fixpoint_selfref_inputs_isolated(_Config) ->
                       lnode_op(N) =:= fixpoint_input],
     2 = length(FinNodes),
     %% They must have different IDs (different param names in args)
-    [FinId1, FinId2] = [Id || {Id, _} <- FinNodes],
+    [FinId1, FinId2] = [Id || #lnode{id = Id} <- FinNodes],
     true = (FinId1 =/= FinId2),
     ok.
 
@@ -322,9 +322,9 @@ fixpoint_selfref_body_wiring(_Config) ->
     {ok, LG} = lower(Src),
     %% The body distinct node should consume a fixpoint_input (self-ref),
     %% NOT the external source directly.
-    FinNodes = [N || {Id, N} <- maps:to_list(LG#lowered_graph.nodes),
+    FinNodes = [N || {_, N} <- maps:to_list(LG#lowered_graph.nodes),
                       lnode_op(N) =:= fixpoint_input],
-    FinIds = [element(1, I) || I <- FinNodes],
+    FinIds = [Id || #lnode{id = Id} <- FinNodes],
     DistinctNode = hd([N || {_, N} <- maps:to_list(LG#lowered_graph.nodes),
                              lnode_op(N) =:= distinct]),
     [DistinctInput] = lnode_inputs(DistinctNode),

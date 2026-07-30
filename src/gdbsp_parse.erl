@@ -178,7 +178,11 @@ is_body_node_line(Line0) ->
     Line = trim_right(Line0),
     case binary:match(Line, <<" := ">>) of
         nomatch -> false;
-        _ -> true
+        _ ->
+            case Line0 of
+                <<C, _/binary>> when C =:= $\s; C =:= $\t -> true;
+                _ -> false
+            end
     end.
 
 parse_decl(Line, St, Rest) ->

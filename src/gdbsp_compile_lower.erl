@@ -27,17 +27,22 @@
 -spec run(#gdbsp_program{}, #{binary() => gdbsp_column_type()}) ->
     {ok, #lowered_graph{}} | {error, term()}.
 run(Prog, TypeMap) ->
-    #gdbsp_program{nodes = Nodes, typespecs = TSs, circuits = Circuits} = Prog,
-    ok = validate_circuit_bodies(Circuits),
-    CircuitMap = build_circuit_map(Circuits),
-    case build_name_table(Nodes, TSs, TypeMap) of
-        {ok, NameTable} ->
-            case topo_sort(NameTable) of
-                {ok, Order} ->
-                    {ok, lower_nodes(NameTable, Order, CircuitMap, new_lg())};
-                {error, _} = Err -> Err
-            end;
-        {error, _} = Err -> Err
+    try
+        #gdbsp_program{nodes = Nodes, typespecs = TSs, circuits = Circuits} = Prog,
+        ok = validate_circuit_bodies(Circuits),
+        CircuitMap = build_circuit_map(Circuits),
+        case build_name_table(Nodes, TSs, TypeMap) of
+            {ok, NameTable} ->
+                case topo_sort(NameTable) of
+                    {ok, Order} ->
+                        {ok, lower_nodes(NameTable, Order, CircuitMap, new_lg())};
+                    {error, _} = Err -> Err
+                end;
+            {error, _} = Err -> Err
+        end
+    catch
+        throw:{fixpoint_error, _} = FixErr ->
+            {error, FixErr}
     end.
 
 %%====================================================================
@@ -352,10 +357,10 @@ expand_selfref(_FpName, NodeName, CircuitName, Params, BodyNodes,
         fun(KwBin, {LG, Acc}) ->
             BodyOutId = maps:get(KwBin, BodyIds),
             Tag = <<Prefix/binary, KwBin/binary>>,
-            {LG2, OutId} = add_node(fixpoint_output, [BodyOutId],
+            {LGN, OutId} = add_node(fixpoint_output, [BodyOutId],
                                     [{string, KwBin}],
                                     [Tag], undefined, LG),
-            {LG2, Acc#{KwBin => OutId}}
+            {LGN, Acc#{KwBin => OutId}}
         end,
         {LG2, #{}},
         SelfRefKwBins),
