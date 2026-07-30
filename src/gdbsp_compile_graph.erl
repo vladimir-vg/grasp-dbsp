@@ -232,7 +232,9 @@ construct_from_lowered(NodeList, Order, FnReg) ->
             case Op of
                 fixpoint_input ->
                     {G2, NodeId} = add_circuit_node(GAcc, {integrate}, CInputIds, #{}),
-                    {G2, IdMapAcc#{LId => NodeId},
+                    Schema = compute_schema_lowered(integrate, [], CInputIds, Type, G2),
+                    G3 = set_schema(G2, NodeId, Schema),
+                    {G3, IdMapAcc#{LId => NodeId},
                      maps:put(LId, NodeId, FIMAcc), FOMAcc};
                 fixpoint_output ->
                     %% Pass through to body output circuit node.
@@ -469,7 +471,7 @@ construct_one_fixpoint(G0, _FpHmac, FixInfo, LnIdMap, CInputMap,
                 id = RecOutId,
                 op = {rec_output, RecOutName, SccId},
                 inputs = [BodyOutCId],
-                meta = #{}},
+                meta = #{scc_body => true}},
             Nodes3 = maps:put(RecOutId, RONode, GA#circuit_graph.nodes),
             GA2 = GA#circuit_graph{next_id = RecOutId + 1, nodes = Nodes3},
 

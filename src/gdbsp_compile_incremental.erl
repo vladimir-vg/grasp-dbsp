@@ -204,8 +204,8 @@ wrap_nonlinear(Id, #circuit_node{inputs = Inputs} = Node, InputModes,
     DiffId = NextId1,
 
     Nodes3 = maps:map(
-        fun(_CId, CNode = #circuit_node{inputs = CIns}) ->
-            case lists:member(Id, CIns) of
+        fun(_CId, CNode = #circuit_node{inputs = CIns, meta = CMeta}) ->
+            case not maps:is_key(scc_body, CMeta) andalso lists:member(Id, CIns) of
                 true ->
                     NewCIns = [case I of Id -> DiffId; _ -> I end || I <- CIns],
                     CNode#circuit_node{inputs = NewCIns};

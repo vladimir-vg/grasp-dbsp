@@ -71,14 +71,13 @@ handle_info(_Msg, State) ->
 build_circuit(Plan, Inputs, Outputs, Gen, OpStates, DoKickoff) ->
     #{wiring := Tuples, configs := Configs} = Plan,
     OpRefs = [R || R = {op, _} <- maps:keys(Configs)],
-    RecRefs = [R || R = {rec, _, _, _} <- maps:keys(Configs)],
-
     OpPids = maps:from_list([{R, spawn_op(R, Configs, OpStates)} || R <- OpRefs]),
+    RecRefs = [R || R = {rec, _, _, _} <- maps:keys(Configs)],
     RecPids = maps:from_list([{R, spawn_rec(R, Configs)} || R <- RecRefs]),
     RefToPid = maps:merge(OpPids, RecPids),
 
     RORefs = [R || R = {rec_output, _, _, _} <- maps:keys(Configs)],
-    ROToRec = rec_output_to_rec(Tuples, RORefs),
+    ROToRec = rec_output_to_rec(RecRefs, RORefs),
 
     CoordPids = spawn_coordinators(RecPids, Configs),
 
@@ -132,22 +131,19 @@ wrap_args(_, Args) -> Args.
 %% Rec wiring helpers
 %%====================================================================
 
-rec_output_to_rec(Tuples, RORefs) ->
-    ROfold = lists:foldl(
-        fun({SR, _SL, {rec_output, Name, SccId, _} = RR, _RL}, Acc) ->
-            Acc#{RR => SR};
-           (_, Acc) -> Acc
-        end, #{}, Tuples),
-    %% Also populate from RORefs: scan wiring for rec_output → rec edges
-    RecOutputMap = maps:from_list([{R, undefined} || R <- RORefs]),
-    RecMap = lists:foldl(
-        fun({SR, _SL, RR, _RL}, Acc) ->
-            case maps:is_key(RR, RecOutputMap) of
-                true -> Acc#{RR => SR};
-                false -> Acc
-            end
-        end, ROfold, Tuples),
-    RecMap.
+rec_output_to_rec(RecRefs, RORefs) ->
+    SccIdToRec = lists:foldl(
+        fun({rec, _Name, SccId, _} = RecRef, Acc) ->
+            Acc#{SccId => RecRef}
+        end, #{}, RecRefs),
+    maps:from_list(
+        lists:filtermap(
+            fun({rec_output, _Name, SccId, _} = RORef) ->
+                case maps:find(SccId, SccIdToRec) of
+                    {ok, RecRef} -> {true, {RORef, RecRef}};
+                    error -> false
+                end
+            end, RORefs)).
 
 spawn_coordinators(RecPids, Configs) ->
     Grouped = group_by_scc(RecPids, Configs),
