@@ -3,15 +3,18 @@
 %%%
 %%% Each YAML file in gdbsp_type_infer_SUITE_data/ contains a list of
 %%% test cases. Each case provides .gdbsp source, optional function
-%%% definitions, and expected types for node names. Expected types
-%%% use the Grasp JSON type format. Expected types are a subset:
-%%% not all identifiers need to be listed.
+%%% definitions, and expected types for tagged node names.
+%%%
+%%% Type inference runs on the lowered graph (after lowering).
+%%% Assertions use tag names which correspond to original source
+%%% node names for regular nodes.
 %%% @end
 %%%-------------------------------------------------------------------
 -module(gdbsp_type_infer_SUITE).
 
 -include_lib("common_test/include/ct.hrl").
 -include("gdbsp_parse.hrl").
+-include("gdbsp_lowered.hrl").
 -include("gdbsp_type.hrl").
 
 -export([all/0, groups/0, init_per_suite/1, end_per_suite/1]).
@@ -143,14 +146,14 @@ run_one_fixture(Fixture) ->
     end.
 
 run_positive(Prog, Functions, ExpectedRaw) ->
-    Types = gdbsp_type_infer:infer(
-        Prog#gdbsp_program.nodes,
-        Prog#gdbsp_program.typespecs,
-        Functions),
+    TSMap = build_ts_map(Prog#gdbsp_program.typespecs),
+    Lowered0 = lower_program(Prog),
+    {ok, Lowered} = gdbsp_type_infer:infer_lowered(Lowered0, TSMap, Functions),
+    NameToType = tags_to_types(Lowered),
     maps:foreach(
         fun(Name, JsonType) ->
             {ok, ExpectedType} = convert_type(JsonType),
-            case maps:find(Name, Types) of
+            case maps:find(Name, NameToType) of
                 {ok, ExpectedType} ->
                     ok;
                 {ok, Got} ->
@@ -166,17 +169,14 @@ run_positive(Prog, Functions, ExpectedRaw) ->
     ok.
 
 run_negative(Prog, Functions, ExpectedErrorsRaw) ->
-    try gdbsp_type_infer:infer(
-            Prog#gdbsp_program.nodes,
-            Prog#gdbsp_program.typespecs,
-            Functions)
-    of
-        _Types ->
-            ct:fail("expected error but infer succeeded")
-    catch
-        error:Reason when is_map(Reason) ->
+    TSMap = build_ts_map(Prog#gdbsp_program.typespecs),
+    Lowered0 = lower_program(Prog),
+    case gdbsp_type_infer:infer_lowered(Lowered0, TSMap, Functions) of
+        {ok, _Lowered} ->
+            ct:fail("expected error but infer succeeded");
+        {error, Reason} when is_map(Reason) ->
             check_expected_errors(Reason, ExpectedErrorsRaw);
-        error:Other ->
+        {error, Other} ->
             ct:pal("Unexpected error reason: ~p", [Other]),
             error({unexpected_error, Other})
     end.
@@ -213,6 +213,46 @@ match_value(Exp, Act) when is_list(Exp), is_list(Act) ->
     lists:sort(Exp) =:= lists:sort(Act);
 match_value(Exp, Act) ->
     Exp =:= Act.
+
+%%====================================================================
+%% Compilation pipeline helpers
+%%====================================================================
+
+build_ts_map(Typespecs) ->
+    lists:foldl(
+        fun(#gdbsp_typespec{name = N, spec = {type, {stream, Inner}}}, Acc) ->
+                Acc#{N => Inner};
+           (#gdbsp_typespec{name = N, spec = {type, T}}, Acc) ->
+                Acc#{N => T};
+           (_TS, Acc) ->
+                Acc
+        end, #{}, Typespecs).
+
+lower_program(Prog) ->
+    case gdbsp_compile_lower:run(Prog, #{}) of
+        {ok, Lowered} -> Lowered;
+        {error, Reason} ->
+            ct:pal("Lowering failed: ~p", [Reason]),
+            error({lowering_error, Reason})
+    end.
+
+%%--------------------------------------------------------------------
+%% Build a tag-name → type map from the inferred lowered graph
+%%--------------------------------------------------------------------
+
+tags_to_types(#lowered_graph{nodes = Nodes, tag_map = TagMap}) ->
+    maps:fold(
+        fun(Tag, LId, Acc) ->
+            case maps:find(LId, Nodes) of
+                {ok, #lnode{type = T}} when T =/= undefined ->
+                    Acc#{Tag => T};
+                _ -> Acc
+            end
+        end, #{}, TagMap).
+
+%%====================================================================
+%% Type helpers
+%%====================================================================
 
 convert_type(JsonType) ->
     case gdbsp_type:parse_type(JsonType) of

@@ -36,14 +36,17 @@ compile_with_names(Program, Options) ->
         TSMap = build_ts_map(Program#gdbsp_program.typespecs),
         case gdbsp_compile_lower:run(Program, #{}) of
             {ok, Lowered0} ->
-                Lowered = gdbsp_type_infer:infer_lowered(Lowered0, TSMap, FnReg),
-                case gdbsp_compile_graph:build_from_lowered(Lowered, FnReg) of
-                    {ok, Graph, NameToId} ->
-                        Graph2 = case Incr of
-                            true  -> gdbsp_compile_incremental:run(Graph);
-                            false -> Graph
-                        end,
-                        {ok, Graph2, NameToId};
+                case gdbsp_type_infer:infer_lowered(Lowered0, TSMap, FnReg) of
+                    {ok, Lowered} ->
+                        case gdbsp_compile_graph:build_from_lowered(Lowered, FnReg) of
+                            {ok, Graph, NameToId} ->
+                                Graph2 = case Incr of
+                                    true  -> gdbsp_compile_incremental:run(Graph);
+                                    false -> Graph
+                                end,
+                                {ok, Graph2, NameToId};
+                            {error, _} = Err -> Err
+                        end;
                     {error, _} = Err -> Err
                 end;
             {error, _} = Err -> Err

@@ -14,212 +14,9 @@
 -include("gdbsp_type.hrl").
 -include("gdbsp_lowered.hrl").
 
--export([infer/3, infer_lowered/3]).
+-export([infer_lowered/3]).
 
 -type fn_registry() :: #{binary() => map()}.
-
-%%====================================================================
-%% Public API
-%%====================================================================
-
--spec infer([#gdbsp_node_def{}], [#gdbsp_typespec{}], fn_registry()) ->
-    #{binary() => gdbsp_column_type()}.
-infer(Nodes, Typespecs, FnReg) ->
-    TSMap = build_ts_map(Typespecs),
-    NodeMap = build_node_map(Nodes),
-    Order = topo_sort(NodeMap),
-    infer_in_order(Order, NodeMap, TSMap, FnReg, #{}).
-
-%%====================================================================
-%% Building maps
-%%====================================================================
-
-build_ts_map(Typespecs) ->
-    lists:foldl(
-        fun(#gdbsp_typespec{name = N, spec = {type, {stream, Inner}}}, Acc) ->
-                Acc#{N => Inner};
-           (#gdbsp_typespec{name = N, spec = {type, T}}, Acc) ->
-                Acc#{N => T};
-           (#gdbsp_typespec{name = N, spec = Spec}, Acc) ->
-                Acc#{N => Spec}
-        end, #{}, Typespecs).
-
-build_node_map(Nodes) ->
-    lists:foldl(
-        fun(#gdbsp_node_def{name = N, op = Op, args = Args}, Acc) ->
-                Acc#{N => {Op, Args}}
-        end, #{}, Nodes).
-
-%%====================================================================
-%% Topological sort
-%%====================================================================
-
-topo_sort(NodeMap) ->
-    InDeg = maps:map(fun(_N, {_Op, Args}) ->
-        length(node_refs(Args, NodeMap))
-    end, NodeMap),
-    Consumers = build_cons_map(NodeMap),
-    AllNames = maps:keys(NodeMap),
-    Queue = [N || N <- AllNames, maps:get(N, InDeg) =:= 0],
-    topo_loop(Queue, InDeg, Consumers, []).
-
-build_cons_map(NodeMap) ->
-    lists:foldl(
-        fun({Name, {_Op, Args}}, Acc) ->
-            Refs = node_refs(Args, NodeMap),
-            lists:foldl(
-                fun(Ref, A) ->
-                    maps:update_with(Ref, fun(L) -> [Name | L] end, [Name], A)
-                end, Acc, Refs)
-        end, #{}, maps:to_list(NodeMap)).
-
-node_refs(Args, NodeMap) ->
-    lists:filtermap(
-        fun({var, Name}) when is_binary(Name) ->
-                case maps:is_key(Name, NodeMap) of
-                    true -> {true, Name};
-                    false -> false
-                end;
-           (_) -> false
-        end, Args).
-
-topo_loop(Queue, InDeg, Consumers, Acc) ->
-    case Queue of
-        [] ->
-            case length(Acc) =:= map_size(InDeg) of
-                true -> lists:reverse(Acc);
-                false ->
-                    Stuck = maps:keys(InDeg) -- Acc,
-                    error(#{<<"class">> => <<"cycle">>, <<"stuck">> => lists:sort(Stuck)})
-            end;
-        [Name | Rest] ->
-            NewAcc = [Name | Acc],
-            Dependents = maps:get(Name, Consumers, []),
-            {NewQ, NewIndeg} =
-                lists:foldl(
-                    fun(Dep, {Q, ID}) ->
-                        NewD = maps:get(Dep, ID) - 1,
-                        ID2 = maps:put(Dep, NewD, ID),
-                        case NewD of
-                            0 -> {[Dep | Q], ID2};
-                            _ -> {Q, ID2}
-                        end
-                    end, {Rest, InDeg}, Dependents),
-            topo_loop(NewQ, NewIndeg, Consumers, NewAcc)
-    end.
-
-%%====================================================================
-%% Inference loop
-%%====================================================================
-
-infer_in_order([], _NodeMap, _TSMap, _FnReg, Acc) ->
-    Acc;
-infer_in_order([Name | Rest], NodeMap, TSMap, FnReg, Acc) ->
-    Type = infer_node(Name, NodeMap, TSMap, Acc, FnReg),
-    infer_in_order(Rest, NodeMap, TSMap, FnReg, Acc#{Name => Type}).
-
-infer_node(Name, NodeMap, TSMap, TypeAcc, FnReg) ->
-    case maps:find(Name, TSMap) of
-        {ok, {function, _, _}} ->
-            infer_node_from_op(Name, NodeMap, TypeAcc, FnReg);
-        {ok, {aggregate_function, _, _}} ->
-            infer_node_from_op(Name, NodeMap, TypeAcc, FnReg);
-        {ok, T} ->
-            T;
-        error ->
-            infer_node_from_op(Name, NodeMap, TypeAcc, FnReg)
-    end.
-
-infer_node_from_op(Name, NodeMap, TypeAcc, FnReg) ->
-    {Op, Args} = maps:get(Name, NodeMap),
-    infer_node_op(Op, Args, TypeAcc, FnReg, Name).
-
-%%====================================================================
-%% Per-operator type inference
-%%====================================================================
-
-infer_node_op(source, _Args, _TypeAcc, _FnReg, Name) ->
-    error(#{<<"class">> => <<"missing_typespec">>, <<"node">> => Name});
-
-infer_node_op(filter, Args, TypeAcc, _FnReg, _Name) ->
-    input_type(Args, TypeAcc);
-
-infer_node_op(distinct, Args, TypeAcc, _FnReg, _Name) ->
-    input_type(Args, TypeAcc);
-
-infer_node_op(plus, Args, TypeAcc, _FnReg, _Name) ->
-    input_type(Args, TypeAcc);
-
-infer_node_op(neg, Args, TypeAcc, _FnReg, _Name) ->
-    input_type(Args, TypeAcc);
-
-infer_node_op(integrate, Args, TypeAcc, _FnReg, _Name) ->
-    input_type(Args, TypeAcc);
-
-infer_node_op(differentiate, Args, TypeAcc, _FnReg, _Name) ->
-    input_type(Args, TypeAcc);
-
-infer_node_op(project, Args, TypeAcc, _FnReg, _Name) ->
-    InputType = input_type(Args, TypeAcc),
-    KeepFields = get_string_list_arg(Args, 2),
-    project_struct(InputType, KeepFields);
-
-infer_node_op(map, Args, TypeAcc, FnReg, _Name) ->
-    InputType = input_type(Args, TypeAcc),
-    {var, FnName} = lists:nth(2, Args),
-    case maps:find(FnName, FnReg) of
-        {ok, FnJson} ->
-            infer_map_output_type(FnJson, InputType);
-        error ->
-            InputType
-    end;
-
-infer_node_op(flat_map, Args, TypeAcc, _FnReg, _Name) ->
-    InputType = input_type(Args, TypeAcc),
-    {var, BaseFnName} = lists:nth(2, Args),
-    infer_flat_map_out_type(BaseFnName, InputType);
-
-infer_node_op(join, Args, TypeAcc, _FnReg, _Name) ->
-    [InputRef1, InputRef2] = node_refs(Args, TypeAcc),
-    LType = maps:get(InputRef1, TypeAcc),
-    RType = maps:get(InputRef2, TypeAcc),
-    {on, OnFields} = get_kw_arg(Args, on, []),
-    merge_join_type(LType, RType, OnFields);
-
-infer_node_op(aggregate, Args, TypeAcc, FnReg, _Name) ->
-    InputRef = get_var_arg(Args, 1),
-    FnRef = get_var_arg(Args, 2),
-    InputType = maps:get(InputRef, TypeAcc),
-    {by, ByFields} = get_kw_arg(Args, by, []),
-    {value, ValField} = get_kw_arg(Args, value, <<>>),
-    {as, AsField} = get_kw_arg(Args, 'as', <<>>),
-
-    ValType = field_type(ValField, InputType),
-    AggRetType = infer_agg_return_type(FnRef, ValType, FnReg),
-
-    ByPairs = [{F, field_type(F, InputType)} || F <- ByFields],
-    AllFields = ByPairs ++ [{AsField, AggRetType}],
-    {struct, maps:from_list(AllFields), exact};
-
-infer_node_op(antijoin, Args, TypeAcc, _FnReg, _Name) ->
-    input_type(Args, TypeAcc);
-
-infer_node_op(output, Args, TypeAcc, _FnReg, _Name) ->
-    input_type(Args, TypeAcc);
-
-%% Default: inherit from first input
-infer_node_op(_Op, Args, TypeAcc, _FnReg, _Name) ->
-    input_type(Args, TypeAcc).
-
-%%====================================================================
-%% Input type extraction
-%%====================================================================
-
-input_type(Args, TypeAcc) ->
-    case node_refs(Args, TypeAcc) of
-        [FirstRef | _] -> maps:get(FirstRef, TypeAcc);
-        [] -> dynamic
-    end.
 
 %%====================================================================
 %% Project
@@ -534,26 +331,31 @@ bin(V) -> V.
 %%====================================================================
 
 -spec infer_lowered(#lowered_graph{}, #{binary() => gdbsp_column_type()},
-                    fn_registry()) -> #lowered_graph{}.
+                    fn_registry()) -> {ok, #lowered_graph{}} | {error, term()}.
 infer_lowered(#lowered_graph{nodes = Nodes} = LG, TSMap, FnReg) ->
-    NodeList = maps:to_list(Nodes),
-    Sorted = lowered_topo_sort(NodeList),
-    {NewNodes, _TypeAcc} = lists:foldl(
-        fun(LId, {AccNodes, TypeAcc}) ->
-            #lnode{op = Op, inputs = InputIds, args = Args, tags = Tags,
-                   type = ExistingType} = maps:get(LId, AccNodes),
-            Type = case is_concrete_type(ExistingType) of
-                true -> ExistingType;
-                false ->
-                    infer_lnode_type(Op, Args, InputIds, Tags, TypeAcc,
-                                     TSMap, FnReg)
+    try
+        NodeList = maps:to_list(Nodes),
+        Sorted = lowered_topo_sort(NodeList),
+        {NewNodes, _TypeAcc} = lists:foldl(
+            fun(LId, {AccNodes, TypeAcc}) ->
+                #lnode{op = Op, inputs = InputIds, args = Args, tags = Tags,
+                       type = ExistingType} = maps:get(LId, AccNodes),
+                Type = case is_concrete_type(ExistingType) of
+                    true -> ExistingType;
+                    false ->
+                        infer_lnode_type(Op, Args, InputIds, Tags, TypeAcc,
+                                         TSMap, FnReg)
+                end,
+                Node = (maps:get(LId, AccNodes))#lnode{type = Type},
+                {maps:put(LId, Node, AccNodes), TypeAcc#{LId => Type}}
             end,
-            Node = (maps:get(LId, AccNodes))#lnode{type = Type},
-            {maps:put(LId, Node, AccNodes), TypeAcc#{LId => Type}}
-        end,
-        {Nodes, #{}},
-        Sorted),
-    LG#lowered_graph{nodes = NewNodes}.
+            {Nodes, #{}},
+            Sorted),
+        {ok, LG#lowered_graph{nodes = NewNodes}}
+    catch
+        error:Reason when is_map(Reason) ->
+            {error, Reason}
+    end.
 
 lowered_topo_sort(NodeList) ->
     NodeMap = maps:from_list(NodeList),
@@ -597,8 +399,16 @@ is_concrete_type(_) -> true.
 infer_lnode_type(source, _Args, _InputIds, Tags, _TypeAcc, TSMap, _FnReg) ->
     Name = case Tags of [Tag | _] -> Tag; _ -> undefined end,
     case Name of
-        undefined -> dynamic;
-        _ -> maps:get(Name, TSMap, dynamic)
+        undefined ->
+            error(#{<<"class">> => <<"missing_typespec">>,
+                    <<"node">> => <<"<unnamed_source>">>});
+        _ ->
+            case maps:find(Name, TSMap) of
+                {ok, T} -> T;
+                error ->
+                    error(#{<<"class">> => <<"missing_typespec">>,
+                            <<"node">> => Name})
+            end
     end;
 
 infer_lnode_type(fixpoint_input, _Args, InputIds, _Tags, TypeAcc, _TSMap, _FnReg) ->
@@ -607,15 +417,39 @@ infer_lnode_type(fixpoint_input, _Args, InputIds, _Tags, TypeAcc, _TSMap, _FnReg
 infer_lnode_type(fixpoint_output, _Args, InputIds, _Tags, TypeAcc, _TSMap, _FnReg) ->
     lowered_input_type(InputIds, TypeAcc);
 
+infer_lnode_type(plus, _Args, InputIds, _Tags, TypeAcc, _TSMap, _FnReg) ->
+    Types = [maps:get(Id, TypeAcc, dynamic) || Id <- InputIds],
+    case Types of
+        [First | Rest] ->
+            FirstText = gdbsp_type:canonical_text(First),
+            case lists:all(
+                fun(T) -> gdbsp_type:canonical_text(T) =:= FirstText end,
+                Rest) of
+                true -> First;
+                false ->
+                    error(#{<<"class">> => <<"type_conflict">>,
+                            <<"message">> => <<"plus input type mismatch">>})
+            end;
+        [] -> dynamic
+    end;
+
 infer_lnode_type(join, Args, InputIds, _Tags, TypeAcc, _TSMap, _FnReg) ->
     LType = lowered_nth_input_type(1, InputIds, TypeAcc),
     RType = lowered_nth_input_type(2, InputIds, TypeAcc),
     {on, OnFields} = get_kw_arg(Args, on, []),
+    check_join_key_types(OnFields, LType, RType),
     merge_join_type(LType, RType, OnFields);
 
 infer_lnode_type(aggregate, Args, InputIds, _Tags, TypeAcc, _TSMap, FnReg) ->
     InputType = lowered_input_type(InputIds, TypeAcc),
     FnRef = get_var_arg(Args, 2),
+    _ = case maps:find(FnRef, FnReg) of
+        {ok, _} -> ok;
+        error ->
+            error(#{<<"class">> => <<"missing_typespec">>,
+                    <<"node">> => FnRef,
+                    <<"message">> => <<"aggregate function not found">>})
+    end,
     {by, ByFields} = get_kw_arg(Args, by, []),
     {value, ValField} = get_kw_arg(Args, value, <<>>),
     {as, AsField} = get_kw_arg(Args, 'as', <<>>),
@@ -630,13 +464,23 @@ infer_lnode_type(map, Args, InputIds, _Tags, TypeAcc, _TSMap, FnReg) ->
     {var, FnName} = lists:nth(2, Args),
     case maps:find(FnName, FnReg) of
         {ok, FnJson} -> infer_map_output_type(FnJson, InputType);
-        error -> InputType
+        error ->
+            error(#{<<"class">> => <<"missing_typespec">>,
+                    <<"node">> => FnName,
+                    <<"message">> => <<"map function not found">>})
     end;
 
-infer_lnode_type(flat_map, Args, InputIds, _Tags, TypeAcc, _TSMap, _FnReg) ->
+infer_lnode_type(flat_map, Args, InputIds, _Tags, TypeAcc, _TSMap, FnReg) ->
     InputType = lowered_input_type(InputIds, TypeAcc),
     {var, BaseFnName} = lists:nth(2, Args),
-    infer_flat_map_out_type(BaseFnName, InputType);
+    case maps:find(BaseFnName, FnReg) of
+        {ok, _} ->
+            infer_flat_map_out_type(BaseFnName, InputType);
+        error ->
+            error(#{<<"class">> => <<"missing_typespec">>,
+                    <<"node">> => BaseFnName,
+                    <<"message">> => <<"flat_map function not found">>})
+    end;
 
 infer_lnode_type(project, Args, InputIds, _Tags, TypeAcc, _TSMap, _FnReg) ->
     InputType = lowered_input_type(InputIds, TypeAcc),
@@ -645,6 +489,29 @@ infer_lnode_type(project, Args, InputIds, _Tags, TypeAcc, _TSMap, _FnReg) ->
 
 infer_lnode_type(_Op, _Args, InputIds, _Tags, TypeAcc, _TSMap, _FnReg) ->
     lowered_input_type(InputIds, TypeAcc).
+
+%%--------------------------------------------------------------------
+%% Join key type conflict check
+%%--------------------------------------------------------------------
+
+check_join_key_types(OnFields, LType, RType) ->
+    LFields = struct_fields(LType),
+    RFields = struct_fields(RType),
+    lists:foreach(
+        fun(Key) ->
+            LT = maps:get(Key, LFields, dynamic),
+            RT = maps:get(Key, RFields, dynamic),
+            case gdbsp_type:canonical_text(LT) =:= gdbsp_type:canonical_text(RT) of
+                true -> ok;
+                false ->
+                    error(#{<<"class">> => <<"type_conflict">>,
+                            <<"message">> => <<"join key type mismatch">>,
+                            <<"key">> => Key,
+                            <<"left_type">> => gdbsp_type:canonical_text(LT),
+                            <<"right_type">> => gdbsp_type:canonical_text(RT)})
+            end
+        end,
+        OnFields).
 
 lowered_input_type([InId | _], TypeAcc) ->
     maps:get(InId, TypeAcc, dynamic);

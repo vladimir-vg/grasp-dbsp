@@ -256,16 +256,11 @@ compile_to_plan(Source, Functions, OutputNames) ->
     {ok, Prog0} = gdbsp_parse:parse_string(Source, #{}),
     SourceTypeMap = build_source_type_map(Prog0),
 
-    AllTypes = gdbsp_type_infer:infer(
-        Prog0#gdbsp_program.nodes,
-        Prog0#gdbsp_program.typespecs,
-        Functions),
-
     case gdbsp_compile:compile_with_names(
            Prog0, #{fn_registry => Functions, incrementalize => false}) of
         {ok, Graph0, NameToId} ->
             Graph1 = add_output_nodes(Graph0, OutputNames, NameToId),
-            OutTypes = output_types_from_graph(Graph1, AllTypes, NameToId,
+            OutTypes = output_types_from_graph(Graph1, NameToId,
                                                 OutputNames, SourceTypeMap),
             Graph2 = gdbsp_compile_incremental:run(Graph1),
             Plan = gdbsp_deploy:plan(Graph2),
@@ -276,7 +271,7 @@ compile_to_plan(Source, Functions, OutputNames) ->
             throw({compile_error, Reason})
     end.
 
-output_types_from_graph(Graph, _AllTypes, NameToId, OutputNames, SourceTypeMap) ->
+output_types_from_graph(Graph, NameToId, OutputNames, SourceTypeMap) ->
     SrcSchemata = build_source_schemata(Graph, NameToId, SourceTypeMap),
     maps:fold(
         fun(OutName, _NodeId, Acc) ->
@@ -295,9 +290,9 @@ output_types_from_graph(Graph, _AllTypes, NameToId, OutputNames, SourceTypeMap) 
         #{},
         maps:with(OutputNames, NameToId)).
 
-build_source_schemata(Graph, NameToId, SourceTypeMap) ->
+build_source_schemata(_Graph, NameToId, SourceTypeMap) ->
     maps:fold(
-        fun(_TableName, {NodeName, {struct, Fields, _} = Type}, Acc) ->
+        fun(_TableName, {NodeName, {struct, _Fields, _} = Type}, Acc) ->
             case maps:find(NodeName, NameToId) of
                 {ok, CId} -> Acc#{CId => Type};
                 error -> Acc

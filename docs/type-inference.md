@@ -8,9 +8,16 @@ Status: draft
 ## 1. Overview
 
 Type inference determines the output type of every node in a `.gdbsp`
-circuit. It runs after parsing, before compilation. The result is a
-mapping from each node name to its concrete type, used by the compiler
-to allocate operators and by the runtime to validate input data.
+circuit. It runs **after lowering** (content-addressed deduplication
+and fixpoint expansion), before circuit-graph construction. The result
+is stored in each lowered node and carried forward to the circuit graph,
+used by the compiler to allocate operators and by the runtime to
+validate input data.
+
+Type inference uses **exact type equality** via canonical text
+comparison. Assignability and widening (see
+[type-system.md](type-system.md) §6) are applied only at runtime during
+function expression resolution, not during inference.
 
 ---
 
@@ -47,7 +54,7 @@ its input schemas. The propagation rules:
 | `filter` | Same as input schema (filter does not change columns) |
 | `flat_map` | Input columns plus any new columns produced by the flat-mapped expansion |
 | `project` | Subset of input schema: only the listed field names |
-| `plus` | Same as first input (with assignability check across all inputs) |
+| `plus` | Same as inputs (exact type match required across all inputs) |
 | `neg` | Same as input schema |
 | `delay` | Same as input schema |
 | `integrate` | Same as input schema |
@@ -60,7 +67,7 @@ its input schemas. The propagation rules:
 ### 3.2 Join Schema Details
 
 For `join(left, right, on: ["k1", "k2"])`:
-- Key fields (`on:`) must exist on both left and right sides with compatible types
+- Key fields (`on:`) must exist on both left and right sides with exactly equal types
 - Key fields appear once in the output, with the type from the left side
 - All non-key fields from both sides are merged flat into the output
 - Duplicate non-key field names across sides is an error
@@ -160,18 +167,23 @@ function definition in the function registry:
 
 ### 7.1 Missing Typespec
 
-A `source` node without a corresponding `stream(...)` annotation:
+A `source` node without a corresponding `stream(...)` annotation, or an
+operator referencing an undeclared function/aggregate:
 
 ```
 Error: missing_typespec on node <name>
 ```
 
-### 7.2 Type Mismatch
+### 7.2 Type Conflict
 
-When a node's input type is not assignable to what an operator expects:
+When operator inputs have incompatible types that must be exactly equal:
+
+- `plus` with input schemas that differ in field names or types
+- `join` with key fields that have different types on left and right sides
 
 ```
-Error: type mismatch at node <name>
+Error: type_conflict: plus input type mismatch
+Error: type_conflict: join key type mismatch on <key>
 ```
 
 ### 7.3 Unresolved Type Variable

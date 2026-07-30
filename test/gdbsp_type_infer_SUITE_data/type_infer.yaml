@@ -289,6 +289,12 @@
     src := source("data")
     src :: stream(struct("x": i64, "y": i64))
     f := flat_map(src, expand_fn)
+  functions:
+    expand_fn:
+      call: struct
+      kwargs:
+        x:
+          field: x
   expected:
     f:
       struct:
@@ -341,13 +347,49 @@
     src := source("data")
   expected_errors:
     - class: missing_typespec
-      node: src
 
-- description: "cycle without delay fails"
+- description: "map with unknown function fails"
   source: |
     src := source("data")
     src :: stream(struct("x": i64))
-    a := map(b, fn)
-    b := map(a, fn)
+    out := map(src, unknown_fn)
   expected_errors:
-    - class: cycle
+    - class: missing_typespec
+
+- description: "aggregate with unknown function fails"
+  source: |
+    src := source("data")
+    src :: stream(struct("dept": i64, "sal": i64))
+    agg := aggregate(src, bad_fn, by: ["dept"], value: "sal", as: "total")
+  expected_errors:
+    - class: missing_typespec
+
+- description: "plus with incompatible input types fails"
+  source: |
+    a := source("a")
+    a :: stream(struct("x": i64))
+    b := source("b")
+    b :: stream(struct("y": string("UTF-8")))
+    out := plus(a, b)
+  expected_errors:
+    - class: type_conflict
+
+- description: "plus with same shape different field names fails"
+  source: |
+    a := source("a")
+    a :: stream(struct("x": i64, "v": i64))
+    b := source("b")
+    b :: stream(struct("x": i64, "w": i64))
+    out := plus(a, b)
+  expected_errors:
+    - class: type_conflict
+
+- description: "join with mismatched key field types fails"
+  source: |
+    left := source("left")
+    left :: stream(struct("k": i64, "a": i64))
+    right := source("right")
+    right :: stream(struct("k": string("UTF-8"), "b": i64))
+    j := join(left, right, on: ["k"])
+  expected_errors:
+    - class: type_conflict
