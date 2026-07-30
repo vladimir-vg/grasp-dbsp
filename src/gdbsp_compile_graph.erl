@@ -429,12 +429,14 @@ construct_one_fixpoint(G0, _FpHmac, FixInfo, LnIdMap, CInputMap,
     BaseParams = [{K, V} || {K, V} <- ParamsList,
                             maps:get(kind, V) =:= base],
 
+
     SccId = G0#circuit_graph.next_id,
 
     BaseInputIds = [maps:get(maps:get(input, V), CInputMap)
                     || {_K, V} <- BaseParams],
     BodyInputPlaceholders = maps:from_list(
         [{K, maps:get(maps:get(input, V), CInputMap)} || {K, V} <- SelfRefParams]),
+
 
     %% Create Rec nodes (rewrite fixpoint_input placeholders)
     {G1, RecIds} = lists:foldl(
@@ -485,7 +487,8 @@ construct_one_fixpoint(G0, _FpHmac, FixInfo, LnIdMap, CInputMap,
     G3 = mark_scc_body_nodes(G2, RecIdList, RecOutputIdSet),
 
     G4 = case map_size(BodyToRecOut) of
-        0 -> G3;
+        0 -> 
+            G3;
         _ ->
             FixedNodes = maps:map(
                 fun(_NId, CNode = #circuit_node{inputs = CIns, meta = CMeta}) ->
@@ -513,11 +516,11 @@ construct_one_fixpoint(G0, _FpHmac, FixInfo, LnIdMap, CInputMap,
         [] -> []
     end,
     G5 = lists:foldl(
-        fun({_, RecId}, GAcc) -> set_schema(GAcc, RecId, BaseSchema) end,
-        G4, RecIds),
+        fun(RecId, GAcc) -> set_schema(GAcc, RecId, BaseSchema) end,
+        G4, maps:values(RecIds)),
     G6 = lists:foldl(
-        fun({_, ROId}, GAcc) -> set_schema(GAcc, ROId, BaseSchema) end,
-        G5, RecOutputIds),
+        fun(ROId, GAcc) -> set_schema(GAcc, ROId, BaseSchema) end,
+        G5, maps:values(RecOutputIds)),
 
     NewROAcc = maps:merge(ROIdsAcc, maps:from_list(
         [{maps:get(label, maps:get(KwBin, ParamsInfo)), ROId}

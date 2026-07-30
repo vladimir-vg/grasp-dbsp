@@ -345,7 +345,7 @@ expand_selfref(_FpName, NodeName, CircuitName, Params, BodyNodes,
         fun(#gdbsp_node_def{name = BN, op = BOp, args = BArgs}, {LG, BIds}) ->
             SubstitutedArgs = substitute_params(BArgs, InternalNameMap),
             Inputs = resolve_inputs(SubstitutedArgs, LG#lowered_graph.tag_map),
-            {LG3, NodeId} = add_node(BOp, Inputs, SubstitutedArgs, [], undefined, LG),
+            {LG3, NodeId} = add_node(BOp, Inputs, SubstitutedArgs, [BN], undefined, LG),
             {LG3, BIds#{BN => NodeId}}
         end,
         {LG1, #{}},
