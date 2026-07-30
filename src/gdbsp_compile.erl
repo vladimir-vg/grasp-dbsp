@@ -1,6 +1,8 @@
 %%%-------------------------------------------------------------------
 %%% @doc GDBSP compiler — transforms parsed #gdbsp_program{} into
 %%% a deployable #circuit_graph{}.
+%%%
+%%% Pipeline: parse → type-infer → lower → compile-graph → incrementalize
 %%% @end
 %%%-------------------------------------------------------------------
 -module(gdbsp_compile).
@@ -9,6 +11,7 @@
 
 -include("gdbsp_parse.hrl").
 -include("gdbsp_circuit.hrl").
+-include("gdbsp_lowered.hrl").
 
 -type options() :: #{
     incrementalize => boolean(),
@@ -29,18 +32,23 @@ compile(Program, Options) ->
 compile_with_names(Program, Options) ->
     FnReg = maps:get(fn_registry, Options, #{}),
     Incr = maps:get(incrementalize, Options, false),
-    #gdbsp_program{nodes = Nodes, typespecs = TSs, circuits = Circuits} = Program,
     try
-        case gdbsp_compile_graph:build(Nodes, TSs, FnReg, Circuits) of
-            {ok, Graph, NameToId} ->
-                Graph2 = case Incr of
-                    true  -> gdbsp_compile_incremental:run(Graph);
-                    false -> Graph
-                end,
-                {ok, Graph2, NameToId};
+        case gdbsp_compile_lower:run(Program, #{}) of
+            {ok, Lowered} ->
+                case gdbsp_compile_graph:build_from_lowered(Lowered, FnReg) of
+                    {ok, Graph, NameToId} ->
+                        Graph2 = case Incr of
+                            true  -> gdbsp_compile_incremental:run(Graph);
+                            false -> Graph
+                        end,
+                        {ok, Graph2, NameToId};
+                    {error, _} = Err -> Err
+                end;
             {error, _} = Err -> Err
         end
     catch
         throw:{compile_error, Reason} ->
-            {error, Reason}
+            {error, Reason};
+        throw:{fixpoint_error, Reason} ->
+            {error, {fixpoint_error, Reason}}
     end.

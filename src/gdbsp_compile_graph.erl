@@ -8,10 +8,11 @@
 %%%-------------------------------------------------------------------
 -module(gdbsp_compile_graph).
 
--export([build/4]).
+-export([build/4, build_from_lowered/2]).
 
 -include("gdbsp_parse.hrl").
 -include("gdbsp_circuit.hrl").
+-include("gdbsp_lowered.hrl").
 -include("gdbsp_type.hrl").
 -include("gdbsp_expr.hrl").
 -include("gdbsp_op.hrl").
@@ -150,6 +151,444 @@ construct(NameTable, Order, FnReg, CircuitDefs) ->
         Order
     ),
     {Graph0, IdMap}.
+
+-spec build_from_lowered(#lowered_graph{}, fn_registry()) ->
+    {ok, #circuit_graph{}, #{binary() => node_id()}} | {error, term()}.
+build_from_lowered(#lowered_graph{nodes = LNodes, tag_map = TagMap,
+                                  fixpoints = Fixpoints}, FnReg) ->
+    NodeList = maps:to_list(LNodes),
+    case lowered_topo_sort(NodeList) of
+        {ok, Order} ->
+            {Graph0, LnIdMap, CircuitFixpointInputs, CircuitFixpointOutputs} =
+                construct_from_lowered(NodeList, Order, FnReg),
+            {Graph1, RecOutputTags} = construct_fixpoints(Graph0, Fixpoints, LnIdMap,
+                                          CircuitFixpointInputs, CircuitFixpointOutputs),
+            ok = validate_graph(Graph1),
+            TagToId0 = build_tag_to_id(TagMap, LnIdMap),
+            TagToId = maps:merge(TagToId0, RecOutputTags),
+            {ok, Graph1, TagToId};
+        {error, _} = Err -> Err
+    end.
+
+%%====================================================================
+%% Lowered topological sort
+%%====================================================================
+
+lowered_topo_sort(NodeList) ->
+    InDeg = maps:from_list(
+        lists:map(
+            fun({LId, #lnode{op = Op, inputs = Ins}}) ->
+                Refs = case Op of
+                    delay -> [R || R <- Ins, R =/= LId];
+                    _ -> Ins
+                end,
+                {LId, length(Refs)}
+            end, NodeList)),
+    Consumers = lists:foldl(
+        fun({LId, #lnode{inputs = Ins}}, Acc) ->
+            lists:foldl(
+                fun(InId, A) ->
+                    maps:update_with(InId, fun(L) -> [LId | L] end, [LId], A)
+                end, Acc, Ins)
+        end, #{}, NodeList),
+    AllIds = [Id || {Id, _} <- NodeList],
+    Queue = [Id || Id <- AllIds, maps:get(Id, InDeg, 0) =:= 0],
+    lowered_topo_loop(queue:from_list(Queue), InDeg, Consumers,
+                      length(AllIds), []).
+
+lowered_topo_loop(Q, InDeg, Consumers, Total, Acc) ->
+    case queue:out(Q) of
+        {empty, _} ->
+            case length(Acc) =:= Total of
+                true -> {ok, lists:reverse(Acc)};
+                false -> {error, cycle_in_graph}
+            end;
+        {{value, Id}, RestQ} ->
+            NewAcc = [Id | Acc],
+            Dependents = maps:get(Id, Consumers, []),
+            {NewQ, NewIndeg} = lists:foldl(
+                fun(Dep, {QI, ID}) ->
+                    NewD = maps:get(Dep, ID) - 1,
+                    ID2 = maps:put(Dep, NewD, ID),
+                    case NewD of
+                        0 -> {queue:in(Dep, QI), ID2};
+                        _ -> {QI, ID2}
+                    end
+                end, {RestQ, InDeg}, sets:to_list(sets:from_list(Dependents))),
+            lowered_topo_loop(NewQ, NewIndeg, Consumers, Total, NewAcc)
+    end.
+
+%%====================================================================
+%% Circuit graph construction from lowered nodes
+%%====================================================================
+
+construct_from_lowered(NodeList, Order, FnReg) ->
+    LNodeById = maps:from_list(NodeList),
+    {G, LnIdMap, FixInMap, FixOutMap} = lists:foldl(
+        fun(LId, {GAcc, IdMapAcc, FIMAcc, FOMAcc}) ->
+            #lnode{op = Op, inputs = LInputs, args = Args, type = Type} =
+                maps:get(LId, LNodeById),
+            CInputIds = [maps:get(InId, IdMapAcc, InId) || InId <- LInputs],
+            case Op of
+                fixpoint_input ->
+                    {G2, NodeId} = add_circuit_node(GAcc, {integrate}, CInputIds, #{}),
+                    {G2, IdMapAcc#{LId => NodeId},
+                     maps:put(LId, NodeId, FIMAcc), FOMAcc};
+                fixpoint_output ->
+                    %% Pass through to body output circuit node.
+                    %% Will be wrapped with rec_output during fixpoint construction.
+                    InId = case LInputs of
+                        [I] -> I;
+                        [] -> throw({compile_error, {fixpoint_output_no_input}})
+                    end,
+                    case maps:find(InId, IdMapAcc) of
+                        {ok, CId} ->
+                            {GAcc, IdMapAcc#{LId => CId}, FIMAcc,
+                             maps:put(LId, CId, FOMAcc)};
+                        error ->
+                            throw({compile_error, {unresolved_fixpoint_output_input}})
+                    end;
+                join ->
+                    {G2, NodeId} = build_join_graph_lowered(GAcc, Args, CInputIds),
+                    Schema = compute_schema_lowered(Op, Args, CInputIds, Type, G2),
+                    G3 = set_schema(G2, NodeId, Schema),
+                    {G3, IdMapAcc#{LId => NodeId}, FIMAcc, FOMAcc};
+                aggregate ->
+                    {G2, NodeId} = build_aggregate_graph_lowered(GAcc, Args, CInputIds, FnReg),
+                    Schema = compute_schema_lowered(Op, Args, CInputIds, Type, G2),
+                    G3 = set_schema(G2, NodeId, Schema),
+                    {G3, IdMapAcc#{LId => NodeId}, FIMAcc, FOMAcc};
+                _ ->
+                    {OpTuple, SubNodes} = make_operator_lowered(
+                        GAcc, Op, Args, CInputIds, Type, FnReg),
+                    {G2, FinalId} = add_with_sub_nodes(GAcc, OpTuple, CInputIds, SubNodes),
+                    Schema = compute_schema_lowered(Op, Args, CInputIds, Type, G2),
+                    G3 = set_schema(G2, FinalId, Schema),
+                    {G3, IdMapAcc#{LId => FinalId}, FIMAcc, FOMAcc}
+            end
+        end,
+        {new_graph(), #{}, #{}, #{}},
+        Order),
+    {G, LnIdMap, FixInMap, FixOutMap}.
+
+%%--------------------------------------------------------------------
+%% Join lowered — creates map_index nodes
+%%--------------------------------------------------------------------
+
+build_join_graph_lowered(G, Args, InputIds) ->
+    [LId, RId] = InputIds,
+    LSchema = get_schema(G, LId),
+    RSchema = get_schema(G, RId),
+    {on, OnFields} = get_kw_arg(Args, on, []),
+    Shared = lists:filter(fun(F) -> lists:member(F, RSchema) end, LSchema),
+    LeftVal = LSchema -- Shared,
+    RightVal = RSchema -- Shared,
+    LType = get_input_row_type([LId], G),
+    RType = get_input_row_type([RId], G),
+    Merged = build_merged_fields(Shared, LeftVal, RightVal, LType, RType),
+
+    LeftIdxSpec = #{key_vars => Shared, val_vars => LeftVal},
+    NextId0 = G#circuit_graph.next_id,
+    LIdxNode = #circuit_node{id = NextId0, op = {map_index, LeftIdxSpec},
+                              inputs = [LId], meta = #{}},
+    G0 = G#circuit_graph{next_id = NextId0 + 1,
+                         nodes = maps:put(NextId0, LIdxNode, G#circuit_graph.nodes)},
+    G1 = set_schema(G0, NextId0, Shared ++ LeftVal),
+
+    NextId1 = G1#circuit_graph.next_id,
+    RightIdxSpec = #{key_vars => Shared, val_vars => RightVal},
+    RIdxNode = #circuit_node{id = NextId1, op = {map_index, RightIdxSpec},
+                              inputs = [RId], meta = #{}},
+    G2 = G1#circuit_graph{next_id = NextId1 + 1,
+                          nodes = maps:put(NextId1, RIdxNode, G1#circuit_graph.nodes)},
+    G3 = set_schema(G2, NextId1, Shared ++ RightVal),
+
+    JoinId = G3#circuit_graph.next_id,
+    JoinOp = {join, #{shared_vars => Shared, left_val_vars => LeftVal,
+                      right_val_vars => RightVal, merged_fields => Merged}},
+    JoinNode = #circuit_node{id = JoinId, op = JoinOp,
+                              inputs = [NextId0, NextId1], meta = #{}},
+    G4 = G3#circuit_graph{next_id = JoinId + 1,
+                          nodes = maps:put(JoinId, JoinNode, G3#circuit_graph.nodes)},
+    Schema = OnFields ++ LeftVal ++ RightVal,
+    G5 = set_schema(G4, JoinId, Schema),
+    {G5, JoinId}.
+
+%%--------------------------------------------------------------------
+%% Aggregate lowered — creates map_index → aggregate → map(unwrap)
+%%--------------------------------------------------------------------
+
+build_aggregate_graph_lowered(G, Args, InputIds, FnReg) ->
+    FnName = get_var_arg(Args, 2),
+    AggBin = resolve_agg_fn_name(FnName, FnReg),
+    {by, ByFields} = get_kw_arg(Args, by, []),
+    {value, ValField} = get_kw_arg(Args, value, <<>>),
+    {as, AsField} = get_kw_arg(Args, 'as', <<>>),
+    IdxSpec = #{key_vars => ByFields, agg_col => ValField},
+    OutRowType = {struct, maps:from_list([{F, dynamic} || F <- ByFields] ++
+                                          [{AsField, dynamic}]), exact},
+    UnwrapSpec = #{kind => agg_unwrap, group_by => ByFields,
+                   output_var => AsField, row_type => OutRowType},
+
+    {G1, AggId} = add_with_sub_nodes(G, {aggregate, AggBin}, InputIds,
+                                     [{map_index, IdxSpec}]),
+    AggSchema = ByFields ++ [AsField],
+    G2 = set_schema(G1, AggId, AggSchema),
+
+    UnwrapId = G2#circuit_graph.next_id,
+    UnwrapNode = #circuit_node{id = UnwrapId, op = {map, UnwrapSpec},
+                                inputs = [AggId], meta = #{}},
+    G3 = G2#circuit_graph{next_id = UnwrapId + 1,
+                          nodes = maps:put(UnwrapId, UnwrapNode, G2#circuit_graph.nodes)},
+    G4 = set_schema(G3, UnwrapId, AggSchema),
+    {G4, UnwrapId}.
+
+%%--------------------------------------------------------------------
+%% Operator mapping from lowered args
+%%--------------------------------------------------------------------
+
+make_operator_lowered(G, Op, Args, InputIds, TS, FnReg) ->
+    case Op of
+        source ->
+            TableName = get_string_arg(Args, 1),
+            {{source, TableName}, []};
+        integrate ->
+            {{integrate}, []};
+        differentiate ->
+            {{differentiate}, []};
+        delay ->
+            {{delay}, []};
+        distinct ->
+            {{distinct}, []};
+        plus ->
+            {{plus}, []};
+        neg ->
+            {{neg}, []};
+        map ->
+            FnName = get_var_arg(Args, 2),
+            Expr = resolve_fn(FnName, FnReg),
+            RowType = get_input_row_type(InputIds, G),
+            Spec = #{kind => expr, expr => Expr, row_type => RowType},
+            {{map, Spec}, []};
+        filter ->
+            FnName = get_var_arg(Args, 2),
+            Expr = resolve_fn(FnName, FnReg),
+            RowType = get_input_row_type(InputIds, G),
+            {{filter, #{expr => Expr, row_type => RowType}}, []};
+        flat_map ->
+            FnName = get_var_arg(Args, 2),
+            Expr = resolve_fn(FnName, FnReg),
+            RowType = get_input_row_type(InputIds, G),
+            OutType = case TS of
+                {struct, _, _} = Struct -> Struct;
+                undefined -> dynamic;
+                _ -> TS
+            end,
+            AllCols = struct_field_names(OutType),
+            InputCols = get_schema(G, hd(InputIds)),
+            NewCols = AllCols -- InputCols,
+            {{flat_map, #{expr => Expr, row_type => RowType,
+                          unnest_outs => NewCols}}, []};
+        project ->
+            KeepFields = get_string_list_arg(Args, 2),
+            {{map, #{kind => project, keep => KeepFields}}, []};
+        antijoin ->
+            {on, SharedVars} = get_kw_arg(Args, on, []),
+            [_, RId] = InputIds,
+            RSchema = get_schema(G, RId),
+            LeftVal = case InputIds of
+                [LId2, _] -> get_schema(G, LId2) -- SharedVars;
+                _ -> []
+            end,
+            _ = RSchema,
+            {{antijoin, SharedVars, LeftVal}, []}
+    end.
+
+%%====================================================================
+%% Fixpoint construction from lowered metadata
+%%====================================================================
+
+construct_fixpoints(G, Fixpoints, LnIdMap, CircuitFixpointInputs,
+                     CircuitFixpointOutputs) ->
+    {G1, AllRecOutputIds} = maps:fold(
+        fun(FpHmac, FixInfo, {GAcc, ROIdsAcc}) ->
+            construct_one_fixpoint(GAcc, FpHmac, FixInfo, LnIdMap,
+                                    CircuitFixpointInputs, CircuitFixpointOutputs,
+                                    ROIdsAcc)
+        end,
+        {G, #{}},
+        Fixpoints),
+    {G1, AllRecOutputIds}.
+
+construct_one_fixpoint(G0, _FpHmac, FixInfo, LnIdMap, CInputMap,
+                        _COutputMap, ROIdsAcc) ->
+    #{circuit_name := _CName, params := ParamsInfo} = FixInfo,
+    ParamsList = maps:to_list(ParamsInfo),
+    SelfRefParams = [{K, V} || {K, V} <- ParamsList,
+                                maps:get(kind, V) =:= self_ref],
+    BaseParams = [{K, V} || {K, V} <- ParamsList,
+                            maps:get(kind, V) =:= base],
+
+    SccId = G0#circuit_graph.next_id,
+
+    BaseInputIds = [maps:get(maps:get(input, V), CInputMap)
+                    || {_K, V} <- BaseParams],
+    BodyInputPlaceholders = maps:from_list(
+        [{K, maps:get(maps:get(input, V), CInputMap)} || {K, V} <- SelfRefParams]),
+
+    %% Create Rec nodes (rewrite fixpoint_input placeholders)
+    {G1, RecIds} = lists:foldl(
+        fun({KwBin, ParamInfo}, {GA, RIds}) ->
+            PlaceholderId = maps:get(KwBin, BodyInputPlaceholders),
+            BodyOutLId = maps:get(body_out, ParamInfo),
+            BodyOutCId = maps:get(BodyOutLId, LnIdMap),
+            RecName = maps:get(label, ParamInfo),
+            RecInputs = lists:usort(BaseInputIds ++ [BodyOutCId]),
+            HasBase = BaseInputIds =/= [],
+            RecNode = #circuit_node{
+                id = PlaceholderId,
+                op = {rec, RecName, SccId},
+                inputs = RecInputs,
+                meta = #{sourced => HasBase, scc_body => true}},
+            Nodes2 = maps:put(PlaceholderId, RecNode, GA#circuit_graph.nodes),
+            {GA#circuit_graph{nodes = Nodes2}, RIds#{KwBin => PlaceholderId}}
+        end,
+        {G0, #{}},
+        SelfRefParams),
+
+    %% Create RecOutput nodes
+    {G2, RecOutputIds, BodyToRecOut} = lists:foldl(
+        fun({KwBin, ParamInfo}, {GA, OutIds, BToR}) ->
+            BodyOutLId = maps:get(body_out, ParamInfo),
+            BodyOutCId = maps:get(BodyOutLId, LnIdMap),
+            RecOutName = maps:get(label, ParamInfo),
+            RecOutId = GA#circuit_graph.next_id,
+            RONode = #circuit_node{
+                id = RecOutId,
+                op = {rec_output, RecOutName, SccId},
+                inputs = [BodyOutCId],
+                meta = #{}},
+            Nodes3 = maps:put(RecOutId, RONode, GA#circuit_graph.nodes),
+            GA2 = GA#circuit_graph{next_id = RecOutId + 1, nodes = Nodes3},
+
+            Schema = get_schema(GA, BodyOutCId),
+            GA3 = set_schema(GA2, RecOutId, Schema),
+            {GA3, OutIds#{KwBin => RecOutId}, BToR#{BodyOutCId => RecOutId}}
+        end,
+        {G1, #{}, #{}},
+        SelfRefParams),
+
+    RecIdList = [Id || {_, Id} <- maps:to_list(RecIds)] ++
+               [Id || {_, Id} <- maps:to_list(RecOutputIds)],
+    RecOutputIdSet = maps:from_list(
+        [{Id, Id} || {_, Id} <- maps:to_list(RecOutputIds)]),
+    G3 = mark_scc_body_nodes(G2, RecIdList, RecOutputIdSet),
+
+    G4 = case map_size(BodyToRecOut) of
+        0 -> G3;
+        _ ->
+            FixedNodes = maps:map(
+                fun(_NId, CNode = #circuit_node{inputs = CIns, meta = CMeta}) ->
+                    case maps:is_key(scc_body, CMeta) of
+                        true -> CNode;
+                        false ->
+                            NewIns = lists:map(
+                                fun(InId) ->
+                                    case maps:find(InId, BodyToRecOut) of
+                                        {ok, RecOutId} -> RecOutId;
+                                        error -> InId
+                                    end
+                                end, CIns),
+                            case NewIns =:= CIns of
+                                true -> CNode;
+                                false -> CNode#circuit_node{inputs = NewIns}
+                            end
+                    end
+                end, G3#circuit_graph.nodes),
+            G3#circuit_graph{nodes = FixedNodes}
+    end,
+
+    BaseSchema = case BaseInputIds of
+        [FirstBaseId | _] -> get_schema(G4, FirstBaseId);
+        [] -> []
+    end,
+    G5 = lists:foldl(
+        fun({_, RecId}, GAcc) -> set_schema(GAcc, RecId, BaseSchema) end,
+        G4, RecIds),
+    G6 = lists:foldl(
+        fun({_, ROId}, GAcc) -> set_schema(GAcc, ROId, BaseSchema) end,
+        G5, RecOutputIds),
+
+    NewROAcc = maps:merge(ROIdsAcc, maps:from_list(
+        [{maps:get(label, maps:get(KwBin, ParamsInfo)), ROId}
+         || {KwBin, ROId} <- maps:to_list(RecOutputIds)])),
+    {G6, NewROAcc}.
+
+%%====================================================================
+%% Schema computation for lowered nodes
+%%====================================================================
+
+compute_schema_lowered(Op, Args, InputIds, TS, G) ->
+    case Op of
+        source ->
+            case TS of
+                {struct, Fields, _} -> maps:keys(Fields);
+                _ -> []
+            end;
+        flat_map ->
+            _FnName = get_var_arg(Args, 2),
+            OutSchema = case TS of
+                {struct, Fields, _} -> maps:keys(Fields);
+                _ -> []
+            end,
+            InputCols = get_schema(G, hd(InputIds)),
+            OutSchema ++ (OutSchema -- InputCols);
+        aggregate ->
+            {by, ByFields} = get_kw_arg(Args, by, []),
+            {as, AsField} = get_kw_arg(Args, 'as', <<>>),
+            ByFields ++ [AsField];
+        join ->
+            {on, OnFields} = get_kw_arg(Args, on, []),
+            LSchema = get_schema(G, hd(InputIds)),
+            RSchema = get_schema(G, lists:nth(2, InputIds)),
+            LeftVal = LSchema -- OnFields,
+            RightVal = RSchema -- OnFields,
+            OnFields ++ LeftVal ++ RightVal;
+        project ->
+            get_string_list_arg(Args, 2);
+        distinct -> inherit_schema(InputIds, G);
+        plus     -> inherit_schema(InputIds, G);
+        map      -> inherit_schema(InputIds, G);
+        filter   -> inherit_schema(InputIds, G);
+        neg      -> inherit_schema(InputIds, G);
+        integrate   -> inherit_schema(InputIds, G);
+        differentiate -> inherit_schema(InputIds, G);
+        delay -> inherit_schema(InputIds, G);
+        antijoin -> inherit_schema(InputIds, G);
+        _ -> inherit_schema(InputIds, G)
+    end.
+
+%%====================================================================
+%% Tag → circuit ID mapping
+%%====================================================================
+
+build_tag_to_id(TagMap, LnIdMap) ->
+    maps:fold(
+        fun(Tag, LId, Acc) ->
+            case maps:find(LId, LnIdMap) of
+                {ok, CId} -> Acc#{Tag => CId};
+                error -> Acc
+            end
+        end,
+        #{},
+        TagMap).
+
+add_circuit_node(G, OpTuple, InputIds, Meta) ->
+    Id = G#circuit_graph.next_id,
+    Node = #circuit_node{id = Id, op = OpTuple, inputs = InputIds, meta = Meta},
+    G2 = G#circuit_graph{next_id = Id + 1,
+                         nodes = maps:put(Id, Node, G#circuit_graph.nodes)},
+    {G2, Id}.
 
 validate_graph(#circuit_graph{nodes = Nodes}) ->
     NodeIds = sets:from_list(maps:keys(Nodes), [{version, 2}]),

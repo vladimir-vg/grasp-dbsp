@@ -29,6 +29,7 @@
 -include_lib("common_test/include/ct.hrl").
 -include("gdbsp_parse.hrl").
 -include("gdbsp_circuit.hrl").
+-include("gdbsp_lowered.hrl").
 -include("gdbsp_type.hrl").
 
 %%====================================================================
@@ -253,25 +254,86 @@ run_positive(Source, Functions, InputEpochs, ExpectedEpochs, ExpectedExactEpochs
 
 compile_to_plan(Source, Functions, OutputNames) ->
     {ok, Prog0} = gdbsp_parse:parse_string(Source, #{}),
-    Prog1 = case gdbsp_compile_fixpoint:expand(Prog0) of
-        {ok, P} -> P;
-        {error, {Line, Msg}} -> throw({fixpoint_error, {Line, Msg}})
-    end,
-    SourceTypeMap = build_source_type_map(Prog1),
+    SourceTypeMap = build_source_type_map(Prog0),
 
     AllTypes = gdbsp_type_infer:infer(
-        Prog1#gdbsp_program.nodes,
-        Prog1#gdbsp_program.typespecs,
+        Prog0#gdbsp_program.nodes,
+        Prog0#gdbsp_program.typespecs,
         Functions),
-    OutputTypes = maps:with(OutputNames, AllTypes),
 
-    {ok, Graph0, NameToId} = gdbsp_compile:compile_with_names(
-        Prog1, #{fn_registry => Functions, incrementalize => false}),
+    case gdbsp_compile:compile_with_names(
+           Prog0, #{fn_registry => Functions, incrementalize => false}) of
+        {ok, Graph0, NameToId} ->
+            Graph1 = add_output_nodes(Graph0, OutputNames, NameToId),
+            OutTypes = output_types_from_graph(Graph1, AllTypes, NameToId,
+                                                OutputNames, SourceTypeMap),
+            Graph2 = gdbsp_compile_incremental:run(Graph1),
+            Plan = gdbsp_deploy:plan(Graph2),
+            {Plan, SourceTypeMap, OutTypes};
+        {error, {fixpoint_error, _} = FixErr} ->
+            throw(FixErr);
+        {error, Reason} ->
+            throw({compile_error, Reason})
+    end.
 
-    Graph1 = add_output_nodes(Graph0, OutputNames, NameToId),
-    Graph2 = gdbsp_compile_incremental:run(Graph1),
-    Plan = gdbsp_deploy:plan(Graph2),
-    {Plan, SourceTypeMap, OutputTypes}.
+output_types_from_graph(Graph, AllTypes, NameToId, OutputNames, SourceTypeMap) ->
+    SrcSchemata = build_source_schemata(Graph, NameToId, SourceTypeMap),
+    maps:fold(
+        fun(OutName, _NodeId, Acc) ->
+            %% Prefer type inference result if available
+            case maps:find(OutName, AllTypes) of
+                {ok, Type} when Type =/= undefined, Type =/= dynamic ->
+                    Acc#{OutName => Type};
+                _ ->
+                    %% Fall back to graph-tracing for fixpoint outputs etc.
+                    case maps:find(OutName, NameToId) of
+                        {ok, CId} ->
+                            Schema = maps:get(CId, Graph#circuit_graph.schemas, []),
+                            Type = build_struct_type(Schema, CId, SrcSchemata, Graph, #{}),
+                            Acc#{OutName => Type};
+                        error -> Acc
+                    end
+            end
+        end,
+        #{},
+        maps:with(OutputNames, NameToId)).
+
+build_source_schemata(Graph, NameToId, SourceTypeMap) ->
+    maps:fold(
+        fun(_TableName, {NodeName, {struct, Fields, _} = Type}, Acc) ->
+            case maps:find(NodeName, NameToId) of
+                {ok, CId} -> Acc#{CId => Type};
+                error -> Acc
+            end;
+           (_TableName, {_NodeName, _Type}, Acc) -> Acc
+        end, #{}, SourceTypeMap).
+
+build_struct_type(Cols, CId, SrcSchemata, Graph, Visited) when map_size(Visited) < 100 ->
+    case maps:find(CId, SrcSchemata) of
+        {ok, {struct, Fields, _}} ->
+            Merged = maps:merge(
+                maps:from_list([{Col, dynamic} || Col <- Cols]),
+                maps:with(Cols, Fields)),
+            {struct, Merged, exact};
+        error ->
+            case maps:find(CId, Graph#circuit_graph.nodes) of
+                {ok, #circuit_node{inputs = [InId | _]}} ->
+                    case maps:is_key(CId, Visited) of
+                        true ->
+                            Fields = maps:from_list([{Col, dynamic} || Col <- Cols]),
+                            {struct, Fields, exact};
+                        false ->
+                            build_struct_type(Cols, InId, SrcSchemata, Graph,
+                                maps:put(CId, true, Visited))
+                    end;
+                _ ->
+                    Fields = maps:from_list([{Col, dynamic} || Col <- Cols]),
+                    {struct, Fields, exact}
+            end
+    end;
+build_struct_type(Cols, _CId, _SrcSchemata, _Graph, _Visited) ->
+    Fields = maps:from_list([{Col, dynamic} || Col <- Cols]),
+    {struct, Fields, exact}.
 
 build_source_type_map(#gdbsp_program{nodes = Nodes, typespecs = TSs}) ->
     TSMap = lists:foldl(
