@@ -33,6 +33,7 @@ build(Nodes, Typespecs, FnReg, CircuitDefs) ->
             case topo_sort(NameTable) of
                 {ok, Order} ->
                     {Graph, NameToId} = construct(NameTable, Order, FnReg, CircuitDefs),
+                    ok = validate_graph(Graph),
                     {ok, Graph, NameToId};
                 {error, _} = Err -> Err
             end;
@@ -140,12 +141,52 @@ construct(NameTable, Order, FnReg, CircuitDefs) ->
             Info = maps:get(Name, NameTable),
             {G2, NodeId, ExtraIds} = build_node(G, Info, IdMapAcc,
                                                   NameTable, FnReg, CircuitDefs),
-            {G2, maps:merge(IdMapAcc#{Name => NodeId}, ExtraIds)}
+            Merged = maps:merge(IdMapAcc#{Name => NodeId}, ExtraIds),
+            {G2, Merged}
         end,
         {new_graph(), #{}},
         Order
     ),
     {Graph0, IdMap}.
+
+validate_graph(#circuit_graph{nodes = Nodes}) ->
+    NodeIds = sets:from_list(maps:keys(Nodes), [{version, 2}]),
+    maps:foreach(
+        fun(NodeId, #circuit_node{op = Op, inputs = Inputs}) ->
+            validate_node_inputs(NodeId, Op, Inputs, NodeIds)
+        end, Nodes),
+    ok.
+
+validate_node_inputs(NodeId, Op, Inputs, ValidIds) ->
+    lists:foreach(
+        fun(InId) ->
+            case sets:is_element(InId, ValidIds) of
+                false ->
+                    io:format(standard_error,
+                              "validate_graph: node ~p references unknown input ~p~n",
+                              [NodeId, InId]);
+                true -> ok
+            end
+        end, Inputs),
+    case element(1, Op) of
+        rec ->
+            case Inputs of
+                [] ->
+                    io:format(standard_error,
+                              "validate_graph: Rec node ~p has no inputs~n",
+                              [NodeId]);
+                _ -> ok
+            end;
+        rec_output ->
+            case Inputs of
+                [_Single] -> ok;
+                _ ->
+                    io:format(standard_error,
+                              "validate_graph: rec_output ~p has ~w inputs, expected 1~n",
+                              [NodeId, length(Inputs)])
+            end;
+        _ -> ok
+    end.
 
 new_graph() ->
     #circuit_graph{next_id = 1, nodes = #{}, schemas = #{}}.
@@ -513,7 +554,41 @@ build_fixpoint_graph(G, FpName, Args, _TS, _NameTable, _FnReg, CircuitDefs, IdMa
         _ -> hd(lists:reverse(maps:values(RecOutputIds)))
     end,
     G6 = set_schema(G5, FinalId, BaseSchema),
-    {G6, FinalId, ExtraIds}.
+
+    %% Fix up any nodes whose inputs still reference raw body operator IDs
+    %% instead of their RecOutput wrappers.  This can happen when the output
+    %% pass-through node (e.g. "out := plus(fp_result)") is compiled before
+    %% the fixpoint node in the topological order — its inputs were resolved
+    %% before build_fixpoint_graph had a chance to install RecOutput overrides
+    %% in IdMap.
+    BodyToRecOutput = maps:fold(
+        fun(KwBin, RecOutId, Acc) ->
+            case maps:find(KwBin, BodyOpIds) of
+                {ok, BodyId} -> Acc#{BodyId => RecOutId};
+                error -> Acc
+            end
+        end, #{}, RecOutputIds),
+    G7 = case map_size(BodyToRecOutput) of
+        0 -> G6;
+        _ ->
+            FixedNodes = maps:map(
+                fun(_NId, CNode = #circuit_node{inputs = CIns}) ->
+                    NewIns = lists:map(
+                        fun(InId) ->
+                            case maps:find(InId, BodyToRecOutput) of
+                                {ok, RecOutId} -> RecOutId;
+                                error -> InId
+                            end
+                        end, CIns),
+                    case NewIns =:= CIns of
+                        true -> CNode;
+                        false -> CNode#circuit_node{inputs = NewIns}
+                    end
+                end, G6#circuit_graph.nodes),
+            G6#circuit_graph{nodes = FixedNodes}
+    end,
+
+    {G7, FinalId, ExtraIds}.
 
 %%--------------------------------------------------------------------
 %% Mark body operators as scc_body (downstream of Rec, stops at RecOutput)

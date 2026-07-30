@@ -12,14 +12,16 @@
 
 -export([simple_filter/1, simple_map/1, join/1, aggregate/1, plus_multi/1,
          incrementalize_filter/1, incrementalize_join/1, cycle_error/1,
-         missing_fn/1, duplicate_node/1]).
+         missing_fn/1, duplicate_node/1,
+         delay_inputs_not_empty_for_chain/1, delay_ordering_independent/1]).
 
 -define(FIXTURE_DIR, "parse_fixtures").
 
 all() ->
     [simple_filter, simple_map, join, aggregate, plus_multi,
      incrementalize_filter, incrementalize_join, cycle_error,
-     missing_fn, duplicate_node].
+     missing_fn, duplicate_node,
+     delay_inputs_not_empty_for_chain, delay_ordering_independent].
 
 init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(yamerl),
@@ -215,6 +217,36 @@ duplicate_node(_Config) ->
             end;
         {error, _} -> ok
     end.
+
+delay_inputs_not_empty_for_chain(_Config) ->
+    {ok, Prog} = parse_prog(
+        "s := source(\"data\")\n"
+        "s :: stream(struct(\"x\": i64))\n"
+        "d := delay(s)\n"
+    ),
+    {ok, G} = gdbsp_compile:compile(Prog, #{fn_registry => #{},
+                                              incrementalize => false}),
+    Nodes = G#circuit_graph.nodes,
+    DelayNode = hd([N || {_, N} <- maps:to_list(Nodes),
+                          element(1, N#circuit_node.op) =:= delay]),
+    [_ | _] = DelayNode#circuit_node.inputs,
+    ok.
+
+delay_ordering_independent(_Config) ->
+    {ok, Prog} = parse_prog(
+        "aaa := delay(zzz)\n"
+        "zzz := source(\"t\")\n"
+        "zzz :: stream(struct(\"x\": i64))\n"
+    ),
+    {ok, G} = gdbsp_compile:compile(Prog, #{fn_registry => #{},
+                                              incrementalize => false}),
+    Nodes = G#circuit_graph.nodes,
+    SourceId = hd([Id || {Id, N} <- maps:to_list(Nodes),
+                          element(1, N#circuit_node.op) =:= source]),
+    DelayNode = hd([N || {_, N} <- maps:to_list(Nodes),
+                          element(1, N#circuit_node.op) =:= delay]),
+    [SourceId] = DelayNode#circuit_node.inputs,
+    ok.
 
 %%--------------------------------------------------------------------
 %% Helpers

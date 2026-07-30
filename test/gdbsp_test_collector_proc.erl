@@ -140,7 +140,10 @@ loop(State) ->
             },
             loop(State#state{waiters = NewWaiters});
         stop ->
-            ok
+            ok;
+        {wiring_update, _Up, _Down, WiringRef, From} ->
+            From ! {wiring_ack, WiringRef, self()},
+            loop(State)
     end.
 
 notify_waiters(Epoch, Waiters) ->

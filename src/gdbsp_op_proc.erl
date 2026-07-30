@@ -6,10 +6,12 @@
 %%% Module:handle_delta(OpState, Label, {delta, Meta, Deltas}).
 %%%
 %%% Two wiring_update variants:
-%%%   {wiring_update, Up, Down}           — initial wiring (no FromEpoch).
-%%%     Applied immediately ONLY if epoch is undefined. Crashes otherwise.
-%%%   {wiring_update, Up, Down, FromEpoch} — deferred wiring. Always stored
-%%%     in pending_wiring and applied when the epoch reaches FromEpoch.
+%%%   {wiring_update, Up, Down, WiringRef, From} — initial wiring with
+%%%     acknowledgment.  Applied immediately ONLY if epoch is undefined;
+%%%     crashes otherwise.  Sends {wiring_ack, WiringRef} back to From
+%%%     after the wiring is applied.
+%%%   {wiring_update, Up, Down, FromEpoch} — deferred wiring (no ack).
+%%%     Stored in pending_wiring and applied when the epoch reaches FromEpoch.
 %%%
 %%% Operators emit label-based actions ({send, Label, Msg}). The proc
 %%% resolves labels to PIDs via downstream_map.
@@ -68,6 +70,25 @@ base_state(Mod, InitArgs, OpState, MsgHandler) ->
 %% handle_info
 %%====================================================================
 
+handle_info({wiring_update, Upstream, Downstream, WiringRef, From},
+            #{current_epoch := CurE} = State) when is_reference(WiringRef) ->
+    case CurE of
+        undefined ->
+            State1 = apply_wiring(Upstream, Downstream, State),
+            From ! {wiring_ack, WiringRef, self()},
+            {noreply, State1};
+        _ ->
+            exit({wiring_after_epoch_started})
+    end;
+handle_info({wiring_update, Upstream, Downstream, FromEpoch},
+            #{current_epoch := CurE} = State) when is_integer(FromEpoch) ->
+    case CurE of
+        _ when FromEpoch =< CurE ->
+            {noreply, apply_wiring(Upstream, Downstream, State)};
+        _ ->
+            PW = maps:get(pending_wiring, State),
+            {noreply, State#{pending_wiring := PW#{FromEpoch => {Upstream, Downstream}}}}
+    end;
 handle_info({wiring_update, Upstream, Downstream},
             #{current_epoch := CurE} = State) ->
     case CurE of
@@ -76,39 +97,36 @@ handle_info({wiring_update, Upstream, Downstream},
         _ ->
             exit({wiring_after_epoch_started})
     end;
-handle_info({wiring_update, Upstream, Downstream, FromEpoch},
-            #{current_epoch := CurE} = State) ->
-    case CurE of
-        _ when FromEpoch =< CurE ->
-            {noreply, apply_wiring(Upstream, Downstream, State)};
-        _ ->
-            PW = maps:get(pending_wiring, State),
-            {noreply, State#{pending_wiring := PW#{FromEpoch => {Upstream, Downstream}}}}
-    end;
 handle_info({delta, Meta, Deltas, From},
              State) ->
     #{epoch := E} = Meta,
     State1 = advance_epoch(E, State),
     #{pidmap := PM1, op_state := St2, mod := Mod} = State1,
-    Label = maps:get(From, PM1),
-    Barrier = maps:get(barrier, Meta, undefined),
-    ?DBG("OP ~p pid=~p IN: barrier=~p deltas=~w label=~p from=~w",
-           [Mod, self(), Barrier, length(Deltas), Label, From]),
-    case Barrier of
-        epoch_done ->
-            ?DBG("OP ~p pid=~p BUG4_TRACE: received epoch_done from ~p (label=~p)",
-                   [Mod, self(), From, Label]);
-        _ -> ok
-    end,
-    {St3, Actions} = Mod:handle_delta(St2, Label, {delta, Meta, Deltas}),
-    ActionCount = length(Actions),
-    case ActionCount of
-        0 -> ok;
-        _ -> ?DBG("OP ~p OUT: barrier=~p actions=~w",
-                    [Mod, Barrier, ActionCount])
-    end,
-    execute_actions(Actions, State1),
-    {noreply, State1#{op_state := St3}};
+    case maps:find(From, PM1) of
+        error ->
+            ?DBG("OP ~p pid=~p WARN: unknown delta sender ~p (not in pidmap)",
+                   [Mod, self(), From]),
+            {noreply, State1};
+        {ok, Label} ->
+            Barrier = maps:get(barrier, Meta, undefined),
+            ?DBG("OP ~p pid=~p IN: barrier=~p deltas=~w label=~p from=~w",
+                   [Mod, self(), Barrier, length(Deltas), Label, From]),
+            case Barrier of
+                epoch_done ->
+                    ?DBG("OP ~p pid=~p BUG4_TRACE: received epoch_done from ~p (label=~p)",
+                           [Mod, self(), From, Label]);
+                _ -> ok
+            end,
+            {St3, Actions} = Mod:handle_delta(St2, Label, {delta, Meta, Deltas}),
+            ActionCount = length(Actions),
+            case ActionCount of
+                0 -> ok;
+                _ -> ?DBG("OP ~p OUT: barrier=~p actions=~w",
+                            [Mod, Barrier, ActionCount])
+            end,
+            execute_actions(Actions, State1),
+            {noreply, State1#{op_state := St3}}
+    end;
 handle_info(stop, State) ->
     {stop, normal, State};
 handle_info({reset, Ref, ReplyTo},
@@ -188,11 +206,23 @@ execute_actions([{send, Label, {delta, Meta, Deltas}} | Rest],
     Pids = normalize_pid_list(maps:get(Label, DsMap, [])),
     ?DBG("OP ~p pid=~p SEND: dests=~p deltas=~w label=~p",
            [maps:get(mod, State), self(), Pids, length(Deltas), Label]),
+    case Pids of
+        [] ->
+            ?DBG("OP ~p pid=~p WARN: send to empty downstream label=~p deltas=~w",
+                   [maps:get(mod, State), self(), Label, length(Deltas)]);
+        _ -> ok
+    end,
     lists:foreach(fun(Pid) -> Pid ! {delta, Meta, Deltas, self()} end, Pids),
     execute_actions(Rest, State);
 execute_actions([{send, Label, Msg} | Rest], State) ->
     DsMap = maps:get(downstream_map, State),
     Pids = normalize_pid_list(maps:get(Label, DsMap, [])),
+    case Pids of
+        [] ->
+            ?DBG("OP ~p pid=~p WARN: send to empty downstream label=~p",
+                   [maps:get(mod, State), self(), Label]);
+        _ -> ok
+    end,
     lists:foreach(fun(Pid) -> Pid ! Msg end, Pids),
     execute_actions(Rest, State);
 execute_actions([{error, Reason} | _], _State) ->

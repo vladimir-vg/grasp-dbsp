@@ -5,8 +5,8 @@
 %%% to all wired downstream PIDs. Also accepts {feed, Deltas, PartitionInfo}
 %%% from the consumer-manager — buffers until the next begin_epoch.
 %%% Uses the same wiring_update protocol
-%%% as gdbsp_op_proc: no-FromEpoch variant for initial wiring,
-%%% FromEpoch variant for deferred (migration) wiring.
+%%% as gdbsp_op_proc: {wiring_update, _, Down, WiringRef, From} for
+%%% initial wiring with acknowledgment; FromEpoch variant for deferred.
 %%%
 %%% Tracks current_epoch for stale-epoch detection and deferred-wiring
 %%% application at epoch boundaries.
@@ -47,6 +47,25 @@ handle_call(_Call, _From, State) ->
 handle_cast(_Cast, State) ->
     {noreply, State}.
 
+handle_info({wiring_update, _Upstream, Downstream, WiringRef, From},
+            #{current_epoch := CurE} = State) when is_reference(WiringRef) ->
+    case CurE of
+        undefined ->
+            State1 = apply_wiring(Downstream, State),
+            From ! {wiring_ack, WiringRef, self()},
+            {noreply, State1};
+        _ ->
+            exit({wiring_after_epoch_started})
+    end;
+handle_info({wiring_update, _Upstream, Downstream, FromEpoch},
+            #{current_epoch := CurE} = State) when is_integer(FromEpoch) ->
+    case CurE of
+        _ when FromEpoch =< CurE ->
+            {noreply, apply_wiring(Downstream, State)};
+        _ ->
+            PW = maps:get(pending_wiring, State),
+            {noreply, State#{pending_wiring := PW#{FromEpoch => Downstream}}}
+    end;
 handle_info({wiring_update, _Upstream, Downstream},
             #{current_epoch := CurE} = State) ->
     case CurE of
@@ -54,15 +73,6 @@ handle_info({wiring_update, _Upstream, Downstream},
             {noreply, apply_wiring(Downstream, State)};
         _ ->
             exit({wiring_after_epoch_started})
-    end;
-handle_info({wiring_update, _Upstream, Downstream, FromEpoch},
-            #{current_epoch := CurE} = State) ->
-    case CurE of
-        _ when FromEpoch =< CurE ->
-            {noreply, apply_wiring(Downstream, State)};
-        _ ->
-            PW = maps:get(pending_wiring, State),
-            {noreply, State#{pending_wiring := PW#{FromEpoch => Downstream}}}
     end;
 handle_info({delta, Meta, Deltas, _From}, State) ->
     #{epoch := E} = Meta,
@@ -73,7 +83,7 @@ handle_info({delta, Meta, Deltas, _From}, State) ->
             State2 = buffer_deltas(Deltas, State1),
             {noreply, State2};
         false ->
-            lists:foreach(fun(Pid) -> Pid ! {delta, Meta, Deltas, self()} end, Pids),
+            forward_deltas(Pids, Meta, Deltas),
             notify_integrator(State1, Meta, Deltas),
             {noreply, State1}
     end;
@@ -89,7 +99,7 @@ handle_info({resume_epoch, E}, #{paused_buffer := PausedB, feed_buffer := FeedB,
                                   downstream_pids := Pids} = State) ->
     lists:foreach(
         fun({Meta, Deltas}) ->
-            lists:foreach(fun(Pid) -> Pid ! {delta, Meta, Deltas, self()} end, Pids),
+            forward_deltas(Pids, Meta, Deltas),
             notify_integrator(State, Meta, Deltas)
         end, PausedB),
     FeedRows = feed_rows(FeedB),
@@ -98,7 +108,7 @@ handle_info({resume_epoch, E}, #{paused_buffer := PausedB, feed_buffer := FeedB,
         _ ->
             Batch = lists:reverse(FeedRows),
             FeedMeta = #{epoch => E, barrier => epoch_done},
-            lists:foreach(fun(Pid) -> Pid ! {delta, FeedMeta, Batch, self()} end, Pids),
+            forward_deltas(Pids, FeedMeta, Batch),
             notify_integrator(State, FeedMeta, Batch)
     end,
     {noreply, State#{current_epoch => E, paused => false, paused_buffer => [],
@@ -145,9 +155,7 @@ flush_feed_buffer(E, #{downstream_pids := Pids, feed_buffer := FB} = State) ->
         Rows -> lists:reverse(Rows)
     end,
     Meta = #{epoch => E, barrier => epoch_done},
-    lists:foreach(fun(Pid) ->
-        Pid ! {delta, Meta, Batch, self()}
-    end, Pids),
+    forward_deltas(Pids, Meta, Batch),
     notify_integrator(State, Meta, Batch),
     State#{feed_buffer => [], partition_offsets => #{}}.
 
@@ -206,6 +214,12 @@ advance_epoch(_E, State) ->
 
 flatten_map_values(Vals) ->
     lists:flatmap(fun(L) when is_list(L) -> L; (P) -> [P] end, Vals).
+
+forward_deltas([], _Meta, _Deltas) ->
+    error_logger:warning_msg("test_input_node ~p: forwarding deltas to empty downstream_pids",
+                             [self()]);
+forward_deltas(Pids, Meta, Deltas) ->
+    lists:foreach(fun(Pid) -> Pid ! {delta, Meta, Deltas, self()} end, Pids).
 
 notify_integrator(#{integrator := undefined}, _Meta, _Deltas) -> ok;
 notify_integrator(#{integrator := IntPid}, Meta, Deltas) ->

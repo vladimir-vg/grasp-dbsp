@@ -91,6 +91,7 @@ build_circuit(Plan, Inputs, Outputs, Gen, OpStates, DoKickoff) ->
     {UpMaps, DownMaps} = build_wiring_maps(Tuples, Resolve),
 
     wire_all(Tuples, OpRefs, OpPids, Inputs, Outputs, UpMaps, DownMaps),
+    validate_wiring(OpPids, RecPids, Inputs, Outputs),
 
     wire_rec_body(RecPids, Tuples, Resolve),
     wire_rec_source(RecPids, RecRefs, Tuples, Resolve, Inputs, Outputs, DoKickoff),
@@ -280,54 +281,131 @@ build_wiring_maps(Tuples, Resolve) ->
     {UpMaps, DownMaps}.
 
 resolve_pid({op, _} = R, RefToPid, _ROToRec, _Inputs, _Outputs) ->
-    maps:get(R, RefToPid, undefined);
+    Pid = maps:get(R, RefToPid, undefined),
+    resolve_pid_check(R, Pid);
 resolve_pid({rec, _, _, _} = R, RefToPid, _ROToRec, _Inputs, _Outputs) ->
-    maps:get(R, RefToPid, undefined);
+    Pid = maps:get(R, RefToPid, undefined),
+    resolve_pid_check(R, Pid);
 resolve_pid({rec_output, _, _, _} = R, _RefToPid, ROToRec, _Inputs, _Outputs) ->
     RecRef = maps:get(R, ROToRec, undefined),
     case RecRef of
-        undefined -> undefined;
-        _ -> maps:get(RecRef, _RefToPid, undefined)
+        undefined ->
+            ?DBG("resolve_pid: rec_output ~p has no parent Rec", [R]),
+            undefined;
+        _ ->
+            Pid = maps:get(RecRef, _RefToPid, undefined),
+            resolve_pid_check(R, Pid)
     end;
-resolve_pid({source, Name, _}, _RefToPid, _ROToRec, Inputs, _Outputs) ->
-    maps:get(Name, Inputs, undefined);
-resolve_pid({output, Name, _}, _RefToPid, _ROToRec, _Inputs, Outputs) ->
-    maps:get(Name, Outputs, undefined).
+resolve_pid({source, Name, _} = R, _RefToPid, _ROToRec, Inputs, _Outputs) ->
+    Pid = maps:get(Name, Inputs, undefined),
+    resolve_pid_check(R, Pid);
+resolve_pid({output, Name, _} = R, _RefToPid, _ROToRec, _Inputs, Outputs) ->
+    Pid = maps:get(Name, Outputs, undefined),
+    resolve_pid_check(R, Pid).
+
+resolve_pid_check(_Ref, Pid) when is_pid(Pid) -> Pid;
+resolve_pid_check(Ref, undefined) ->
+    ?DBG("resolve_pid: unresolved ref ~p", [Ref]),
+    undefined.
 
 %%====================================================================
 %% Wire operators
 %%====================================================================
 
 wire_all(Tuples, OpRefs, OpPids, Inputs, Outputs, UpMaps, DownMaps) ->
+    WiringRef = make_ref(),
+    SenderPid = self(),
+    FunWire = fun(Pid, Up, Down) ->
+        Pid ! {wiring_update, Up, Down, WiringRef, SenderPid}
+    end,
+
+    %% Wire operators
+    OpPidsList = maps:values(OpPids),
     lists:foreach(
         fun(Ref) ->
             Pid = maps:get(Ref, OpPids),
             Up = maps:get(Ref, UpMaps, #{}),
             Down = maps:get(Ref, DownMaps, #{}),
-            Pid ! {wiring_update, Up, Down}
+            FunWire(Pid, Up, Down)
         end, OpRefs),
+
+    %% Wire sources
     SourceRefs = lists:usort(
         [SR || {SR, _SL, _RR, _RL} <- Tuples, element(1, SR) =:= source]),
+    SrcPids = lists:filtermap(
+        fun({source, Name, _}) ->
+            case maps:find(Name, Inputs) of
+                {ok, SrcPid} -> {true, SrcPid};
+                error -> false
+            end
+        end, SourceRefs),
     lists:foreach(
         fun({source, Name, _} = Ref) ->
             case maps:find(Name, Inputs) of
                 {ok, SrcPid} ->
                     Down = maps:get(Ref, DownMaps, #{}),
-                    SrcPid ! {wiring_update, #{}, Down};
+                    FunWire(SrcPid, #{}, Down);
                 error -> ok
             end
         end, SourceRefs),
+
+    %% Wire outputs
     OutputRefs = lists:usort(
         [RR || {_SR, _SL, RR, _RL} <- Tuples, element(1, RR) =:= output]),
+    OutPids = lists:filtermap(
+        fun({output, Name, _}) ->
+            case maps:find(Name, Outputs) of
+                {ok, SubPid} -> {true, SubPid};
+                error -> false
+            end
+        end, OutputRefs),
     lists:foreach(
-            fun({output, Name, _} = Ref) ->
+        fun({output, Name, _} = Ref) ->
             case maps:find(Name, Outputs) of
                 {ok, SubPid} ->
                     Up = maps:get(Ref, UpMaps, #{}),
-                    SubPid ! {wiring_update, Up, #{}};
+                    FunWire(SubPid, Up, #{});
                 error -> ok
             end
-        end, OutputRefs).
+        end, OutputRefs),
+
+    ExpectedPids = lists:usort(OpPidsList ++ SrcPids ++ OutPids),
+    gather_wiring_acks(WiringRef, ExpectedPids, 5000).
+
+gather_wiring_acks(_WiringRef, [], _Timeout) ->
+    ok;
+gather_wiring_acks(WiringRef, ExpectPids, Timeout) ->
+    receive
+        {wiring_ack, WiringRef, Pid} ->
+            gather_wiring_acks(WiringRef, lists:delete(Pid, ExpectPids), Timeout)
+    after Timeout ->
+        ?DBG("wiring_acks: ~w PID(s) unacknowledged after ~p ms: ~p",
+               [length(ExpectPids), Timeout, ExpectPids])
+    end.
+
+validate_wiring(OpPids, RecPids, Inputs, Outputs) ->
+    AllPids = maps:values(OpPids)
+        ++ maps:values(RecPids)
+        ++ maps:values(Inputs)
+        ++ maps:values(Outputs),
+    Dead = lists:filter(fun(P) -> not is_process_alive(P) end, AllPids),
+    case Dead of
+        [] -> ok;
+        _ ->
+            ?DBG("validate_wiring: ~p dead/terminated PIDs detected after wiring",
+                   [length(Dead)])
+    end,
+    Orphans = maps:fold(
+        fun(Ref, Pid, Acc) ->
+            case is_process_alive(Pid) of
+                true -> Acc;
+                false -> [{Ref, Pid} | Acc]
+            end
+        end, [], OpPids),
+    lists:foreach(
+        fun({_Ref, _Pid}) ->
+            ?DBG("validate_wiring: orphan operator ~p", [_Ref, _Pid])
+        end, Orphans).
 
 %%====================================================================
 %% Helpers
