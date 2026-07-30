@@ -1,0 +1,200 @@
+# A1: Same trivial circuit instantiated twice with different primitive types.
+# Verifies per-instantiation type segregation.
+- source: |
+    circuit echo(x: val):
+        output := distinct(val)
+
+    src_i64 := source("ints")
+    src_i64 :: stream(struct("v": i64))
+    src_str := source("strs")
+    src_str :: stream(struct("v": string("UTF-8")))
+
+    fp_i64 := fixpoint echo(x: src_i64)
+    fp_str := fixpoint echo(x: src_str)
+
+    out_i64 := fp_i64.output
+    out_str := fp_str.output
+
+  input:
+    - ints:
+        - [1, {v: "42"}]
+      strs:
+        - [1, {v: "hello"}]
+
+  expected:
+    - out_i64:
+        - [1, {v: "42"}]
+      out_str:
+        - [1, {v: "hello"}]
+
+# A2: Same join circuit instantiated twice with different field types.
+# Verifies join type merge per instantiation produces correct output types.
+- source: |
+    circuit pair(a: x, b: y):
+        result := join(x, y, on: ["k"])
+
+    src_i64_i64 := source("left1")
+    src_i64_i64 :: stream(struct("k": i64, "a": i64))
+    src_i64_i64r := source("right1")
+    src_i64_i64r :: stream(struct("k": i64, "b": i64))
+
+    src_str_f64 := source("left2")
+    src_str_f64 :: stream(struct("k": i64, "a": string("UTF-8")))
+    src_f64 := source("right2")
+    src_f64 :: stream(struct("k": i64, "b": f64))
+
+    fp1 := fixpoint pair(a: src_i64_i64, b: src_i64_i64r)
+    fp2 := fixpoint pair(a: src_str_f64, b: src_f64)
+
+    out1 := fp1.result
+    out2 := fp2.result
+
+  input:
+    - left1:
+        - [1, {k: "1", a: "10"}]
+      right1:
+        - [1, {k: "1", b: "20"}]
+      left2:
+        - [1, {k: "1", a: "hello"}]
+      right2:
+        - [1, {k: "1", b: "3.14"}]
+
+  expected:
+    - out1:
+        - [1, {k: "1", a: "10", b: "20"}]
+      out2:
+        - [1, {k: "1", a: "hello", b: "3.14"}]
+
+# A3: Multi-key join circuit with different types.
+# Verifies multi-field on correctly extracts shared keys and merges types.
+- source: |
+    circuit pair2(a: x, b: y):
+        result := join(x, y, on: ["k1", "k2"])
+
+    src_a := source("left")
+    src_a :: stream(struct("k1": i64, "k2": string("UTF-8"), "a": f64))
+    src_b := source("right")
+    src_b :: stream(struct("k1": i64, "k2": string("UTF-8"), "b": i32))
+
+    fp := fixpoint pair2(a: src_a, b: src_b)
+    out := fp.result
+
+  input:
+    - left:
+        - [1, {k1: "1", k2: "aaa", a: "3.5"}]
+      right:
+        - [1, {k1: "1", k2: "aaa", b: "100"}]
+
+  expected:
+    - out:
+        - [1, {k1: "1", k2: "aaa", a: "3.5", b: "100"}]
+
+# B3: Join inside self-ref fixpoint feedback loop.
+# One input is base (external source), the other is self-ref state.
+# Verifies join type merge through the fixpoint boundary.
+# NOTE: blocked by barrier-mismatch bug (epoch_done vs {iter,0,0});
+#       same root cause as e2e_fixpoint_multi_iter.
+- source: |
+    circuit accumulator(base: input, state: s):
+        joined := join(input, s, on: ["k"])
+        state := distinct(joined)
+
+    src_a := source("la")
+    src_a :: stream(struct("k": i64, "a": i64))
+    src_b := source("rb")
+    src_b :: stream(struct("k": i64, "b": string("UTF-8")))
+
+    fp := fixpoint accumulator(base: src_a, state: src_b)
+    out := fp.state
+
+  input:
+    - la:
+        - [1, {k: "1", a: "10"}]
+      rb:
+        - [1, {k: "1", b: "hello"}]
+
+  expected:
+    - out:
+        - [1, {k: "1", a: "10", b: "hello"}]
+
+# B4: Map adds a literal field inside self-ref fixpoint feedback loop.
+# The map function constructs a new struct adding a string literal.
+# Verifies type inference propagates through map->distinct->feedback.
+- source: |
+    circuit add_label(base: input, result: r):
+        enriched := map(r, add_status)
+        result := distinct(enriched)
+
+    src := source("data")
+    src :: stream(struct("id": i64, "val": i64))
+
+    fp := fixpoint add_label(base: src, result: src)
+    out := fp.result
+
+  functions:
+    add_status:
+      call: "struct"
+      kwargs:
+        id: {field: "id"}
+        val: {field: "val"}
+        status:
+          type: "string"
+          value: "active"
+
+  input:
+    - data:
+        - [1, {id: "1", val: "100"}]
+
+  expected:
+    - out:
+        - [1, {id: "1", val: "100", status: "active"}]
+
+# B5: Project inside self-ref fixpoint narrows the type.
+# The body projects the feedback row, narrowing the output type.
+# Verifies that the inferred type reflects the project, not source.
+- source: |
+    circuit narrow(base: input, result: r):
+        pruned := project(r, ["id", "name"])
+        result := distinct(pruned)
+
+    src := source("data")
+    src :: stream(struct("id": i64, "name": string("UTF-8"), "extra": i64))
+
+    fp := fixpoint narrow(base: src, result: src)
+    out := fp.result
+
+  input:
+    - data:
+        - [1, {id: "1", name: "Alice", extra: "42"}]
+
+  expected:
+    - out:
+        - [1, {id: "1", name: "Alice"}]
+
+# C2: Map restructures output type inside trivial fixpoint circuit.
+# The map function renames fields via struct constructor.
+# Verifies infer_map_output_type works inside circuit body.
+- source: |
+    circuit rename_fields(x: val):
+        result := map(val, swap)
+
+    src := source("data")
+    src :: stream(struct("a": i64, "b": string("UTF-8")))
+
+    fp := fixpoint rename_fields(x: src)
+    out := fp.result
+
+  functions:
+    swap:
+      call: "struct"
+      kwargs:
+        x: {field: "a"}
+        y: {field: "b"}
+
+  input:
+    - data:
+        - [1, {a: "10", b: "hello"}]
+
+  expected:
+    - out:
+        - [1, {x: "10", y: "hello"}]
