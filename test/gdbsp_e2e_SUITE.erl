@@ -129,9 +129,9 @@ group_name(YamlPath) ->
 fixture_test(Config) ->
     GroupName = proplists:get_value(name, ?config(tc_group_properties, Config)),
     [Fixture] = persistent_term:get({?MODULE, GroupName}),
-    run_one_fixture(Fixture, GroupName).
+    run_one_fixture(Fixture, GroupName, Config).
 
-run_one_fixture(Fixture, _GroupName) ->
+run_one_fixture(Fixture, GroupName, Config) ->
     Source = maybe_to_bin(maps:get(<<"source">>, Fixture)),
     Functions = maps:fold(
         fun(K, V, Acc) ->
@@ -141,20 +141,22 @@ run_one_fixture(Fixture, _GroupName) ->
     ExpectedEpochs = maybe_deep_binify(maps:get(<<"expected">>, Fixture, [])),
     ExpectedExactEpochs = maybe_deep_binify(maps:get(<<"expected_exact">>, Fixture, [])),
 
+    {ok, Prog0} = gdbsp_parse:parse_string(Source, #{}),
+
     case maps:find(<<"expected_errors">>, Fixture) of
         {ok, ExpectedErrorsRaw} ->
             ExpectedErrors = deep_binify_vals(ExpectedErrorsRaw),
-            run_negative(Source, Functions, ExpectedErrors);
+            run_negative(Prog0, Functions, ExpectedErrors);
         error ->
-            run_positive(Source, Functions, InputEpochs, ExpectedEpochs,
-                         ExpectedExactEpochs)
+            run_positive(Prog0, GroupName, Functions, InputEpochs, ExpectedEpochs,
+                         ExpectedExactEpochs, Config)
     end.
 
-run_negative(Source, Functions, ExpectedErrors) ->
+run_negative(Prog0, Functions, ExpectedErrors) ->
     try
         %% Use a dummy output name — we expect compilation to fail,
         %% so this placeholder never actually runs.
-        compile_to_plan(Source, Functions, [<<"dummy">>]),
+        compile_to_plan(Prog0, Functions, [<<"dummy">>]),
         ct:fail("expected compilation to fail but it succeeded")
     catch
         Class:Reason:_Stacktrace ->
@@ -213,7 +215,7 @@ matches(_Key, Exp, Act) when is_list(Exp), is_list(Act) ->
 matches(_Key, Exp, Act) ->
     Exp =:= Act.
 
-run_positive(Source, Functions, InputEpochs, ExpectedEpochs, ExpectedExactEpochs) ->
+run_positive(Prog0, GroupName, Functions, InputEpochs, ExpectedEpochs, ExpectedExactEpochs, Config) ->
     {MatchMode, EpochExpected} = case {ExpectedEpochs, ExpectedExactEpochs} of
         {[], []} -> {subset, []};
         {[_ | _], []} -> {subset, ExpectedEpochs};
@@ -227,7 +229,15 @@ run_positive(Source, Functions, InputEpochs, ExpectedEpochs, ExpectedExactEpochs
            (_) -> []
         end, EpochExpected)),
 
-    {Plan, SourceTypeMap, OutputTypes} = compile_to_plan(Source, Functions, OutputNames),
+    %% Generate lowered graph DOT
+    write_e2e_lowered_dot(Prog0, Functions, GroupName, Config),
+
+    {Plan, SourceTypeMap, OutputTypes, Graph1} =
+        compile_to_plan(Prog0, Functions, OutputNames),
+
+    %% Generate circuit graph DOT
+    CgName = atom_to_list(GroupName) ++ ".circuit",
+    write_dot_file(CgName, gdbsp_graphviz:circuit_to_dot(Graph1, CgName), Config),
 
     SourceMap = spawn_inputs(SourceTypeMap),
     OutputCols = spawn_output_collectors(OutputNames),
@@ -252,8 +262,7 @@ run_positive(Source, Functions, InputEpochs, ExpectedEpochs, ExpectedExactEpochs
 %% Compilation
 %%====================================================================
 
-compile_to_plan(Source, Functions, OutputNames) ->
-    {ok, Prog0} = gdbsp_parse:parse_string(Source, #{}),
+compile_to_plan(Prog0, Functions, OutputNames) ->
     SourceTypeMap = build_source_type_map(Prog0),
 
     case gdbsp_compile:compile_with_names(
@@ -264,7 +273,7 @@ compile_to_plan(Source, Functions, OutputNames) ->
                                                 OutputNames, SourceTypeMap),
             Graph2 = gdbsp_compile_incremental:run(Graph1),
             Plan = gdbsp_deploy:plan(Graph2),
-            {Plan, SourceTypeMap, OutTypes};
+            {Plan, SourceTypeMap, OutTypes, Graph1};
         {error, {fixpoint_error, _} = FixErr} ->
             throw(FixErr);
         {error, Reason} ->
@@ -579,3 +588,44 @@ to_bin(V) when is_list(V) -> list_to_binary(V).
 
 to_map_val(V) when is_list(V) -> to_map(V);
 to_map_val(V) -> V.
+
+%%====================================================================
+%% DOT file generation
+%%====================================================================
+
+write_e2e_lowered_dot(Prog0, Functions, GroupName, Config) ->
+    TSMap = e2e_build_ts_map(Prog0#gdbsp_program.typespecs),
+    case gdbsp_compile_lower:run(Prog0, #{}) of
+        {ok, Lowered0} ->
+            case gdbsp_type_infer:infer_lowered(Lowered0, TSMap, Functions) of
+                {ok, Lowered} ->
+                    Name = atom_to_list(GroupName) ++ ".lowered",
+                    write_dot_file(Name, gdbsp_graphviz:lowered_to_dot(Lowered, Name), Config);
+                {error, _Err} ->
+                    ok
+            end;
+        {error, _Err} ->
+            ok
+    end.
+
+write_dot_file(NameSuffix, Dot, _Config) ->
+    Name = NameSuffix ++ ".dot",
+    %% Walk up from grasp_dbsp app dir to project root:
+    %%   _build/<profile>/lib/grasp_dbsp -> _build/<profile>/lib -> _build/<profile> -> _build -> root
+    Root = lists:foldl(fun(_, Acc) -> filename:dirname(Acc) end,
+                       code:lib_dir(grasp_dbsp), [1,2,3,4]),
+    Dir = filename:join(Root, "test_suite_graphs"),
+    ok = filelib:ensure_dir(filename:join(Dir, "_")),
+    Path = filename:join(Dir, Name),
+    ok = file:write_file(Path, lists:flatten(Dot)),
+    ct:pal("Wrote DOT: ~s", [Path]).
+
+e2e_build_ts_map(Typespecs) ->
+    lists:foldl(
+        fun(#gdbsp_typespec{name = N, spec = {type, {stream, Inner}}}, Acc) ->
+                Acc#{N => Inner};
+           (#gdbsp_typespec{name = N, spec = {type, T}}, Acc) ->
+                Acc#{N => T};
+           (_TS, Acc) ->
+                Acc
+        end, #{}, Typespecs).

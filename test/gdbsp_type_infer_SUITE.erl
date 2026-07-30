@@ -128,9 +128,9 @@ is_char_list(_) -> false.
 fixture_test(Config) ->
     GroupName = proplists:get_value(name, ?config(tc_group_properties, Config)),
     [Fixture] = persistent_term:get({?MODULE, GroupName}),
-    run_one_fixture(Fixture).
+    run_one_fixture(Fixture, GroupName, Config).
 
-run_one_fixture(Fixture) ->
+run_one_fixture(Fixture, GroupName, Config) ->
     FixtureMap = deep_binify_vals(Fixture),
     Source = maybe_to_bin(maps:get(<<"source">>, FixtureMap)),
     Functions = maps:get(<<"functions">>, FixtureMap, #{}),
@@ -139,16 +139,21 @@ run_one_fixture(Fixture) ->
 
     case maps:find(<<"expected">>, FixtureMap) of
         {ok, ExpectedRaw} ->
-            run_positive(Prog, Functions, ExpectedRaw);
+            run_positive(Prog, Functions, ExpectedRaw, GroupName, Config);
         error ->
             ExpectedErrorsRaw = maps:get(<<"expected_errors">>, FixtureMap),
             run_negative(Prog, Functions, ExpectedErrorsRaw)
     end.
 
-run_positive(Prog, Functions, ExpectedRaw) ->
+run_positive(Prog, Functions, ExpectedRaw, GroupName, Config) ->
     TSMap = build_ts_map(Prog#gdbsp_program.typespecs),
     Lowered0 = lower_program(Prog),
     {ok, Lowered} = gdbsp_type_infer:infer_lowered(Lowered0, TSMap, Functions),
+
+    %% Generate lowered graph DOT
+    Name = atom_to_list(GroupName) ++ ".lowered",
+    write_dot_file(Name, gdbsp_graphviz:lowered_to_dot(Lowered, Name), Config),
+
     NameToType = tags_to_types(Lowered),
     maps:foreach(
         fun(Name, JsonType) ->
@@ -261,3 +266,17 @@ convert_type(JsonType) ->
             ct:pal("Failed to parse expected type ~p: ~p", [JsonType, Reason]),
             error({invalid_type_json, JsonType, Reason})
     end.
+
+%%====================================================================
+%% DOT file generation
+%%====================================================================
+
+write_dot_file(NameSuffix, Dot, Config) ->
+    Name = NameSuffix ++ ".dot",
+    Root = lists:foldl(fun(_, Acc) -> filename:dirname(Acc) end,
+                       code:lib_dir(grasp_dbsp), [1,2,3,4]),
+    Dir = filename:join(Root, "test_suite_graphs"),
+    ok = filelib:ensure_dir(filename:join(Dir, "_")),
+    Path = filename:join(Dir, Name),
+    ok = file:write_file(Path, lists:flatten(Dot)),
+    ct:pal("Wrote DOT: ~s", [Path]).
