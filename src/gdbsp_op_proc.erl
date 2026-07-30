@@ -102,31 +102,30 @@ handle_info({delta, Meta, Deltas, From},
     #{epoch := E} = Meta,
     State1 = advance_epoch(E, State),
     #{pidmap := PM1, op_state := St2, mod := Mod} = State1,
-    case maps:find(From, PM1) of
-        error ->
-            ?DBG("OP ~p pid=~p WARN: unknown delta sender ~p (not in pidmap)",
-                   [Mod, self(), From]),
-            {noreply, State1};
-        {ok, Label} ->
-            Barrier = maps:get(barrier, Meta, undefined),
-            ?DBG("OP ~p pid=~p IN: barrier=~p deltas=~w label=~p from=~w",
-                   [Mod, self(), Barrier, length(Deltas), Label, From]),
-            case Barrier of
-                epoch_done ->
-                    ?DBG("OP ~p pid=~p BUG4_TRACE: received epoch_done from ~p (label=~p)",
-                           [Mod, self(), From, Label]);
-                _ -> ok
+    Label = try maps:get(From, PM1)
+            catch error:{badkey, _} ->
+                ?DBG("OP ~p pid=~p WARN: unknown delta sender ~p (not in pidmap)",
+                       [Mod, self(), From]),
+                error({unknown_sender, From})
             end,
-            {St3, Actions} = Mod:handle_delta(St2, Label, {delta, Meta, Deltas}),
-            ActionCount = length(Actions),
-            case ActionCount of
-                0 -> ok;
-                _ -> ?DBG("OP ~p OUT: barrier=~p actions=~w",
-                            [Mod, Barrier, ActionCount])
-            end,
-            execute_actions(Actions, State1),
-            {noreply, State1#{op_state := St3}}
-    end;
+    Barrier = maps:get(barrier, Meta, undefined),
+    ?DBG("OP ~p pid=~p IN: barrier=~p deltas=~w label=~p from=~w",
+           [Mod, self(), Barrier, length(Deltas), Label, From]),
+    case Barrier of
+        epoch_done ->
+            ?DBG("OP ~p pid=~p BUG4_TRACE: received epoch_done from ~p (label=~p)",
+                   [Mod, self(), From, Label]);
+        _ -> ok
+    end,
+    {St3, Actions} = Mod:handle_delta(St2, Label, {delta, Meta, Deltas}),
+    ActionCount = length(Actions),
+    case ActionCount of
+        0 -> ok;
+        _ -> ?DBG("OP ~p OUT: barrier=~p actions=~w",
+                    [Mod, Barrier, ActionCount])
+    end,
+    execute_actions(Actions, State1),
+    {noreply, State1#{op_state := St3}};
 handle_info(stop, State) ->
     {stop, normal, State};
 handle_info({reset, Ref, ReplyTo},

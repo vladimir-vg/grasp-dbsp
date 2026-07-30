@@ -83,9 +83,11 @@ typespecs_to_map(Typespecs) ->
 
 topo_sort(NameTable) ->
     InDeg = maps:map(fun(_N, Info) ->
+        Refs = node_refs_from_args(Info#node_info.args, NameTable),
         case Info#node_info.op of
-            delay -> 0;
-            _ -> length(node_refs_from_args(Info#node_info.args, NameTable))
+            delay ->
+                length([R || R <- Refs, R =/= Info#node_info.name]);
+            _ -> length(Refs)
         end
     end, NameTable),
     Consumers = build_consumers(NameTable),
@@ -572,17 +574,21 @@ build_fixpoint_graph(G, FpName, Args, _TS, _NameTable, _FnReg, CircuitDefs, IdMa
         0 -> G6;
         _ ->
             FixedNodes = maps:map(
-                fun(_NId, CNode = #circuit_node{inputs = CIns}) ->
-                    NewIns = lists:map(
-                        fun(InId) ->
-                            case maps:find(InId, BodyToRecOutput) of
-                                {ok, RecOutId} -> RecOutId;
-                                error -> InId
-                            end
-                        end, CIns),
-                    case NewIns =:= CIns of
+                fun(_NId, CNode = #circuit_node{inputs = CIns, meta = CMeta}) ->
+                    case maps:is_key(scc_body, CMeta) of
                         true -> CNode;
-                        false -> CNode#circuit_node{inputs = NewIns}
+                        false ->
+                            NewIns = lists:map(
+                                fun(InId) ->
+                                    case maps:find(InId, BodyToRecOutput) of
+                                        {ok, RecOutId} -> RecOutId;
+                                        error -> InId
+                                    end
+                                end, CIns),
+                            case NewIns =:= CIns of
+                                true -> CNode;
+                                false -> CNode#circuit_node{inputs = NewIns}
+                            end
                     end
                 end, G6#circuit_graph.nodes),
             G6#circuit_graph{nodes = FixedNodes}
