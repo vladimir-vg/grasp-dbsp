@@ -41,15 +41,15 @@ infer_map_output_type(#{<<"call">> := <<"struct">>,
         end, KwArgs),
     {struct, Fields, exact};
 
-infer_map_output_type(#{<<"field">> := FieldName}, InputType) ->
-    field_type(bin(FieldName), InputType);
-
 infer_map_output_type(#{<<"type">> := TypeJson, <<"value">> := _ValJson},
                       _InputType) ->
     case gdbsp_type:parse_type(TypeJson) of
         {ok, T} -> T;
         {error, _} -> dynamic
     end;
+
+infer_map_output_type(#{<<"arg">> := _ArgName}, InputType) ->
+    InputType;
 
 infer_map_output_type(#{<<"call">> := CallName} = CallJson, InputType) ->
     infer_call_output_type(bin(CallName), CallJson, InputType);
@@ -61,14 +61,14 @@ infer_map_output_type(_Other, InputType) ->
 %% Expression output type (for sub-expressions inside map functions)
 %%====================================================================
 
-infer_expr_output_type(#{<<"field">> := FieldName}, InputType) ->
-    field_type(bin(FieldName), InputType);
-
 infer_expr_output_type(#{<<"type">> := TypeJson}, _InputType) ->
     case gdbsp_type:parse_type(TypeJson) of
         {ok, T} -> T;
         {error, _} -> dynamic
     end;
+
+infer_expr_output_type(#{<<"arg">> := _ArgName}, InputType) ->
+    InputType;
 
 infer_expr_output_type(#{<<"call">> := CallName} = CallJson, InputType) ->
     infer_call_output_type(bin(CallName), CallJson, InputType);
@@ -82,6 +82,12 @@ infer_expr_output_type(_Other, _InputType) ->
 %%====================================================================
 %% Function call return type lookup
 %%====================================================================
+
+infer_call_output_type(<<"struct:get">>, CallJson, InputType) ->
+    infer_struct_get_type(CallJson, InputType);
+
+infer_call_output_type(<<"struct:set">>, CallJson, InputType) ->
+    infer_struct_set_type(CallJson, InputType);
 
 infer_call_output_type(<<"struct">>, #{<<"kwargs">> := KwArgs}, InputType)
   when is_map(KwArgs) ->
@@ -138,6 +144,42 @@ call_return_type(<<"string:starts_with">>) -> ?BOOL;
 call_return_type(<<"string:ends_with">>) -> ?BOOL;
 call_return_type(<<"string:contains">>) -> ?BOOL;
 call_return_type(_) -> dynamic.
+
+%%====================================================================
+%% struct:get / struct:set output type resolution
+%%====================================================================
+
+infer_struct_get_type(#{<<"args">> := [StructExpr | _],
+                         <<"kwargs">> := #{<<"key">> := KeyExpr}}, InputType) ->
+    StructType = infer_expr_output_type(StructExpr, InputType),
+    case extract_string_literal(KeyExpr) of
+        {ok, KeyStr} -> field_type(KeyStr, StructType);
+        false -> dynamic
+    end;
+infer_struct_get_type(_CallJson, _InputType) ->
+    dynamic.
+
+infer_struct_set_type(#{<<"args">> := [StructExpr, ValExpr | _],
+                         <<"kwargs">> := #{<<"key">> := KeyExpr}}, InputType) ->
+    StructType = infer_expr_output_type(StructExpr, InputType),
+    ValType = infer_expr_output_type(ValExpr, InputType),
+    case extract_string_literal(KeyExpr) of
+        {ok, KeyStr} ->
+            case StructType of
+                {struct, Fields, Mode} ->
+                    {struct, Fields#{KeyStr => ValType}, Mode};
+                _ -> dynamic
+            end;
+        false -> dynamic
+    end;
+infer_struct_set_type(_CallJson, _InputType) ->
+    dynamic.
+
+extract_string_literal(#{<<"type">> := <<"string">>, <<"value">> := Val}) when is_binary(Val) ->
+    {ok, Val};
+extract_string_literal(#{<<"type">> := <<"string">>, <<"value">> := Val}) when is_list(Val) ->
+    {ok, list_to_binary(Val)};
+extract_string_literal(_) -> false.
 
 %%====================================================================
 %% Flat map

@@ -6,8 +6,6 @@
   functions:
     sum_sal:
       aggregate: "agg:sum"
-      args:
-        - field: "sal"
 
   input:
     - data:
@@ -28,8 +26,6 @@
   functions:
     avg_score:
       aggregate: "agg:avg"
-      args:
-        - field: "score"
 
   input:
     - data:
@@ -50,8 +46,6 @@
   functions:
     sum_sal:
       aggregate: "agg:sum"
-      args:
-        - field: "sal"
 
   input:
     - data:
@@ -76,8 +70,6 @@
   functions:
     sum_sal:
       aggregate: "agg:sum"
-      args:
-        - field: "sal"
 
   input:
     - data:

@@ -14,7 +14,13 @@
     gt_zero:
       call: "gt"
       args:
-        - field: "v"
+        - call: "struct:get"
+          args:
+            - arg: row
+          kwargs:
+            key:
+              type: string
+              value: "v"
         - {type: "i64", value: "0"}
     dec_fn:
       call: "struct"
@@ -22,7 +28,13 @@
         v:
           call: "math:sub"
           args:
-            - field: "v"
+            - call: "struct:get"
+              args:
+                - arg: row
+              kwargs:
+                key:
+                  type: string
+                  value: "v"
             - {type: "i64", value: "1"}
 
   input:

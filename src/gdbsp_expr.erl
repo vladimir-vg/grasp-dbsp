@@ -28,8 +28,8 @@ expr_to_json({value, {closure, _Params, _Return}, InnerExpr}) ->
 expr_to_json({value, Type, Data}) ->
     #{<<"type">> => gdbsp_type:type_to_json(Type),
       <<"value">> => encode_value(Type, Data)};
-expr_to_json({field, Name}) ->
-    #{<<"field">> => Name};
+expr_to_json({arg, Name}) ->
+    #{<<"arg">> => Name};
 expr_to_json({call, Name, PosArgs, KwArgs}) ->
     call_to_json(<<"call">>, Name, PosArgs, KwArgs);
 expr_to_json({agg, Name, PosArgs, KwArgs}) ->
@@ -184,8 +184,8 @@ pow10(N) when N > 0 -> 10 * pow10(N - 1).
 %%====================================================================
 
 -spec json_to_expr(jsx:json_term()) -> {ok, expr()} | {error, term()}.
-json_to_expr(#{<<"field">> := Name}) when is_binary(Name) ->
-    {ok, {field, Name}};
+json_to_expr(#{<<"arg">> := Name}) when is_binary(Name) ->
+    {ok, {arg, Name}};
 json_to_expr(#{<<"call">> := Name} = M) ->
     json_call_to_expr(call, Name, M);
 json_to_expr(#{<<"aggregate">> := Name} = M) ->
@@ -494,7 +494,7 @@ hex_digit(C) when C >= $A, C =< $F -> C - $A + 10.
 %%====================================================================
 
 -spec has_field_nodes(expr()) -> boolean().
-has_field_nodes({field, _}) -> true;
+has_field_nodes({arg, _}) -> true;
 has_field_nodes({call, _, PosArgs, KwArgs}) ->
     lists:any(fun has_field_nodes/1, PosArgs) orelse
     maps:fold(fun(_K, V, false) -> has_field_nodes(V);

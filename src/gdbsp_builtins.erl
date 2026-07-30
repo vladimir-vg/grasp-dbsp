@@ -128,6 +128,8 @@ exact_match({string, _}, {string, _}) -> true;
 exact_match({enum, _}, {enum, _}) -> true;
 exact_match({dynamic, A}, {dynamic, B}) -> exact_match(A, B);
 exact_match({json, A}, {json, B}) -> exact_match(A, B);
+exact_match({type_var, _}, _) -> true;
+exact_match(_, {type_var, _}) -> true;
 exact_match({struct, _, _}, {struct, _, _}) -> true;
 exact_match(_, _) -> false.
 
@@ -758,11 +760,12 @@ fn_overloads(<<"struct:struct">>) -> {ok, [
      {gdbsp_struct, struct_constructor, 2}}
 ]};
 fn_overloads(<<"struct:get">>) -> {ok, [
-    {function, [dynamic], #{<<"key">> => string}, dynamic,
+    {function, [{type_var, <<"S">>}], #{<<"key">> => string}, {type_var, <<"V">>},
      {gdbsp_struct, struct_get, 2}}
 ]};
 fn_overloads(<<"struct:set">>) -> {ok, [
-    {function, [dynamic, dynamic], #{<<"key">> => string}, dynamic,
+    {function, [{type_var, <<"S">>}, {type_var, <<"V">>}],
+     #{<<"key">> => string}, {type_var, <<"S">>},
      {gdbsp_struct, struct_set, 3}}
 ]};
 

@@ -15,7 +15,7 @@
 
 -type expr() ::
     {value, gdbsp_column_type(), term()} |                                     %% typed leaf value
-    {field, binary()} |                                                 %% column reference (name only)
+    {arg, binary()} |                                                    %% function argument reference
     {call,  binary(), [expr()], #{binary() => expr()}} |               %% function call (pos, kw)
     {agg,   binary(), [expr()], #{binary() => expr()}} |              %% aggregate call
     {get,   expr(), [expr()]} |                                        %% subscript: obj[k1][k2]...

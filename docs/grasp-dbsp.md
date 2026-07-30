@@ -143,6 +143,12 @@ fn_name :: function((param_types...) -> return_type)
 Used with `map`, `filter`, `flat_map`. The function operates on a single row
 element (without weight). The operator handles weight propagation automatically.
 
+The function's expression body is defined externally in the function registry
+(see [stdlib.md](stdlib.md) §1). The single parameter is conventionally named
+`"row"` and accessed via `{"arg": "row"}` in the expression tree.
+Pass-through is simply `{"arg": "row"}`; individual fields are accessed via
+`struct:get`: `{"call": "struct:get", "args": [{"arg": "row"}], "kwargs": {"key": {"type": "string", "value": "col"}}}`.
+
 Zero-parameter functions use empty parentheses:
 
 ```

@@ -133,7 +133,8 @@ bytewise_xor(A, B) ->
 %% Common helpers
 %%====================================================================
 
-col_key([{field, Name} | _]) -> {value, string, Name}.
+col_key([_ | _]) -> {value, string, <<"value">>};
+col_key([]) -> {value, string, <<"value">>}.
 
 %%====================================================================
 %% sum: integer

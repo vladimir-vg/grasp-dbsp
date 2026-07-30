@@ -50,7 +50,7 @@ its input schemas. The propagation rules:
 | Operator | Output Schema |
 |----------|-------------|
 | `source` | Struct fields from the `stream(struct(...))` declaration |
-| `map` | Output type of the function (inferred from the function registry) |
+| `map` | Output type of the function (inferred from the function registry). `{"arg": "row"}` passes through the input struct type. |
 | `filter` | Same as input schema (filter does not change columns) |
 | `flat_map` | Input columns plus any new columns produced by the flat-mapped expansion |
 | `project` | Subset of input schema: only the listed field names |
@@ -156,8 +156,10 @@ is used, the return type is inferred from the input value type.
 For `map` and `filter` operators, the return type is inferred from the
 function definition in the function registry:
 
+- **Arg reference** (`{"arg": "row"}`): output type is the input struct type (pass-through)
 - **Struct construction** (`{"call": "struct", "kwargs": {...}}`): output type is a struct with fields matching the kwargs, each typed by its expression
-- **Field reference** (`{"field": "col"}`): output type is the column's type from the input schema
+- **`struct:get`** (`{"call": "struct:get", "args": [{"arg": "row"}], "kwargs": {"key": {"type": "string", "value": "col"}}}`): output type is the specific column's type from the input schema. When the key is a string literal, type inference resolves the exact field type; when the key is computed at runtime, type inference falls back to `dynamic`.
+- **`struct:set`** (`{"call": "struct:set", "args": [{"arg": "row"}, value], "kwargs": {"key": ...}}`): output type is the input struct type with the specified field's type updated to the value's type
 - **Comparison functions** (`gte`, `lt`, `eq`, etc.): output type is `enum("false", "true")`
 - **Scalar functions** (`string:upper`, `integer:add`, etc.): output type follows the function's declared return type
 

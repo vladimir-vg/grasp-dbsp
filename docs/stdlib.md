@@ -19,7 +19,7 @@ object identified by a unique **discriminator key**.
 | Node | Discriminator | Meaning |
 |------|-------------|---------|
 | value | `"type"` | Typed literal constant |
-| field | `"field"` | Column reference from input schema |
+| arg | `"arg"` | Function argument reference |
 | call | `"call"` | Function call (post-desugaring) |
 | aggregate | `"aggregate"` | Aggregate function call |
 
@@ -41,15 +41,22 @@ encoded value (see §2 of this document).
 {"type": "boolean", "value": "true"}
 ```
 
-### 1.3 Field Node
+### 1.3 Arg Node
 
-A reference to a column in the input row. The field name is the column name
-from the operator's input schema. No type annotation — the type is known
-from schema context.
+A reference to a function argument. Map and filter functions receive a single
+argument conventionally named `"row"`, which is the entire input struct row.
+Accessing `{"arg": "row"}` returns the complete row, enabling pass-through.
 
 ```json
-{"field": "age"}
-{"field": "name"}
+{"arg": "row"}
+```
+
+Individual fields are accessed via `struct:get` (see §1.4):
+
+```json
+{"call": "struct:get",
+ "args": [{"arg": "row"}],
+ "kwargs": {"key": {"type": "string", "value": "age"}}}
 ```
 
 ### 1.4 Call Node
@@ -58,15 +65,25 @@ A function call. All operators are desugared to their stdlib equivalents
 (e.g. `+` → `integer:add`, `>` → `integer:gt`). See §3 for the function catalog.
 
 ```json
-{"call": "string:upper", "args": [{"field": "name"}]}
+{"call": "string:upper", "args": [
+    {"call": "struct:get",
+     "args": [{"arg": "row"}],
+     "kwargs": {"key": {"type": "string", "value": "name"}}}
+]}
 
 {"call": "integer:add", "args": [
-    {"field": "x"},
+    {"call": "struct:get",
+     "args": [{"arg": "row"}],
+     "kwargs": {"key": {"type": "string", "value": "x"}}},
     {"type": "i64", "value": "1"}
 ]}
 
 {"call": "string:substring",
- "args": [{"field": "text"}],
+ "args": [
+    {"call": "struct:get",
+     "args": [{"arg": "row"}],
+     "kwargs": {"key": {"type": "string", "value": "text"}}}
+ ],
  "kwargs": {
      "start":  {"type": "i64", "value": "0"},
      "length": {"type": "i64", "value": "10"}
@@ -96,8 +113,9 @@ in the function registry.
 2. **Desugared operators.** All infix operators use their stdlib function
    names: `"integer:add"` (not `"+"`), `"integer:gt"` (not `">"`),
    `"boolean:and"` (not `"and"`).
-3. **No type on field nodes.** Field references carry only the column name.
-   The type is resolved from the operator's input schema.
+3. **Function arguments via `arg`.** `{"arg": "row"}` references the
+   single function parameter (the input row). Individual fields are accessed
+   via `struct:get(arg: row, "col")`.
 4. **Value encoding.** Value leaf nodes use the encoding defined in §2:
    numbers as strings, temporal components as strings, etc.
 
@@ -106,15 +124,14 @@ in the function registry.
 The decoder identifies node kind by discriminator key, checked in this
 priority order:
 
-1. `"field"` → field node
+1. `"arg"` → arg node
 2. `"call"` → call node
 3. `"aggregate"` → aggregate node
 4. `"type"` → value node
 
 Unrecognized nodes (no matching discriminator key) are an error.
 
-Field node decoding requires a schema context for the column type.
-All other nodes are self-describing.
+All nodes are self-describing.
 
 ---
 
@@ -436,7 +453,9 @@ with expression trees:
     "salary_ge_150": {
         "call": "gte",
         "args": [
-            {"field": "sal"},
+            {"call": "struct:get",
+             "args": [{"arg": "row"}],
+             "kwargs": {"key": {"type": "string", "value": "sal"}}},
             {"type": "i64", "value": "50000"}
         ]
     }
@@ -454,19 +473,25 @@ Struct constructor functions use the `call` node with `"struct"`:
     "rename_fn": {
         "call": "struct",
         "kwargs": {
-            "x": {"field": "a"},
-            "y": {"field": "b"}
+            "x": {"call": "struct:get",
+                  "args": [{"arg": "row"}],
+                  "kwargs": {"key": {"type": "string", "value": "a"}}},
+            "y": {"call": "struct:get",
+                  "args": [{"arg": "row"}],
+                  "kwargs": {"key": {"type": "string", "value": "b"}}}
         }
     }
 }
 ```
 
-Flat-map expansion functions use `"field"` to reference the column to unnest:
+Flat-map expansion functions use `"call": "struct:get"` to reference the column to unnest:
 
 ```json
 {
     "unnest_vals": {
-        "field": "vals"
+        "call": "struct:get",
+        "args": [{"arg": "row"}],
+        "kwargs": {"key": {"type": "string", "value": "vals"}}
     }
 }
 ```
@@ -479,10 +504,7 @@ pointing to a built-in aggregate name:
 ```json
 {
     "sum_sal": {
-        "aggregate": "agg:sum",
-        "args": [
-            {"field": "sal"}
-        ]
+        "aggregate": "agg:sum"
     }
 }
 ```
@@ -490,8 +512,7 @@ pointing to a built-in aggregate name:
 ```json
 {
     "cnt": {
-        "aggregate": "agg:count",
-        "args": []
+        "aggregate": "agg:count"
     }
 }
 ```

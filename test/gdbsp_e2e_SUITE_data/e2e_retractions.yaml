@@ -68,8 +68,6 @@
   functions:
     sum_sal:
       aggregate: "agg:sum"
-      args:
-        - field: "sal"
 
   input:
     - data:

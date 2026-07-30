@@ -34,7 +34,7 @@
     | {bytes, pos_integer()}
     | {bits, pos_integer()}
     | {string, binary()}
-    | {type_var, atom()}
+    | {type_var, binary()}
     | {type_predicate, binary(), [gdbsp_column_type()]}
     | {enum, [binary()]}.
 

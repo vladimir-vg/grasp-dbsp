@@ -11,7 +11,13 @@
     gt_zero:
       call: "gt"
       args:
-        - field: "val"
+        - call: "struct:get"
+          args:
+            - arg: row
+          kwargs:
+            key:
+              type: string
+              value: "val"
         - {type: "i64", value: "0"}
 
   input:

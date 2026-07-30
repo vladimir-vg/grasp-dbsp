@@ -135,8 +135,22 @@
     add_status:
       call: "struct"
       kwargs:
-        id: {field: "id"}
-        val: {field: "val"}
+        id:
+          call: "struct:get"
+          args:
+            - arg: row
+          kwargs:
+            key:
+              type: string
+              value: "id"
+        val:
+          call: "struct:get"
+          args:
+            - arg: row
+          kwargs:
+            key:
+              type: string
+              value: "val"
         status:
           type: "string"
           value: "active"
@@ -188,8 +202,22 @@
     swap:
       call: "struct"
       kwargs:
-        x: {field: "a"}
-        y: {field: "b"}
+        x:
+          call: "struct:get"
+          args:
+            - arg: row
+          kwargs:
+            key:
+              type: string
+              value: "a"
+        y:
+          call: "struct:get"
+          args:
+            - arg: row
+          kwargs:
+            key:
+              type: string
+              value: "b"
 
   input:
     - data:

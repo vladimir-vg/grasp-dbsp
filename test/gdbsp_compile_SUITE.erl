@@ -41,7 +41,10 @@ simple_filter(_Config) ->
         <<"salary_ge_150">> =>
             #{<<"call">> => <<"gte">>,
               <<"args">> => [
-                  #{<<"field">> => <<"sal">>},
+                  #{<<"call">> => <<"struct:get">>,
+                    <<"args">> => [#{<<"arg">> => <<"row">>}],
+                    <<"kwargs">> => #{<<"key">> => #{<<"type">> => <<"string">>,
+                                                      <<"value">> => <<"sal">>}}},
                   #{<<"type">> => <<"i64">>, <<"value">> => <<"150">>}
               ]}
     },
@@ -66,8 +69,14 @@ simple_map(_Config) ->
         <<"passthrough">> =>
             #{<<"call">> => <<"struct">>,
               <<"kwargs">> =>
-                  #{<<"x">> => #{<<"field">> => <<"a">>},
-                    <<"y">> => #{<<"field">> => <<"b">>}}}
+                  #{<<"x">> => #{<<"call">> => <<"struct:get">>,
+                                 <<"args">> => [#{<<"arg">> => <<"row">>}],
+                                 <<"kwargs">> => #{<<"key">> => #{<<"type">> => <<"string">>,
+                                                                   <<"value">> => <<"a">>}}},
+                    <<"y">> => #{<<"call">> => <<"struct:get">>,
+                                 <<"args">> => [#{<<"arg">> => <<"row">>}],
+                                 <<"kwargs">> => #{<<"key">> => #{<<"type">> => <<"string">>,
+                                                                   <<"value">> => <<"b">>}}}}}
     },
     {ok, Prog} = parse_prog(
         "src := source(\"t\")\n"
@@ -105,8 +114,7 @@ join(_Config) ->
 aggregate(_Config) ->
     FnReg = #{
         <<"sum_sal">> =>
-            #{<<"aggregate">> => <<"agg:sum">>,
-              <<"args">> => [#{<<"field">> => <<"sal">>}]}
+            #{<<"aggregate">> => <<"agg:sum">>}
     },
     {ok, Prog} = parse_prog(
         "emp_src := source(\"emp\")\n"
@@ -144,7 +152,10 @@ incrementalize_filter(_Config) ->
         <<"f">> =>
             #{<<"call">> => <<"gte">>,
               <<"args">> => [
-                  #{<<"field">> => <<"sal">>},
+                  #{<<"call">> => <<"struct:get">>,
+                    <<"args">> => [#{<<"arg">> => <<"row">>}],
+                    <<"kwargs">> => #{<<"key">> => #{<<"type">> => <<"string">>,
+                                                      <<"value">> => <<"sal">>}}},
                   #{<<"type">> => <<"i64">>, <<"value">> => <<"100">>}
               ]}
     },
@@ -181,8 +192,14 @@ cycle_error(_Config) ->
         "a := map(b, g)\n"
     ),
     FnReg = #{
-        <<"f">> => #{<<"field">> => <<"x">>},
-        <<"g">> => #{<<"field">> => <<"x">>}
+        <<"f">> => #{<<"call">> => <<"struct:get">>,
+                      <<"args">> => [#{<<"arg">> => <<"row">>}],
+                      <<"kwargs">> => #{<<"key">> => #{<<"type">> => <<"string">>,
+                                                        <<"value">> => <<"x">>}}},
+        <<"g">> => #{<<"call">> => <<"struct:get">>,
+                      <<"args">> => [#{<<"arg">> => <<"row">>}],
+                      <<"kwargs">> => #{<<"key">> => #{<<"type">> => <<"string">>,
+                                                        <<"value">> => <<"x">>}}}
     },
     case gdbsp_compile:compile(Prog, #{fn_registry => FnReg, incrementalize => false}) of
         {error, cycle_in_graph} -> ok;

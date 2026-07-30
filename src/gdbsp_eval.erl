@@ -2,9 +2,9 @@
 %%% @doc Expression tree evaluator.
 %%%
 %%% eval_with_blob — resolves blob() references by fetching from blob
-%%% storage. No {field, _} nodes allowed.
+%%% storage. No {arg, _} nodes allowed in blob context.
 %%%
-%%% eval_with_row — resolves {field, _} against a struct row.
+%%% eval_with_row — resolves {arg, _} and {call, ...} against a struct row.
 %%% Supports {agg, ...} nodes (caller provides accumulator context).
 %%% No blob resolution.
 %%%
@@ -64,14 +64,8 @@ do_eval({value, type, T}, _Ctx) ->
     {ok, {type, T}};
 do_eval({value, _, _} = V, _Ctx) ->
     {ok, V};
-do_eval({field, Name}, {row, Row}) ->
-    try gdbsp_struct:struct_get(Row, {value, string, Name}) of
-        V -> {ok, V}
-    catch
-        throw:drop_row -> drop_row
-    end;
-do_eval({field, _}, {blob, _}) ->
-    {error, field_node_not_allowed_in_blob_eval};
+do_eval({arg, <<"row">>}, {row, Row}) -> {ok, Row};
+do_eval({arg, _}, _Ctx) -> {error, unknown_arg};
 do_eval({call, <<"storage:blob">>, [], Kw}, {blob, Fetcher}) ->
     resolve_blob(Kw, Fetcher);
 do_eval({call, <<"storage:blob">>, _, _}, {row, _Row}) ->

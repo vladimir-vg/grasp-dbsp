@@ -8,7 +8,7 @@
         x: i64
         y: i64
 
-- description: "filter inherits input type"
+- description: "filter inherits input type (struct:get on arg)"
   source: |
     src := source("data")
     src :: stream(struct("x": i64, "y": i64))
@@ -17,7 +17,13 @@
     my_fn:
       call: gte
       args:
-        - field: x
+        - call: "struct:get"
+          args:
+            - arg: row
+          kwargs:
+            key:
+              type: string
+              value: "x"
         - type: i64
           value: "0"
   expected:
@@ -102,7 +108,7 @@
           string:
             encoding: "UTF-8"
 
-- description: "map with struct constructor determines output type"
+- description: "map with struct constructor (struct:get fields from arg)"
   source: |
     src := source("data")
     src :: stream(struct("id": i64, "a": i64, "b": i64))
@@ -112,9 +118,21 @@
       call: struct
       kwargs:
         x:
-          field: a
+          call: "struct:get"
+          args:
+            - arg: row
+          kwargs:
+            key:
+              type: string
+              value: "a"
         y:
-          field: b
+          call: "struct:get"
+          args:
+            - arg: row
+          kwargs:
+            key:
+              type: string
+              value: "b"
   expected:
     src:
       struct:
@@ -126,14 +144,20 @@
         x: i64
         y: i64
 
-- description: "map with field reference"
+- description: "map with struct:get infers exact field type"
   source: |
     src := source("data")
     src :: stream(struct("x": i64, "y": string("UTF-8")))
     out := map(src, pick_x)
   functions:
     pick_x:
-      field: x
+      call: "struct:get"
+      args:
+        - arg: row
+      kwargs:
+        key:
+          type: string
+          value: "x"
   expected:
     src:
       struct:
@@ -142,6 +166,20 @@
           string:
             encoding: "UTF-8"
     out: i64
+
+- description: "map with arg reference returns input type (pass-through)"
+  source: |
+    src := source("data")
+    src :: stream(struct("a": i64, "b": i64))
+    out := map(src, passthrough)
+  functions:
+    passthrough:
+      arg: row
+  expected:
+    out:
+      struct:
+        a: i64
+        b: i64
 
 - description: "join merges left and right struct types"
   source: |
@@ -173,8 +211,6 @@
   functions:
     sum_sal:
       aggregate: "agg:sum"
-      args:
-        - field: sal
   expected:
     src:
       struct:
@@ -193,7 +229,6 @@
   functions:
     cnt:
       aggregate: "agg:count"
-      args: []
   expected:
     src:
       struct:
@@ -216,7 +251,13 @@
     my_fn:
       call: gte
       args:
-        - field: x
+        - call: "struct:get"
+          args:
+            - arg: row
+          kwargs:
+            key:
+              type: string
+              value: "x"
         - type: i64
           value: "0"
   expected:
@@ -294,7 +335,13 @@
       call: struct
       kwargs:
         x:
-          field: x
+          call: "struct:get"
+          args:
+            - arg: row
+          kwargs:
+            key:
+              type: string
+              value: "x"
   expected:
     f:
       struct:
@@ -314,7 +361,7 @@
         k: i64
         a: i64
 
-- description: "map with gte call infers boolean return"
+- description: "map with gte call infers boolean return (struct:get from arg)"
   source: |
     src := source("data")
     src :: stream(struct("x": i64))
@@ -323,13 +370,19 @@
     is_pos:
       call: gte
       args:
-        - field: x
+        - call: "struct:get"
+          args:
+            - arg: row
+          kwargs:
+            key:
+              type: string
+              value: "x"
         - type: i64
           value: "0"
   expected:
     out: boolean
 
-- description: "map with string:upper call infers string return"
+- description: "map with string:upper call infers string return (struct:get from arg)"
   source: |
     src := source("data")
     src :: stream(struct("name": string("UTF-8")))
@@ -338,7 +391,13 @@
     up:
       call: "string:upper"
       args:
-        - field: name
+        - call: "struct:get"
+          args:
+            - arg: row
+          kwargs:
+            key:
+              type: string
+              value: "name"
   expected:
     out: string
 
@@ -393,3 +452,111 @@
     j := join(left, right, on: ["k"])
   expected_errors:
     - class: type_conflict
+
+- description: "fixpoint output inherits input type (covers fixpoint_input too)"
+  source: |
+    circuit passthrough(x: val):
+        result := distinct(val)
+    src := source("data")
+    src :: stream(struct("a": i64, "b": i64))
+    fp := fixpoint passthrough(x: src)
+    out := fp.result
+  expected:
+    fp.result:
+      struct:
+        a: i64
+        b: i64
+
+- description: "map with type+value literal infers the literal type"
+  source: |
+    src := source("data")
+    src :: stream(struct("x": i64))
+    out := map(src, const_fn)
+  functions:
+    const_fn:
+      type: string
+      value: "hello"
+  expected:
+    out: string
+
+- description: "map with unrecognized expression shape falls back to input type"
+  source: |
+    src := source("data")
+    src :: stream(struct("x": i64, "y": i64))
+    out := map(src, unknown_shape)
+  functions:
+    unknown_shape:
+      some_unknown_key: 42
+  expected:
+    out:
+      struct:
+        x: i64
+        y: i64
+
+- description: "map struct constructor with unrecognized sub-expr falls back to dynamic"
+  source: |
+    src := source("data")
+    src :: stream(struct("a": i64, "b": i64))
+    out := map(src, weird_struct)
+  functions:
+    weird_struct:
+      call: struct
+      kwargs:
+        x:
+          garbage: true
+  expected:
+    out:
+      struct:
+        x: dynamic
+
+- description: "flat_map with unknown function fails"
+  source: |
+    src := source("data")
+    src :: stream(struct("x": i64, "y": i64))
+    out := flat_map(src, unknown_expand)
+  expected_errors:
+    - class: missing_typespec
+
+- description: "map with struct:set updates field type in output"
+  source: |
+    src := source("data")
+    src :: stream(struct("id": i64, "name": string("UTF-8")))
+    out := map(src, fix_name)
+  functions:
+    fix_name:
+      call: "struct:set"
+      args:
+        - arg: row
+        - type: string
+          value: "fixed"
+      kwargs:
+        key:
+          type: string
+          value: "name"
+  expected:
+    out:
+      struct:
+        id: i64
+        name: string
+
+- description: "struct:get with non-constant key degrades to dynamic"
+  source: |
+    src := source("data")
+    src :: stream(struct("key": string("UTF-8"), "a": i64, "b": i64))
+    out := map(src, get_by_key)
+  functions:
+    get_by_key:
+      call: "struct:get"
+      args:
+        - arg: row
+      kwargs:
+        key:
+          call: "struct:get"
+          args:
+            - arg: row
+          kwargs:
+            key:
+              type: string
+              value: "key"
+  expected:
+    out: dynamic

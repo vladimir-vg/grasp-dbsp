@@ -141,8 +141,8 @@ mk_arr_row(Vals) when is_list(Vals) ->
 get_vals(Deltas) ->
     [gdbsp_value:unwrap(maps:get(<<"v">>, gdbsp_value:struct_to_map(R))) || {_, R} <- Deltas].
 
--define(EXPR, {field, <<"v">>}).
--define(ARGS, #{expr => {field, <<"v">>}, row_type => {struct, #{<<"v">> => {array, i64, varsize}}, exact}, unnest_outs => [<<"v">>]}).
+-define(EXPR, {call, <<"struct:get">>, [{arg, <<"row">>}], #{<<"key">> => {value, string, <<"v">>}}}).
+-define(ARGS, #{expr => ?EXPR, row_type => {struct, #{<<"v">> => {array, i64, varsize}}, exact}, unnest_outs => [<<"v">>]}).
 
 %%==== Pure
 
@@ -159,7 +159,7 @@ single_to_single(_Config) ->
     ok = cleanup([Op, Up, Down]).
 
 expr_init_one_var(_Config) ->
-    CanonicalExpr = {field, <<"arr">>},
+    CanonicalExpr = {call, <<"struct:get">>, [{arg, <<"row">>}], #{<<"key">> => {value, string, <<"arr">>}}},
     RowType = {struct, #{<<"arr">> => {array, i64, varsize}}, exact},
     TypedArr = {value, {array, i64, varsize}, [10, 20, 30]},
     TypedRow = {value, {struct, #{<<"arr">> => {array, i64, varsize}}, exact}, #{<<"arr">> => TypedArr}},
@@ -173,7 +173,7 @@ expr_init_one_var(_Config) ->
     ok = cleanup([Op, Up, Down]).
 
 expr_init_two_var_index(_Config) ->
-    CanonicalExpr = {field, <<"arr">>},
+    CanonicalExpr = {call, <<"struct:get">>, [{arg, <<"row">>}], #{<<"key">> => {value, string, <<"arr">>}}},
     RowType = {struct, #{<<"arr">> => {array, i64, varsize}}, exact},
     TypedArr = {value, {array, i64, varsize}, [10, 20, 30]},
     TypedRow = {value, {struct, #{<<"arr">> => {array, i64, varsize}}, exact}, #{<<"arr">> => TypedArr}},
@@ -188,7 +188,7 @@ expr_init_two_var_index(_Config) ->
     ok = cleanup([Op, Up, Down]).
 
 expr_init_two_var_dict(_Config) ->
-    CanonicalExpr = {field, <<"dict">>},
+    CanonicalExpr = {call, <<"struct:get">>, [{arg, <<"row">>}], #{<<"key">> => {value, string, <<"dict">>}}},
     RowType = {struct, #{<<"dict">> => {map, string, i64}}, exact},
     TypedDict = {value, {map, string, i64}, #{
         <<"a">> => {value, i64, 1},
@@ -206,7 +206,7 @@ expr_init_two_var_dict(_Config) ->
     ok = cleanup([Op, Up, Down]).
 
 expr_init_json_array_one_var(_Config) ->
-    Expr = {field, <<"arr">>},
+    Expr = {call, <<"struct:get">>, [{arg, <<"row">>}], #{<<"key">> => {value, string, <<"arr">>}}},
     RowType = {struct, #{<<"arr">> => json}, exact},
     ArrVal = gdbsp_value_json:jsx_to_json_node([10.0, 20.0]),
     TypedRow = {value, {struct, #{<<"arr">> => json}, exact},
@@ -222,7 +222,7 @@ expr_init_json_array_one_var(_Config) ->
     ok = cleanup([Op, Up, Down]).
 
 expr_init_json_array_two_var_index(_Config) ->
-    Expr = {field, <<"arr">>},
+    Expr = {call, <<"struct:get">>, [{arg, <<"row">>}], #{<<"key">> => {value, string, <<"arr">>}}},
     RowType = {struct, #{<<"arr">> => json}, exact},
     ArrVal = gdbsp_value_json:jsx_to_json_node([<<"a">>, <<"b">>]),
     TypedRow = {value, {struct, #{<<"arr">> => json}, exact},
@@ -240,7 +240,7 @@ expr_init_json_array_two_var_index(_Config) ->
     ok = cleanup([Op, Up, Down]).
 
 expr_init_json_map_two_var(_Config) ->
-    Expr = {field, <<"dict">>},
+    Expr = {call, <<"struct:get">>, [{arg, <<"row">>}], #{<<"key">> => {value, string, <<"dict">>}}},
     RowType = {struct, #{<<"dict">> => json}, exact},
     MapVal = gdbsp_value_json:jsx_to_json_node(#{<<"x">> => 1.0, <<"y">> => 2.0}),
     TypedRow = {value, {struct, #{<<"dict">> => json}, exact},
@@ -258,7 +258,7 @@ expr_init_json_map_two_var(_Config) ->
     ok = cleanup([Op, Up, Down]).
 
 expr_init_optional_json_array(_Config) ->
-    Expr = {field, <<"arr">>},
+    Expr = {call, <<"struct:get">>, [{arg, <<"row">>}], #{<<"key">> => {value, string, <<"arr">>}}},
     RowType = {struct, #{<<"arr">> => {optional, json}}, exact},
     ArrVal = gdbsp_value_json:jsx_to_json_node([10.0]),
     TypedRow = {value, {struct, #{<<"arr">> => {optional, json}}, exact},
@@ -274,7 +274,7 @@ expr_init_optional_json_array(_Config) ->
     ok = cleanup([Op, Up, Down]).
 
 expr_init_json_empty_array(_Config) ->
-    Expr = {field, <<"arr">>},
+    Expr = {call, <<"struct:get">>, [{arg, <<"row">>}], #{<<"key">> => {value, string, <<"arr">>}}},
     RowType = {struct, #{<<"arr">> => json}, exact},
     TypedRow = {value, {struct, #{<<"arr">> => json}, exact},
                 #{<<"arr">> => {value, {json, {array, json, varsize}}, []}}},

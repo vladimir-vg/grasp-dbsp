@@ -20,8 +20,22 @@
     rename_fn:
       call: "struct"
       kwargs:
-        x: {field: "a"}
-        y: {field: "b"}
+        x:
+          call: "struct:get"
+          args:
+            - arg: row
+          kwargs:
+            key:
+              type: string
+              value: "a"
+        y:
+          call: "struct:get"
+          args:
+            - arg: row
+          kwargs:
+            key:
+              type: string
+              value: "b"
 
   input:
     - data:
@@ -44,7 +58,13 @@
     salary_ge_50k:
       call: "gte"
       args:
-        - field: "sal"
+        - call: "struct:get"
+          args:
+            - arg: row
+          kwargs:
+            key:
+              type: string
+              value: "sal"
         - {type: "i64", value: "50000"}
 
   input:
@@ -85,7 +105,13 @@
 
   functions:
     unnest_vals:
-      field: "vals"
+      call: "struct:get"
+      args:
+        - arg: row
+      kwargs:
+        key:
+          type: string
+          value: "vals"
 
   input:
     - data:
@@ -232,12 +258,24 @@
     ge_10:
       call: "gte"
       args:
-        - field: "x"
+        - call: "struct:get"
+          args:
+            - arg: row
+          kwargs:
+            key:
+              type: string
+              value: "x"
         - {type: "i64", value: "10"}
     lt_100_on_y:
       call: "lt"
       args:
-        - field: "y"
+        - call: "struct:get"
+          args:
+            - arg: row
+          kwargs:
+            key:
+              type: string
+              value: "y"
         - {type: "i64", value: "100"}
 
   input:

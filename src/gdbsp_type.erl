@@ -301,7 +301,7 @@ canonical_text_inner(dynamic) -> <<"dynamic">>;
 canonical_text_inner({dynamic, T}) -> <<"dynamic(", (canonical_text_inner(T))/binary, ")">>;
 canonical_text_inner(absent) -> <<"absent">>;
 canonical_text_inner(type) -> <<"type">>;
-canonical_text_inner({type_var, Name}) -> <<"'", (atom_to_binary(Name))/binary, "'">>;
+canonical_text_inner({type_var, Name}) -> <<"'", Name/binary, "'">>;
 canonical_text_inner({numeric, P, S}) ->
     <<"numeric(", (integer_to_binary(P))/binary, ",", (integer_to_binary(S))/binary, ")">>;
 canonical_text_inner({string, E}) ->
