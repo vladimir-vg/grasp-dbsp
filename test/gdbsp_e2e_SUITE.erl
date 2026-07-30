@@ -276,23 +276,20 @@ compile_to_plan(Source, Functions, OutputNames) ->
             throw({compile_error, Reason})
     end.
 
-output_types_from_graph(Graph, AllTypes, NameToId, OutputNames, SourceTypeMap) ->
+output_types_from_graph(Graph, _AllTypes, NameToId, OutputNames, SourceTypeMap) ->
     SrcSchemata = build_source_schemata(Graph, NameToId, SourceTypeMap),
     maps:fold(
         fun(OutName, _NodeId, Acc) ->
-            %% Prefer type inference result if available
-            case maps:find(OutName, AllTypes) of
-                {ok, Type} when Type =/= undefined, Type =/= dynamic ->
-                    Acc#{OutName => Type};
-                _ ->
-                    %% Fall back to graph-tracing for fixpoint outputs etc.
-                    case maps:find(OutName, NameToId) of
-                        {ok, CId} ->
+            case maps:find(OutName, NameToId) of
+                {ok, CId} ->
+                    Type = case maps:find(CId, Graph#circuit_graph.types) of
+                        {ok, T} when T =/= undefined, T =/= dynamic -> T;
+                        _ ->
                             Schema = maps:get(CId, Graph#circuit_graph.schemas, []),
-                            Type = build_struct_type(Schema, CId, SrcSchemata, Graph, #{}),
-                            Acc#{OutName => Type};
-                        error -> Acc
-                    end
+                            build_struct_type(Schema, CId, SrcSchemata, Graph, #{})
+                    end,
+                    Acc#{OutName => Type};
+                error -> Acc
             end
         end,
         #{},

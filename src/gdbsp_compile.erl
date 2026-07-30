@@ -33,8 +33,10 @@ compile_with_names(Program, Options) ->
     FnReg = maps:get(fn_registry, Options, #{}),
     Incr = maps:get(incrementalize, Options, false),
     try
+        TSMap = build_ts_map(Program#gdbsp_program.typespecs),
         case gdbsp_compile_lower:run(Program, #{}) of
-            {ok, Lowered} ->
+            {ok, Lowered0} ->
+                Lowered = gdbsp_type_infer:infer_lowered(Lowered0, TSMap, FnReg),
                 case gdbsp_compile_graph:build_from_lowered(Lowered, FnReg) of
                     {ok, Graph, NameToId} ->
                         Graph2 = case Incr of
@@ -52,3 +54,12 @@ compile_with_names(Program, Options) ->
         throw:{fixpoint_error, Reason} ->
             {error, {fixpoint_error, Reason}}
     end.
+
+build_ts_map(Typespecs) ->
+    lists:foldl(
+        fun(#gdbsp_typespec{name = N, spec = {type, {stream, Inner}}}, Acc) ->
+                Acc#{N => Inner};
+           (#gdbsp_typespec{name = N, spec = {type, T}}, Acc) ->
+                Acc#{N => T};
+           (_, Acc) -> Acc
+        end, #{}, Typespecs).

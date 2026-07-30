@@ -234,7 +234,8 @@ construct_from_lowered(NodeList, Order, FnReg) ->
                     {G2, NodeId} = add_circuit_node(GAcc, {integrate}, CInputIds, #{}),
                     Schema = compute_schema_lowered(integrate, [], CInputIds, Type, G2),
                     G3 = set_schema(G2, NodeId, Schema),
-                    {G3, IdMapAcc#{LId => NodeId},
+                    G4 = set_type(G3, NodeId, Type),
+                    {G4, IdMapAcc#{LId => NodeId},
                      maps:put(LId, NodeId, FIMAcc), FOMAcc};
                 fixpoint_output ->
                     %% Pass through to body output circuit node.
@@ -254,19 +255,22 @@ construct_from_lowered(NodeList, Order, FnReg) ->
                     {G2, NodeId} = build_join_graph_lowered(GAcc, Args, CInputIds),
                     Schema = compute_schema_lowered(Op, Args, CInputIds, Type, G2),
                     G3 = set_schema(G2, NodeId, Schema),
-                    {G3, IdMapAcc#{LId => NodeId}, FIMAcc, FOMAcc};
+                    G4 = set_type(G3, NodeId, Type),
+                    {G4, IdMapAcc#{LId => NodeId}, FIMAcc, FOMAcc};
                 aggregate ->
                     {G2, NodeId} = build_aggregate_graph_lowered(GAcc, Args, CInputIds, FnReg),
                     Schema = compute_schema_lowered(Op, Args, CInputIds, Type, G2),
                     G3 = set_schema(G2, NodeId, Schema),
-                    {G3, IdMapAcc#{LId => NodeId}, FIMAcc, FOMAcc};
+                    G4 = set_type(G3, NodeId, Type),
+                    {G4, IdMapAcc#{LId => NodeId}, FIMAcc, FOMAcc};
                 _ ->
                     {OpTuple, SubNodes} = make_operator_lowered(
                         GAcc, Op, Args, CInputIds, Type, FnReg),
                     {G2, FinalId} = add_with_sub_nodes(GAcc, OpTuple, CInputIds, SubNodes),
                     Schema = compute_schema_lowered(Op, Args, CInputIds, Type, G2),
                     G3 = set_schema(G2, FinalId, Schema),
-                    {G3, IdMapAcc#{LId => FinalId}, FIMAcc, FOMAcc}
+                    G4 = set_type(G3, FinalId, Type),
+                    {G4, IdMapAcc#{LId => FinalId}, FIMAcc, FOMAcc}
             end
         end,
         {new_graph(), #{}, #{}, #{}},
@@ -513,15 +517,17 @@ construct_one_fixpoint(G0, _FpHmac, FixInfo, LnIdMap, CInputMap,
             G3#circuit_graph{nodes = FixedNodes}
     end,
 
-    BaseSchema = case BaseInputIds of
-        [FirstBaseId | _] -> get_schema(G4, FirstBaseId);
-        [] -> []
+    {BaseSchema, BaseType} = case BaseInputIds of
+        [FirstBaseId | _] ->
+            {get_schema(G4, FirstBaseId), get_type(G4, FirstBaseId)};
+        [] ->
+            {[], undefined}
     end,
     G5 = lists:foldl(
-        fun(RecId, GAcc) -> set_schema(GAcc, RecId, BaseSchema) end,
+        fun(RecId, GAcc) -> GA = set_schema(GAcc, RecId, BaseSchema), set_type(GA, RecId, BaseType) end,
         G4, maps:values(RecIds)),
     G6 = lists:foldl(
-        fun(ROId, GAcc) -> set_schema(GAcc, ROId, BaseSchema) end,
+        fun(ROId, GAcc) -> GA = set_schema(GAcc, ROId, BaseSchema), set_type(GA, ROId, BaseType) end,
         G5, maps:values(RecOutputIds)),
 
     NewROAcc = maps:merge(ROIdsAcc, maps:from_list(
@@ -553,12 +559,17 @@ compute_schema_lowered(Op, Args, InputIds, TS, G) ->
             {as, AsField} = get_kw_arg(Args, 'as', <<>>),
             ByFields ++ [AsField];
         join ->
-            {on, OnFields} = get_kw_arg(Args, on, []),
-            LSchema = get_schema(G, hd(InputIds)),
-            RSchema = get_schema(G, lists:nth(2, InputIds)),
-            LeftVal = LSchema -- OnFields,
-            RightVal = RSchema -- OnFields,
-            OnFields ++ LeftVal ++ RightVal;
+            case TS of
+                {struct, Fields, _} when map_size(Fields) > 0 ->
+                    maps:keys(Fields);
+                _ ->
+                    {on, OnFields} = get_kw_arg(Args, on, []),
+                    LSchema = get_schema(G, hd(InputIds)),
+                    RSchema = get_schema(G, lists:nth(2, InputIds)),
+                    LeftVal = LSchema -- OnFields,
+                    RightVal = RSchema -- OnFields,
+                    OnFields ++ LeftVal ++ RightVal
+            end;
         project ->
             get_string_list_arg(Args, 2);
         distinct -> inherit_schema(InputIds, G);
@@ -1207,6 +1218,14 @@ set_schema(G, NodeId, Columns) ->
 
 get_schema(G, NodeId) ->
     maps:get(NodeId, G#circuit_graph.schemas, []).
+
+set_type(G, NodeId, Type) when Type =/= undefined, Type =/= dynamic ->
+    G#circuit_graph{types = maps:put(NodeId, Type, G#circuit_graph.types)};
+set_type(G, _NodeId, _Type) ->
+    G.
+
+get_type(G, NodeId) ->
+    maps:get(NodeId, G#circuit_graph.types, undefined).
 
 %%====================================================================
 %% Type helpers

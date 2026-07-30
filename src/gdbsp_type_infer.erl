@@ -12,8 +12,9 @@
 
 -include("gdbsp_parse.hrl").
 -include("gdbsp_type.hrl").
+-include("gdbsp_lowered.hrl").
 
--export([infer/3]).
+-export([infer/3, infer_lowered/3]).
 
 -type fn_registry() :: #{binary() => map()}.
 
@@ -527,3 +528,131 @@ bin(V) when is_binary(V) -> V;
 bin(V) when is_list(V) -> list_to_binary(V);
 bin(V) when is_atom(V) -> atom_to_binary(V, utf8);
 bin(V) -> V.
+
+%%====================================================================
+%% Lowered graph type inference
+%%====================================================================
+
+-spec infer_lowered(#lowered_graph{}, #{binary() => gdbsp_column_type()},
+                    fn_registry()) -> #lowered_graph{}.
+infer_lowered(#lowered_graph{nodes = Nodes} = LG, TSMap, FnReg) ->
+    NodeList = maps:to_list(Nodes),
+    Sorted = lowered_topo_sort(NodeList),
+    {NewNodes, _TypeAcc} = lists:foldl(
+        fun(LId, {AccNodes, TypeAcc}) ->
+            #lnode{op = Op, inputs = InputIds, args = Args, tags = Tags,
+                   type = ExistingType} = maps:get(LId, AccNodes),
+            Type = case is_concrete_type(ExistingType) of
+                true -> ExistingType;
+                false ->
+                    infer_lnode_type(Op, Args, InputIds, Tags, TypeAcc,
+                                     TSMap, FnReg)
+            end,
+            Node = (maps:get(LId, AccNodes))#lnode{type = Type},
+            {maps:put(LId, Node, AccNodes), TypeAcc#{LId => Type}}
+        end,
+        {Nodes, #{}},
+        Sorted),
+    LG#lowered_graph{nodes = NewNodes}.
+
+lowered_topo_sort(NodeList) ->
+    NodeMap = maps:from_list(NodeList),
+    InDeg = maps:map(fun(_LId, #lnode{inputs = Ins}) ->
+        length(Ins)
+    end, NodeMap),
+    Consumers = lists:foldl(
+        fun({LId, #lnode{inputs = Ins}}, Acc) ->
+            lists:foldl(fun(InId, A) ->
+                maps:update_with(InId, fun(L) -> [LId | L] end, [LId], A)
+            end, Acc, Ins)
+        end, #{}, NodeList),
+    AllIds = [Id || {Id, _} <- NodeList],
+    Queue = [Id || Id <- AllIds, maps:get(Id, InDeg, 0) =:= 0],
+    lowered_topo_loop(queue:from_list(Queue), InDeg, Consumers, []).
+
+lowered_topo_loop(Q, InDeg, Consumers, Acc) ->
+    case queue:out(Q) of
+        {empty, _} -> lists:reverse(Acc);
+        {{value, Id}, RestQ} ->
+            NewAcc = [Id | Acc],
+            Dependents = maps:get(Id, Consumers, []),
+            {NewQ, NewIndeg} = lists:foldl(
+                fun(Dep, {QI, ID}) ->
+                    NewD = maps:get(Dep, ID) - 1,
+                    ID2 = maps:put(Dep, NewD, ID),
+                    case NewD of
+                        0 -> {queue:in(Dep, QI), ID2};
+                        _ -> {QI, ID2}
+                    end
+                end, {RestQ, InDeg}, sets:to_list(sets:from_list(Dependents))),
+            lowered_topo_loop(NewQ, NewIndeg, Consumers, NewAcc)
+    end.
+
+is_concrete_type(undefined) -> false;
+is_concrete_type(dynamic) -> false;
+is_concrete_type({dynamic, _}) -> false;
+is_concrete_type({struct, Fields, _}) when map_size(Fields) =:= 0 -> false;
+is_concrete_type(_) -> true.
+
+infer_lnode_type(source, _Args, _InputIds, Tags, _TypeAcc, TSMap, _FnReg) ->
+    Name = case Tags of [Tag | _] -> Tag; _ -> undefined end,
+    case Name of
+        undefined -> dynamic;
+        _ -> maps:get(Name, TSMap, dynamic)
+    end;
+
+infer_lnode_type(fixpoint_input, _Args, InputIds, _Tags, TypeAcc, _TSMap, _FnReg) ->
+    lowered_input_type(InputIds, TypeAcc);
+
+infer_lnode_type(fixpoint_output, _Args, InputIds, _Tags, TypeAcc, _TSMap, _FnReg) ->
+    lowered_input_type(InputIds, TypeAcc);
+
+infer_lnode_type(join, Args, InputIds, _Tags, TypeAcc, _TSMap, _FnReg) ->
+    LType = lowered_nth_input_type(1, InputIds, TypeAcc),
+    RType = lowered_nth_input_type(2, InputIds, TypeAcc),
+    {on, OnFields} = get_kw_arg(Args, on, []),
+    merge_join_type(LType, RType, OnFields);
+
+infer_lnode_type(aggregate, Args, InputIds, _Tags, TypeAcc, _TSMap, FnReg) ->
+    InputType = lowered_input_type(InputIds, TypeAcc),
+    FnRef = get_var_arg(Args, 2),
+    {by, ByFields} = get_kw_arg(Args, by, []),
+    {value, ValField} = get_kw_arg(Args, value, <<>>),
+    {as, AsField} = get_kw_arg(Args, 'as', <<>>),
+    ValType = field_type(ValField, InputType),
+    AggRetType = infer_agg_return_type(FnRef, ValType, FnReg),
+    ByPairs = [{F, field_type(F, InputType)} || F <- ByFields],
+    AllFields = ByPairs ++ [{AsField, AggRetType}],
+    {struct, maps:from_list(AllFields), exact};
+
+infer_lnode_type(map, Args, InputIds, _Tags, TypeAcc, _TSMap, FnReg) ->
+    InputType = lowered_input_type(InputIds, TypeAcc),
+    {var, FnName} = lists:nth(2, Args),
+    case maps:find(FnName, FnReg) of
+        {ok, FnJson} -> infer_map_output_type(FnJson, InputType);
+        error -> InputType
+    end;
+
+infer_lnode_type(flat_map, Args, InputIds, _Tags, TypeAcc, _TSMap, _FnReg) ->
+    InputType = lowered_input_type(InputIds, TypeAcc),
+    {var, BaseFnName} = lists:nth(2, Args),
+    infer_flat_map_out_type(BaseFnName, InputType);
+
+infer_lnode_type(project, Args, InputIds, _Tags, TypeAcc, _TSMap, _FnReg) ->
+    InputType = lowered_input_type(InputIds, TypeAcc),
+    KeepFields = get_string_list_arg(Args, 2),
+    project_struct(InputType, KeepFields);
+
+infer_lnode_type(_Op, _Args, InputIds, _Tags, TypeAcc, _TSMap, _FnReg) ->
+    lowered_input_type(InputIds, TypeAcc).
+
+lowered_input_type([InId | _], TypeAcc) ->
+    maps:get(InId, TypeAcc, dynamic);
+lowered_input_type(_, _TypeAcc) ->
+    dynamic.
+
+lowered_nth_input_type(N, InputIds, TypeAcc) ->
+    case catch lists:nth(N, InputIds) of
+        InId when is_binary(InId) -> maps:get(InId, TypeAcc, dynamic);
+        _ -> dynamic
+    end.

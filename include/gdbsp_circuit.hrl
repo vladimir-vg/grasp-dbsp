@@ -33,7 +33,8 @@
 -record(circuit_graph, {
     next_id = 1 :: pos_integer(),
     nodes   = #{} :: #{node_id() => #circuit_node{}},
-    schemas = #{} :: #{node_id() => [binary()]}
+    schemas = #{} :: #{node_id() => [binary()]},
+    types   = #{} :: #{node_id() => term()}
 }).
 
 -endif.
