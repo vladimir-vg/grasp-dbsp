@@ -151,8 +151,8 @@ run_positive(Prog, Functions, ExpectedRaw, GroupName, Config) ->
     {ok, Lowered} = gdbsp_type_infer:infer_lowered(Lowered0, TSMap, Functions),
 
     %% Generate lowered graph DOT
-    Name = atom_to_list(GroupName) ++ ".lowered",
-    write_dot_file(Name, gdbsp_graphviz:lowered_to_dot(Lowered, Name), Config),
+    write_dot_file("type_infer", GroupName, "lowered",
+                   gdbsp_graphviz:lowered_to_dot(Lowered), Config),
 
     NameToType = tags_to_types(Lowered),
     maps:foreach(
@@ -271,12 +271,46 @@ convert_type(JsonType) ->
 %% DOT file generation
 %%====================================================================
 
-write_dot_file(NameSuffix, Dot, Config) ->
-    Name = NameSuffix ++ ".dot",
-    Root = lists:foldl(fun(_, Acc) -> filename:dirname(Acc) end,
-                       code:lib_dir(grasp_dbsp), [1,2,3,4]),
-    Dir = filename:join(Root, "test_suite_graphs"),
+write_dot_file(Suite, GroupName, Kind, Dot, _Config) ->
+    NameStr = atom_to_list(GroupName),
+    Family = extract_family(NameStr),
+    FileName = NameStr ++ "." ++ Kind ++ ".dot",
+    SubDir = filename:join([Suite, Family]),
+    Dir = filename:join([project_root(), "test_suite_graphs", SubDir]),
     ok = filelib:ensure_dir(filename:join(Dir, "_")),
-    Path = filename:join(Dir, Name),
+    Path = filename:join(Dir, FileName),
     ok = file:write_file(Path, lists:flatten(Dot)),
-    ct:pal("Wrote DOT: ~s", [Path]).
+    ct:pal("Wrote DOT: ~s", [Path]),
+    maybe_render_png(Path).
+
+extract_family(NameStr) ->
+    case string:rchr(NameStr, $_) of
+        0 -> NameStr;
+        Pos ->
+            Suffix = string:substr(NameStr, Pos + 1),
+            case is_digits(Suffix) of
+                true -> string:substr(NameStr, 1, Pos - 1);
+                false -> NameStr
+            end
+    end.
+
+is_digits([]) -> true;
+is_digits([C | Rest]) when C >= $0, C =< $9 -> is_digits(Rest);
+is_digits(_) -> false.
+
+maybe_render_png(DotPath) ->
+    case os:getenv("RENDER_DOT") of
+        false -> ok;
+        _ ->
+            PngPath = filename:rootname(DotPath) ++ ".png",
+            Cmd = lists:flatten(["dot -Tpng \"", DotPath, "\" -o \"", PngPath, "\""]),
+            try os:cmd(Cmd) of
+                _ -> ct:pal("Rendered PNG: ~s", [PngPath])
+            catch
+                _:_ -> ct:pal("PNG render failed (dot not installed?): ~s", [DotPath])
+            end
+    end.
+
+project_root() ->
+    lists:foldl(fun(_, Acc) -> filename:dirname(Acc) end,
+                code:lib_dir(grasp_dbsp), [1,2,3,4]).
