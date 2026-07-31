@@ -31,6 +31,7 @@ build_from_lowered(#lowered_graph{nodes = LNodes, tag_map = TagMap,
                 construct_from_lowered(NodeList, Order, FnReg),
             {Graph1, RecOutputTags} = construct_fixpoints(Graph0, Fixpoints, LnIdMap,
                                           CircuitFixpointInputs, CircuitFixpointOutputs),
+            ok = validate_rec_source_inputs(Graph1),
             ok = validate_graph(Graph1),
             TagToId0 = build_tag_to_id(TagMap, LnIdMap),
             TagToId = maps:merge(TagToId0, RecOutputTags),
@@ -435,6 +436,43 @@ rewire_body_consumers(G, BodyToRecOut) ->
             end
         end, G#circuit_graph.nodes),
     G#circuit_graph{nodes = FixedNodes}.
+
+-spec validate_rec_source_inputs(#circuit_graph{}) -> ok.
+validate_rec_source_inputs(#circuit_graph{nodes = Nodes}) ->
+    BodyToRecOut = build_body_to_rec_out(Nodes),
+    Errors = maps:fold(
+        fun(NodeId, #circuit_node{op = {rec, Name, RecSccId}, inputs = Ins}, Acc) ->
+            Bad = lists:filter(
+                fun(InId) ->
+                    case maps:find(InId, BodyToRecOut) of
+                        {ok, RecOutId} ->
+                            case maps:find(RecOutId, Nodes) of
+                                {ok, #circuit_node{op = {rec_output, _, ROutSccId}}} ->
+                                    ROutSccId =/= RecSccId;
+                                error -> false
+                            end;
+                        error -> false
+                    end
+                end, Ins),
+            case Bad of
+                [] -> Acc;
+                _ -> [{Name, RecSccId, NodeId, Bad} | Acc]
+            end;
+           (_, _, Acc) -> Acc
+        end, [], Nodes),
+    case Errors of
+        [] -> ok;
+        _ -> error({rec_source_bypasses_rec_output, Errors})
+    end.
+
+-spec build_body_to_rec_out(#{node_id() => #circuit_node{}}) ->
+    #{node_id() => node_id()}.
+build_body_to_rec_out(Nodes) ->
+    maps:fold(
+        fun(RecOutId, #circuit_node{op = {rec_output, _, _}, inputs = [BodyId]}, Acc) ->
+            Acc#{BodyId => RecOutId};
+           (_, _, Acc) -> Acc
+        end, #{}, Nodes).
 
 -spec propagate_fixpoint_schemas(#circuit_graph{}, [{binary(), map()}],
                                  map(), map(), map()) -> #circuit_graph{}.
