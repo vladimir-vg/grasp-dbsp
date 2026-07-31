@@ -76,25 +76,28 @@ build_circuit(Plan, Inputs, Outputs, Gen, OpStates, DoKickoff) ->
     RecPids = maps:from_list([{R, spawn_rec(R, Configs)} || R <- RecRefs]),
     RefToPid = maps:merge(OpPids, RecPids),
 
-    RORefs = [R || R = {rec_output, _, _, _} <- maps:keys(Configs)],
+    RORefs = lists:usort([SR || {SR, _, _, _} <- Tuples, element(1, SR) =:= rec_output]),
     ROToRec = rec_output_to_rec(RecRefs, RORefs, Configs),
 
     CoordPids = spawn_coordinators(RecPids, Configs),
 
-    Resolve = fun(Ref) ->
+    ResolveStd = fun(Ref) ->
+        resolve_pid(Ref, RefToPid, #{}, Inputs, Outputs)
+    end,
+    ResolveWithRO = fun(Ref) ->
         resolve_pid(Ref, RefToPid, ROToRec, Inputs, Outputs)
     end,
 
     wire_rec_coordinators(RecPids, CoordPids),
 
-    {UpMaps, DownMaps} = build_wiring_maps(Tuples, Resolve),
+    {UpMaps, DownMaps} = build_wiring_maps(Tuples, ResolveStd),
 
     wire_all(Tuples, OpRefs, OpPids, Inputs, Outputs, UpMaps, DownMaps),
     validate_wiring(OpPids, RecPids, Inputs, Outputs),
 
-    wire_rec_body(RecPids, Tuples, Resolve),
-    wire_rec_source(RecPids, RecRefs, Tuples, Resolve, Inputs, Outputs, DoKickoff),
-    wire_output_consumers(RecPids, ROToRec, Tuples, Resolve),
+    wire_rec_body(RecPids, Tuples, ResolveStd),
+    wire_rec_source(RecPids, RecRefs, Tuples, ResolveStd, Inputs, Outputs, DoKickoff),
+    wire_output_consumers(RecPids, ROToRec, Tuples, ResolveWithRO),
 
     AllPids = maps:merge(OpPids, RecPids),
     #{gen => Gen, operators => AllPids, recs => RecPids, coordinators => CoordPids}.
@@ -237,8 +240,9 @@ wire_output_consumers(RecPids, ROToRec, Tuples, Resolve) ->
     maps:foreach(
         fun({rec, _Name, _SccId, _} = RecRef, RecPid) ->
             DirectOutputs = [Resolve(RR) || {SR, _SL, RR, _RL} <- Tuples,
-                                              SR =:= RecRef,
-                                              element(1, RR) =:= output],
+                                              element(1, SR) =:= rec,
+                                              element(1, RR) =:= output,
+                                              maps:get(SR, RecRefToRecPid, undefined) =:= RecPid],
             RecOutputPairs = [{RO, R} || {RO, R} <- maps:to_list(ROToRec), R =:= RecRef],
             IndirectOutputs = [Resolve(RR) || {SR, _SL, RR, _RL} <- Tuples,
                                                element(1, RR) =:= output,
