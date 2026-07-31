@@ -452,32 +452,48 @@ construct_one_fixpoint(G0, _FpHmac, FixInfo, LnIdMap, CInputMap,
             end
          end} || {K, ParamInfo} <- AllParams]),
 
-    %% Create Rec nodes for ALL params at their fixpoint_input placeholder IDs.
+    %% Create Rec nodes only for params whose fixpoint_input integrate has
+    %% downstream consumers in the body circuit.  Base params that are not
+    %% referenced by any body operator stay as plain integrates — they need
+    %% no iteration barrier and would cause deadlocks with empty body PIDs.
+    DownstreamIds = [
+        begin
+            PlaceholderId = maps:get(maps:get(input, ParamInfo), CInputMap),
+            {PlaceholderId, has_downstream_consumers(PlaceholderId, G0#circuit_graph.nodes)}
+        end || {_K, ParamInfo} <- AllParams],
+    DownstreamSet = sets:from_list([Id || {Id, true} <- DownstreamIds]),
+
     {G1, AllRecIds} = lists:foldl(
         fun({KwBin, ParamInfo}, {GA, RIds}) ->
             {PlaceholderId, OrigIns} = maps:get(KwBin, OriginalInputs),
-            RecName = maps:get(label, ParamInfo),
             IsSelfRef = maps:get(kind, ParamInfo) =:= self_ref,
-            BodyOutAddon = case IsSelfRef of
+            IsBase = not IsSelfRef,
+            case IsBase andalso not sets:is_element(PlaceholderId, DownstreamSet) of
                 true ->
-                    BodyOutLId = maps:get(body_out, ParamInfo),
-                    [maps:get(BodyOutLId, LnIdMap)];
-                false -> []
-            end,
-            RecInputs = lists:usort(OrigIns) ++ BodyOutAddon,
-            HasSource = OrigIns =/= [],
-            RecMeta = #{sourced => HasSource, scc_body => true},
-            RecMeta2 = case IsSelfRef of
-                true -> RecMeta#{has_body_out => true};
-                false -> RecMeta
-            end,
-            RecNode = #circuit_node{
-                id = PlaceholderId,
-                op = {rec, RecName, SccId},
-                inputs = RecInputs,
-                meta = RecMeta2},
-            Nodes2 = maps:put(PlaceholderId, RecNode, GA#circuit_graph.nodes),
-            {GA#circuit_graph{nodes = Nodes2}, RIds#{KwBin => PlaceholderId}}
+                    {GA, RIds};
+                false ->
+                    RecName = maps:get(label, ParamInfo),
+                    BodyOutAddon = case IsSelfRef of
+                        true ->
+                            BodyOutLId = maps:get(body_out, ParamInfo),
+                            [maps:get(BodyOutLId, LnIdMap)];
+                        false -> []
+                    end,
+                    RecInputs = lists:usort(OrigIns) ++ BodyOutAddon,
+                    HasSource = OrigIns =/= [],
+                    RecMeta = #{sourced => HasSource, scc_body => true},
+                    RecMeta2 = case IsSelfRef of
+                        true -> RecMeta#{has_body_out => true};
+                        false -> RecMeta
+                    end,
+                    RecNode = #circuit_node{
+                        id = PlaceholderId,
+                        op = {rec, RecName, SccId},
+                        inputs = RecInputs,
+                        meta = RecMeta2},
+                    Nodes2 = maps:put(PlaceholderId, RecNode, GA#circuit_graph.nodes),
+                    {GA#circuit_graph{nodes = Nodes2}, RIds#{KwBin => PlaceholderId}}
+            end
         end,
         {G0, #{}},
         AllParams),
@@ -554,6 +570,15 @@ construct_one_fixpoint(G0, _FpHmac, FixInfo, LnIdMap, CInputMap,
         [{maps:get(label, maps:get(KwBin, ParamsInfo)), ROId}
          || {KwBin, ROId} <- maps:to_list(RecOutputIds)])),
     {G6, NewROAcc}.
+
+%% @doc Does the integrate node at PlaceholderId have any downstream
+%% consumers in the circuit graph (any node with PlaceholderId in its
+%% input list)?
+has_downstream_consumers(PlaceholderId, Nodes) ->
+    lists:any(
+        fun({_Id, #circuit_node{inputs = Ins}}) ->
+            lists:member(PlaceholderId, Ins)
+        end, maps:to_list(Nodes)).
 
 %%====================================================================
 %% Schema computation for lowered nodes

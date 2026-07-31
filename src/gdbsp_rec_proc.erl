@@ -88,8 +88,7 @@ handle_info(_Msg, State) ->
 %%====================================================================
 
 dispatch_delta(From, Msg, State) ->
-    #{name := Name, coordinator := Coord, body_output_pid := BodyOut,
-      body_input_pids := BodyEntryPids} = State,
+    #{name := Name, coordinator := Coord, body_output_pid := BodyOut} = State,
     Source = maps:get(source_pid, State, undefined),
     ExtraSources = maps:get(extra_source_pids, State, []),
     Self = self(),
@@ -107,20 +106,6 @@ dispatch_delta(From, Msg, State) ->
                 false ->
                     exit({unknown_sender, From})
             end
-    end,
-    %% When BodyPids is empty and BodyOut is self, no barrier reaches the
-    %% body handler, so the Rec would never report iter_result.  Inject a
-    %% self-message to ensure the coordinator progresses.
-    _ = case {From, BodyOut, BodyEntryPids} of
-        {Coord, Self, []} when Coord =/= undefined, Self =/= undefined ->
-            {delta, Meta, _Deltas, _Src} = Msg,
-            case maps:is_key(barrier, Meta) of
-                true ->
-                    Self ! {delta, Meta, [], Self},
-                    true;
-                false -> false
-            end;
-        _ -> false
     end,
     maybe_self_loop(State2, Actions, Self),
     run_actions(Actions),
