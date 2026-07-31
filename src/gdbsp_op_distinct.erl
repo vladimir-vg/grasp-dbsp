@@ -40,6 +40,9 @@ handle_delta(#{seen := Seen, buffer := Buf0, downstream_label := Label} = St,
              default, {delta, Meta, Deltas}) ->
     NewBuf = Buf0 ++ Deltas,
     case maps:find(barrier, Meta) of
+        {ok, state_reset} ->
+            {St#{seen := #{}, buffer := []},
+             [{send, Label, {delta, Meta, []}}]};
         {ok, _} ->
             {Output, Seen2} = compute_distinct(NewBuf, Seen),
             Actions = case Output of

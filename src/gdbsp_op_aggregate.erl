@@ -71,6 +71,9 @@ handle_delta(#{buffer := Buf, downstream_label := Label} = St,
              default, {delta, Meta, Deltas}) ->
     NewBuf = Buf ++ Deltas,
     case maps:find(barrier, Meta) of
+        {ok, state_reset} ->
+            {St#{seen := #{}, results := #{}, buffer := []},
+             [{send, Label, {delta, Meta, []}}]};
         {ok, _} ->
             {St2, Output} = compute_aggregate(St#{buffer := NewBuf}),
             Actions = case Output of

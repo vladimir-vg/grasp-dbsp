@@ -98,17 +98,23 @@ commit(#{lhs_label := LL, rhs_label := RL,
     LHSMeta = gdbsp_operator_spec:meta_for(Acc, LL),
     RHSMeta = gdbsp_operator_spec:meta_for(Acc, RL),
     MergedMeta = merge_metas(#{LL => LHSMeta, RL => RHSMeta}),
-    LB = gdbsp_operator_spec:deltas_of(Acc, LL),
-    RB = gdbsp_operator_spec:deltas_of(Acc, RL),
-    Deltas = compute_bilinear(JoinFn, LB, RB, LI, RI),
-    NewLI = merge_indexed(LB, LI),
-    NewRI = merge_indexed(RB, RI),
-    St2 = St#{lhs_index := NewLI, rhs_index := NewRI},
-    case Deltas of
-        [] ->
+    case maps:get(barrier, MergedMeta, undefined) of
+        state_reset ->
+            St2 = St#{lhs_index := #{}, rhs_index := #{}},
             {St2, [{send, OutLabel, {delta, MergedMeta, []}}]};
         _ ->
-            {St2, [{send, OutLabel, {delta, MergedMeta, Deltas}}]}
+            LB = gdbsp_operator_spec:deltas_of(Acc, LL),
+            RB = gdbsp_operator_spec:deltas_of(Acc, RL),
+            Deltas = compute_bilinear(JoinFn, LB, RB, LI, RI),
+            NewLI = merge_indexed(LB, LI),
+            NewRI = merge_indexed(RB, RI),
+            St2 = St#{lhs_index := NewLI, rhs_index := NewRI},
+            case Deltas of
+                [] ->
+                    {St2, [{send, OutLabel, {delta, MergedMeta, []}}]};
+                _ ->
+                    {St2, [{send, OutLabel, {delta, MergedMeta, Deltas}}]}
+            end
     end.
 
 %%====================================================================

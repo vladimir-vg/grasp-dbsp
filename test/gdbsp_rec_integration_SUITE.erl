@@ -23,14 +23,16 @@
     sourced_single_rec_basic/1,
     sourced_single_rec_epoch_transition/1,
     sourceless_rec_basic/1,
-    mutual_recursion_two_recs/1
+    mutual_recursion_two_recs/1,
+    sourced_negative_delta_epoch/1
 ]).
 
 all() -> [
     sourced_single_rec_basic,
     sourced_single_rec_epoch_transition,
     sourceless_rec_basic,
-    mutual_recursion_two_recs
+    mutual_recursion_two_recs,
+    sourced_negative_delta_epoch
 ].
 
 init_per_suite(Config) -> Config.
@@ -317,3 +319,49 @@ mutual_recursion_two_recs(_Config) ->
 
     cleanup([Rec1, Rec2, CoordPid, Consumer1, Consumer2,
              BodyIn1, BodyOut1, BodyIn2, BodyOut2]).
+
+%%====================================================================
+%% sourced_negative_delta_epoch — verifies state_reset protocol
+%% Epoch 0: insert {+1, a} → fixpoint → consumer gets {+1, a}
+%% Epoch 1: retract {-1, a} → coord detects negative, sends reset →
+%%   Rec stores deferred_iter, sends state_reset to body →
+%%   body stubs echo state_reset → Rec handles, sends CID →
+%%   fixpoint → consumer gets {-1, a} (retraction propagated)
+%%====================================================================
+
+sourced_negative_delta_epoch(_Config) ->
+    Consumer = start_collector(),
+    {ok, RecPid} = gdbsp_rec_proc:start_link(#{name => <<"r1">>, scc_id => 0}),
+
+    {BodyIn, BodyOut} = body_entry_exit_pair(RecPid),
+    gen_server:call(RecPid, {set_body_inputs, [BodyIn]}),
+    gen_server:call(RecPid, {set_body_output, BodyOut}),
+
+    {ok, CoordPid} = gdbsp_rec_coord_proc:start_link(#{
+        scc_id => 0,
+        sourced => #{RecPid => #{name => <<"r1">>}},
+        sourceless => #{}}),
+    gen_server:call(RecPid, {set_coordinator, CoordPid}),
+    gen_server:call(RecPid, {set_consumer, Consumer}),
+
+    Src = self(),
+    gen_server:call(RecPid, {set_source, Src}),
+
+    %% Epoch 0: insert a
+    RecPid ! mk_delta(0, [{1, <<"a">>}], Src),
+    RecPid ! mk_barrier_delta(0, epoch_done, [], Src),
+    gen_server:cast(CoordPid, {activate}),
+
+    Batch0 = await(Consumer, 2),
+    All0 = lists:flatmap(fun({delta, _, Ds, _}) -> Ds end, Batch0),
+    true = lists:member({1, <<"a">>}, All0),
+
+    %% Epoch 1: retract a — should NOT crash on negative feedback
+    RecPid ! mk_delta(1, [{-1, <<"a">>}], Src),
+    RecPid ! mk_barrier_delta(1, epoch_done, [], Src),
+
+    Batch1 = await(Consumer, 2),
+    All1 = lists:flatmap(fun({delta, _, Ds, _}) -> Ds end, Batch1),
+    true = lists:member({-1, <<"a">>}, All1),
+
+    cleanup([RecPid, CoordPid, Consumer, BodyIn, BodyOut]).

@@ -43,6 +43,9 @@ handle_delta(#{buffer := Buf, prev := Prev, first := First,
                downstream_label := Label} = St, default, {delta, Meta, Deltas}) ->
     NewBuf = Buf ++ Deltas,
     case maps:find(barrier, Meta) of
+        {ok, state_reset} ->
+            {St#{prev := #{}, buffer := [], first := true},
+             [{send, Label, {delta, Meta, []}}]};
         {ok, _} ->
             NewPrev = gdbsp_zset:merge(Prev, gdbsp_zset:from_list(NewBuf)),
             Diff = case First of

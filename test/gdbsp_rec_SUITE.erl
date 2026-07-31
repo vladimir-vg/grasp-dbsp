@@ -29,7 +29,11 @@
     body_empty_reports_empty/1,
     body_non_empty_reports_non_empty/1,
     body_negative_feedback_exits/1,
-    drain_source_buf_consolidates/1
+    drain_source_buf_consolidates/1,
+    coord_iter_reset_mode_stores_deferred/1,
+    body_state_reset_clears_and_forwards/1,
+    body_state_reset_full_roundtrip/1,
+    reset_clears_deferred_iter/1
 ]).
 
 all() -> [
@@ -51,7 +55,11 @@ all() -> [
     body_empty_reports_empty,
     body_non_empty_reports_non_empty,
     body_negative_feedback_exits,
-    drain_source_buf_consolidates
+    drain_source_buf_consolidates,
+    coord_iter_reset_mode_stores_deferred,
+    body_state_reset_clears_and_forwards,
+    body_state_reset_full_roundtrip,
+    reset_clears_deferred_iter
 ].
 
 init_per_suite(Config) -> Config.
@@ -316,3 +324,81 @@ drain_source_buf_consolidates(_Config) ->
     not gdbsp_zset:is_empty(maps:get(current_source_delta, S2)),
     1 = gdbsp_zset:size(maps:get(consolidated_input_delta, S2)),
     [] = Actions.
+
+%%====================================================================
+%% state_reset — coordinator handler
+%%====================================================================
+
+coord_iter_reset_mode_stores_deferred(_Config) ->
+    C = coord_pid(), Body = body_pid(),
+    State0 = gdbsp_rec:init_state(#{name => <<"r1">>, scc_id => 0, coordinator => C,
+                                     body_input_pids => [Body]}),
+    CSD = gdbsp_zset:from_list([{-1, <<"a">>}]),
+    State = State0#{epoch => 5, current_source_delta => CSD},
+    {S2, Actions} = gdbsp_rec:handle_coord(State,
+        {delta, #{epoch => 5, barrier => {iter, 5, 0}, mode => reset}, [], C}, self()),
+    0 = maps:get(iter, S2),
+    CSD = maps:get(current_source_delta, S2),
+    {delta, #{barrier := {iter, 5, 0}, mode := reset}, [], _} = maps:get(deferred_iter, S2),
+    true = is_tuple(maps:get(deferred_iter, S2)),
+    [{send, Body, {delta, #{barrier := state_reset}, [], _}}] = Actions.
+
+%%====================================================================
+%% state_reset — body handler
+%%====================================================================
+
+body_state_reset_clears_and_forwards(_Config) ->
+    C = coord_pid(), Body = body_pid(),
+    State0 = gdbsp_rec:init_state(#{name => <<"r1">>, scc_id => 0, coordinator => C,
+                                     body_input_pids => [Body]}),
+    CID = gdbsp_zset:from_list([{1, <<"a">>}]),
+    State = State0#{epoch => 5, consolidated_input_delta => CID,
+                    consolidated_body_delta => gdbsp_zset:from_list([{1, <<"old">>}]),
+                    deferred_iter => {delta, #{epoch => 5, barrier => {iter, 5, 0}},
+                                      [], self()}},
+    {S2, Actions} = gdbsp_rec:handle_body(State,
+        {delta, #{epoch => 5, barrier => state_reset}, [], body_pid()}, self()),
+    undefined = maps:get(deferred_iter, S2),
+    true = gdbsp_zset:is_empty(maps:get(consolidated_body_delta, S2)),
+    undefined = maps:get(current_source_delta, S2),
+    [{send, Body, {delta, #{barrier := {iter, 5, 0}}, [{1, <<"a">>}], _}}] = Actions.
+
+body_state_reset_full_roundtrip(_Config) ->
+    C = coord_pid(), Body = body_pid(),
+    State0 = gdbsp_rec:init_state(#{name => <<"r1">>, scc_id => 0, coordinator => C,
+                                     body_input_pids => [Body]}),
+    State = State0#{epoch => 5, iter => 0,
+                    consolidated_input_delta => gdbsp_zset:from_list([{1, <<"x">>}]),
+                    consolidated_body_delta => gdbsp_zset:from_list([{1, <<"stale">>}]),
+                    consolidated_sent_delta => gdbsp_zset:new(),
+                    current_source_delta => gdbsp_zset:from_list([{-1, <<"a">>}]),
+                    deferred_iter => {delta, #{epoch => 5, barrier => {iter, 5, 0}}, [], self()}},
+
+    {S2, Actions1} = gdbsp_rec:handle_body(State,
+        {delta, #{epoch => 5, barrier => state_reset}, [], self()}, self()),
+
+    undefined = maps:get(deferred_iter, S2),
+    true = gdbsp_zset:is_empty(maps:get(consolidated_body_delta, S2)),
+    [{send, Body, {delta, #{barrier := {iter, 5, 0}}, [{1, <<"x">>}], _}}] = Actions1,
+
+    BodyN = body_pid(),
+    BeforeIter = maps:get(consolidated_body_delta, S2),
+    true = gdbsp_zset:is_empty(BeforeIter),
+
+    {S3, Actions2} = gdbsp_rec:handle_body(S2,
+        {delta, #{epoch => 5, barrier => {iter, 5, 0}}, [{1, <<"x">>}], BodyN}, self()),
+
+    not gdbsp_zset:is_empty(maps:get(consolidated_body_delta, S3)),
+    ReportAction = lists:keyfind(report_coord, 1, Actions2),
+    {report_coord, C2, {iter_result, 5, 0, non_empty, _}} = ReportAction,
+    C2 = C.
+
+reset_clears_deferred_iter(_Config) ->
+    C = coord_pid(),
+    State = gdbsp_rec:init_state(#{name => <<"r1">>, scc_id => 0, coordinator => C}),
+    Deferred = {delta, #{epoch => 5, barrier => {iter, 5, 0}, mode => reset}, [], C},
+    S1 = State#{epoch => 5, deferred_iter => Deferred},
+    {delta, _, _, _} = maps:get(deferred_iter, S1),
+    S2 = gdbsp_rec:reset_state(S1),
+    undefined = maps:get(deferred_iter, S2),
+    undefined = maps:get(epoch, S2).

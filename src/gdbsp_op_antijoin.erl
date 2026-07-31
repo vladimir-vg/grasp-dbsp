@@ -97,20 +97,26 @@ commit(#{lhs_label := LL, rhs_label := RL,
     LHSMeta = gdbsp_operator_spec:meta_for(Acc, LL),
     RHSMeta = gdbsp_operator_spec:meta_for(Acc, RL),
     MergedMeta = merge_metas(#{LL => LHSMeta, RL => RHSMeta}),
-    LB = gdbsp_operator_spec:deltas_of(Acc, LL),
-    RB = gdbsp_operator_spec:deltas_of(Acc, RL),
-    TempRI = merge_right_buf(RB, RI, KeyVars),
-    RightOut = right_delta_outputs(RB, RI, LI, KeyVars),
-    LeftOut = left_delta_outputs(LB, TempRI, KeyVars),
-    NewLI = merge_left_buf(LB, LI, KeyVars),
-    NewRI = merge_right_buf(RB, RI, KeyVars),
-    St2 = St#{lhs_index := NewLI, rhs_index := NewRI},
-    Deltas = RightOut ++ LeftOut,
-    case Deltas of
-        [] ->
+    case maps:get(barrier, MergedMeta, undefined) of
+        state_reset ->
+            St2 = St#{lhs_index := #{}, rhs_index := #{}},
             {St2, [{send, OutLabel, {delta, MergedMeta, []}}]};
         _ ->
-            {St2, [{send, OutLabel, {delta, MergedMeta, Deltas}}]}
+            LB = gdbsp_operator_spec:deltas_of(Acc, LL),
+            RB = gdbsp_operator_spec:deltas_of(Acc, RL),
+            TempRI = merge_right_buf(RB, RI, KeyVars),
+            RightOut = right_delta_outputs(RB, RI, LI, KeyVars),
+            LeftOut = left_delta_outputs(LB, TempRI, KeyVars),
+            NewLI = merge_left_buf(LB, LI, KeyVars),
+            NewRI = merge_right_buf(RB, RI, KeyVars),
+            St2 = St#{lhs_index := NewLI, rhs_index := NewRI},
+            Deltas = RightOut ++ LeftOut,
+            case Deltas of
+                [] ->
+                    {St2, [{send, OutLabel, {delta, MergedMeta, []}}]};
+                _ ->
+                    {St2, [{send, OutLabel, {delta, MergedMeta, Deltas}}]}
+            end
     end.
 
 %%====================================================================

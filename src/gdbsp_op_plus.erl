@@ -45,13 +45,19 @@ handle_delta(#{barrier := BS, n_labels := N, downstream_label := OutLabel} = St,
             {NewSt, []};
         {ok, NewSt, Acc} ->
             MergedMeta = merge_metas(Acc),
-            AllDeltas = lists:append(
-                [Ds || {delta, _, Ds, _} <- maps:values(Acc)]),
-            Actions = case AllDeltas of
-                [] -> [{send, OutLabel, {delta, MergedMeta, []}}];
-                _  -> [{send, OutLabel, {delta, MergedMeta, AllDeltas}}]
-            end,
-            {NewSt, Actions}
+            case maps:get(barrier, MergedMeta, undefined) of
+                state_reset ->
+                    {NewSt,
+                     [{send, OutLabel, {delta, MergedMeta, []}}]};
+                _ ->
+                    AllDeltas = lists:append(
+                        [Ds || {delta, _, Ds, _} <- maps:values(Acc)]),
+                    Actions = case AllDeltas of
+                        [] -> [{send, OutLabel, {delta, MergedMeta, []}}];
+                        _  -> [{send, OutLabel, {delta, MergedMeta, AllDeltas}}]
+                    end,
+                    {NewSt, Actions}
+            end
     end.
 
 -spec merge_metas(#{term() => {delta, map(), [term()], term()}}) -> map().

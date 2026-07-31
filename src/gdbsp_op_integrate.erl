@@ -42,6 +42,9 @@ handle_delta(#{state := St0, buffer := Buf0,
     St1 = gdbsp_zset:apply_deltas(Deltas, St0),
     NewBuf = Buf0 ++ Deltas,
     case Barrier of
+        state_reset ->
+            {State#{state := #{}, buffer := []},
+             [{send, Label, {delta, Meta, []}}]};
         undefined ->
             {State#{state := St1, buffer := NewBuf}, []};
         _ ->

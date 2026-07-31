@@ -40,6 +40,7 @@
     source_done             := boolean(),
     source_buf              := [{delta, map(), [term()], pid()}],
     has_negatives           := boolean() | undefined,
+    deferred_iter           := {delta, map(), [term()], pid()} | undefined,
     coordinator             := pid() | undefined,
     body_input_pids         := [pid()],
     body_output_pid         := pid() | undefined,
@@ -74,6 +75,7 @@ init_state(InitArgs) ->
         source_done    => false,
         source_buf     => [],
         has_negatives     => undefined,
+        deferred_iter     => undefined,
         coordinator    => maps:get(coordinator, InitArgs, undefined),
         body_input_pids => maps:get(body_input_pids, InitArgs, []),
         body_output_pid => maps:get(body_output_pid, InitArgs, undefined),
@@ -96,7 +98,8 @@ reset_state(State) ->
         consolidated_sent_delta  := gdbsp_zset:new(),
         source_done              := false,
         source_buf               := [],
-        has_negatives            := undefined
+        has_negatives            := undefined,
+        deferred_iter            := undefined
     }.
 
 %%====================================================================
@@ -203,18 +206,28 @@ handle_coord(#{name := Name, scc_id := SccId, body_input_pids := BodyPids, consu
             ?DBG("REC ~s COORD: iter epoch=~w round=~w body_pids=~w",
                    [Name, E, N, length(BodyPids)]),
             State2 = State#{epoch := E, iter := N},
-            {State3, DeltasOut} = case maps:get(current_source_delta, State2) of
-                undefined ->
-                    {State2, []};
-                CSD ->
-                    CSDList = gdbsp_zset:to_list(CSD),
-                    ?DBG("REC ~s COORD: iter forwarding current_source_delta=~w",
-                           [Name, CSDList]),
-                    {State2#{current_source_delta := undefined}, CSDList}
-            end,
-            ?DBG("REC ~s COORD: iter epoch=~w round=~w diff=~w to ~w body_pids",
-                   [Name, E, N, length(DeltasOut), length(BodyPids)]),
-            {State3, [{send, P, {delta, Meta, DeltasOut, RecPid}} || P <- BodyPids]};
+            case maps:get(mode, Meta, undefined) of
+                reset ->
+                    ?DBG("REC ~s COORD: reset mode iter ~w → storing deferred_iter, sending state_reset",
+                           [Name, N]),
+                    DeferredMsg = {delta, Meta, [], _From},
+                    State3 = State2#{deferred_iter := DeferredMsg},
+                    ResetMeta = #{epoch => E, barrier => state_reset},
+                    {State3, [{send, P, {delta, ResetMeta, [], RecPid}} || P <- BodyPids]};
+                _ ->
+                    {State3, DeltasOut} = case maps:get(current_source_delta, State2) of
+                        undefined ->
+                            {State2, []};
+                        CSD ->
+                            CSDList = gdbsp_zset:to_list(CSD),
+                            ?DBG("REC ~s COORD: iter forwarding current_source_delta=~w",
+                                   [Name, CSDList]),
+                            {State2#{current_source_delta := undefined}, CSDList}
+                    end,
+                    ?DBG("REC ~s COORD: iter epoch=~w round=~w diff=~w to ~w body_pids",
+                           [Name, E, N, length(DeltasOut), length(BodyPids)]),
+                    {State3, [{send, P, {delta, Meta, DeltasOut, RecPid}} || P <- BodyPids]}
+            end;
         error ->
             true = (Epoch =:= undefined orelse E >= Epoch),
             State2 = State#{epoch := E},
@@ -240,34 +253,60 @@ handle_body(#{name := Name, scc_id := SccId,
            [Name, SccId, Barrier, Epoch, Iter, length(Deltas),
             gdbsp_zset:size(BodyDelta), gdbsp_zset:size(SentDelta),
             lists:sublist(gdbsp_zset:to_list(BodyDelta), 5), 80]),
-    NewZ = gdbsp_zset:from_list(Deltas),
-    BodyDelta2 = gdbsp_zset:merge(BodyDelta, NewZ),
-    State2 = State#{consolidated_body_delta := BodyDelta2},
-    ?DBG("REC ~s BODY: ~s body_delta_sz=~w new_delta_sz=~w feedback_sz=~w new_head=~P",
-           [Name, barrier_label(Barrier), gdbsp_zset:size(BodyDelta2),
-            gdbsp_zset:size(NewZ), length(Deltas),
-            lists:sublist(Deltas, 5), 80]),
-    FeedbackActions = case gdbsp_zset:is_empty(NewZ) of
-        true -> [];
-        false ->
-            check_no_negative_feedback(NewZ, Name),
-            DeltasOut = gdbsp_zset:to_list(NewZ),
-            [{send, P, {delta, #{epoch => Epoch}, DeltasOut, RecPid}} || P <- BodyPids]
-    end,
-    Report = case Barrier of
-        {iter, E, N} ->
-            E = Epoch,
-            N = Iter,
-            Result = case gdbsp_zset:is_empty(NewZ) of
-                true -> empty;
-                false -> non_empty
+    case Barrier of
+        state_reset ->
+            handle_body_state_reset(State, RecPid);
+        _ ->
+            NewZ = gdbsp_zset:from_list(Deltas),
+            BodyDelta2 = gdbsp_zset:merge(BodyDelta, NewZ),
+            State2 = State#{consolidated_body_delta := BodyDelta2},
+            ?DBG("REC ~s BODY: ~s body_delta_sz=~w new_delta_sz=~w feedback_sz=~w new_head=~P",
+                   [Name, barrier_label(Barrier), gdbsp_zset:size(BodyDelta2),
+                    gdbsp_zset:size(NewZ), length(Deltas),
+                    lists:sublist(Deltas, 5), 80]),
+            FeedbackActions = case gdbsp_zset:is_empty(NewZ) of
+                true -> [];
+                false ->
+                    check_no_negative_feedback(NewZ, Name),
+                    DeltasOut = gdbsp_zset:to_list(NewZ),
+                    [{send, P, {delta, #{epoch => Epoch}, DeltasOut, RecPid}} || P <- BodyPids]
             end,
-            ?DBG("REC ~s BODY: result=~w round=~w feedback_actions=~w",
-                   [Name, Result, N, length(FeedbackActions)]),
-            [{report_coord, Coord, {iter_result, E, N, Result, RecPid}}];
-        _ -> []
-    end,
-    {State2, FeedbackActions ++ Report}.
+            Report = case Barrier of
+                {iter, E, N} ->
+                    E = Epoch,
+                    N = Iter,
+                    Result = case gdbsp_zset:is_empty(NewZ) of
+                        true -> empty;
+                        false -> non_empty
+                    end,
+                    ?DBG("REC ~s BODY: result=~w round=~w feedback_actions=~w",
+                           [Name, Result, N, length(FeedbackActions)]),
+                    [{report_coord, Coord, {iter_result, E, N, Result, RecPid}}];
+                _ -> []
+            end,
+            {State2, FeedbackActions ++ Report}
+    end.
+
+%%--------------------------------------------------------------------
+%% state_reset handler
+%%--------------------------------------------------------------------
+
+handle_body_state_reset(#{name := Name,
+                           body_input_pids := BodyPids,
+                           consolidated_input_delta := CID} = State, RecPid) ->
+    ?DBG("REC ~s BODY: state_reset → clearing consolidated_body_delta, sending consolidated_input_delta=~w",
+           [Name, gdbsp_zset:size(CID)]),
+    CIDList = gdbsp_zset:to_list(CID),
+    #{deferred_iter := Deferred} = State,
+    {delta, DefMeta, _, _} = Deferred,
+    DefMeta2 = maps:remove(mode, DefMeta),
+    IterDeltas = CIDList,
+    IterActions = [{send, P, {delta, DefMeta2, IterDeltas, RecPid}} || P <- BodyPids],
+    State2 = State#{deferred_iter := undefined,
+                    consolidated_body_delta := gdbsp_zset:new(),
+                    current_source_delta := undefined},
+    ?DBG("REC ~s BODY: state_reset done, consolidated_body_delta cleared, cumulative data merged into deferred iter", [Name]),
+    {State2, IterActions}.
 
 %%--------------------------------------------------------------------
 %% barrier label helper
@@ -275,7 +314,8 @@ handle_body(#{name := Name, scc_id := SccId,
 
 barrier_label(undefined) -> "no_barrier";
 barrier_label(epoch_done) -> "epoch_done";
-barrier_label({iter, _E, N}) -> lists:flatten(io_lib:format("iter=~w", [N])).
+barrier_label({iter, _E, N}) -> lists:flatten(io_lib:format("iter=~w", [N]));
+barrier_label(state_reset) -> "state_reset".
 
 %%====================================================================
 %% Internal — source buffer drain (called at epoch transition)
