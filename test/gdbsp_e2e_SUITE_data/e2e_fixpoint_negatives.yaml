@@ -1,0 +1,235 @@
+# Test 1: Multi-iteration countdown + full retraction.
+# E0: insert {v: 3} → countdown produces {0,1,2,3} (4 iterations)
+# E1: retract {v: 3} → all derived values retracted via state_reset
+- source: |
+    circuit countdown(base: input, result: r):
+        filtered := filter(r, gt_zero)
+        next := map(filtered, dec_fn)
+        combined := plus(input, next)
+        result := distinct(combined)
+
+    src := source("data")
+    src :: stream(struct("v": i64))
+    fp := fixpoint countdown(base: src, result: src)
+    out := fp.result
+
+  functions:
+    gt_zero:
+      call: "gt"
+      args:
+        - call: "struct:get"
+          args:
+            - arg: row
+          kwargs:
+            key:
+              type: string
+              value: "v"
+        - {type: "i64", value: "0"}
+    dec_fn:
+      call: "struct"
+      kwargs:
+        v:
+          call: "math:sub"
+          args:
+            - call: "struct:get"
+              args:
+                - arg: row
+              kwargs:
+                key:
+                  type: string
+                  value: "v"
+            - {type: "i64", value: "1"}
+
+  input:
+    - data:
+        - [1, {v: "3"}]
+    - data:
+        - [-1, {v: "3"}]
+
+  expected:
+    - out:
+        - [1, {v: "0"}]
+        - [1, {v: "1"}]
+        - [1, {v: "2"}]
+        - [1, {v: "3"}]
+    - out:
+        - [-1, {v: "0"}]
+        - [-1, {v: "1"}]
+        - [-1, {v: "2"}]
+        - [-1, {v: "3"}]
+
+# Test 2: Multi-iteration countdown + multi-epoch add then retract.
+# E0: seed {3} → produces {0,1,2,3}. sent_delta = {0,1,2,3}.
+# E1: add {5} → distinct only emits NEW values {4,5} (0-3 already seen).
+#     sent_delta becomes {0,1,2,3,4,5}. Consumer sees {4,5}.
+# E2: retract {3} → state_reset with CID={5}. Body runs from scratch
+#     for {5} → produces {0,1,2,3,4,5}. diff = empty (already sent).
+#     Consumer sees {}.
+- source: |
+    circuit countdown(base: input, result: r):
+        filtered := filter(r, gt_zero)
+        next := map(filtered, dec_fn)
+        combined := plus(input, next)
+        result := distinct(combined)
+
+    src := source("data")
+    src :: stream(struct("v": i64))
+    fp := fixpoint countdown(base: src, result: src)
+    out := fp.result
+
+  functions:
+    gt_zero:
+      call: "gt"
+      args:
+        - call: "struct:get"
+          args:
+            - arg: row
+          kwargs:
+            key:
+              type: string
+              value: "v"
+        - {type: "i64", value: "0"}
+    dec_fn:
+      call: "struct"
+      kwargs:
+        v:
+          call: "math:sub"
+          args:
+            - call: "struct:get"
+              args:
+                - arg: row
+              kwargs:
+                key:
+                  type: string
+                  value: "v"
+            - {type: "i64", value: "1"}
+
+  input:
+    - data:
+        - [1, {v: "3"}]
+    - data:
+        - [1, {v: "5"}]
+    - data:
+        - [-1, {v: "3"}]
+
+  expected:
+    - out:
+        - [1, {v: "0"}]
+        - [1, {v: "1"}]
+        - [1, {v: "2"}]
+        - [1, {v: "3"}]
+    - out:
+        - [1, {v: "4"}]
+        - [1, {v: "5"}]
+    - out: []
+
+# Test 3: Join in body + retraction.
+# Circuit joining two inputs with self-feedback on one input.
+# E0: both sides join → produce result
+# E1: retract one side → retract the joined result via state_reset
+- source: |
+    circuit accumulator(base: input, state: s):
+        joined := join(input, s, on: ["k"])
+        state := distinct(joined)
+
+    src_a := source("la")
+    src_a :: stream(struct("k": i64, "a": i64))
+    src_b := source("rb")
+    src_b :: stream(struct("k": i64, "b": string("UTF-8")))
+
+    fp := fixpoint accumulator(base: src_a, state: src_b)
+    out := fp.state
+
+  input:
+    - la:
+        - [1, {k: "1", a: "10"}]
+      rb:
+        - [1, {k: "1", b: "hello"}]
+    - la:
+        - [-1, {k: "1", a: "10"}]
+
+  expected:
+    - out:
+        - [1, {k: "1", a: "10", b: "hello"}]
+    - out:
+        - [-1, {k: "1", a: "10", b: "hello"}]
+
+# Test 4: Two coexisting fixpoints, only one retracts.
+# fp_i64 and fp_str have independent sources and SCCs.
+# E0: insert to both → both produce
+# E1: retract from i64 only, insert different str → only i64 retracts
+- source: |
+    circuit echo_i64(x: val):
+        result := distinct(val)
+    circuit echo_str(x: val):
+        result := distinct(val)
+
+    src_i64 := source("ints")
+    src_i64 :: stream(struct("v": i64))
+    src_str := source("strs")
+    src_str :: stream(struct("v": string("UTF-8")))
+
+    fp_i64 := fixpoint echo_i64(x: src_i64)
+    fp_str := fixpoint echo_str(x: src_str)
+
+    out_i64 := fp_i64.result
+    out_str := fp_str.result
+
+  input:
+    - ints:
+        - [1, {v: "42"}]
+      strs:
+        - [1, {v: "hello"}]
+    - ints:
+        - [-1, {v: "42"}]
+      strs:
+        - [1, {v: "world"}]
+
+  expected:
+    - out_i64:
+        - [1, {v: "42"}]
+      out_str:
+        - [1, {v: "hello"}]
+    - out_i64:
+        - [-1, {v: "42"}]
+      out_str:
+        - [1, {v: "world"}]
+
+# Test 5: Chained fixpoints (EXPECTED FAILURE — fp2 never receives
+# epoch_done barriers from fp1's body output, so it never processes
+# data). Once epoch_done propagation is implemented, fp2 should produce
+# identical outputs to fp1.
+- source: |
+    circuit echo(x: val):
+        result := distinct(val)
+
+    src := source("data")
+    src :: stream(struct("v": i64))
+
+    fp1 := fixpoint echo(x: src)
+    fp2 := fixpoint echo(x: fp1.result)
+
+    out1 := fp1.result
+    out2 := fp2.result
+
+  input:
+    - data:
+        - [1, {v: "42"}]
+    - data:
+        - [1, {v: "99"}]
+    - data:
+        - [-1, {v: "42"}]
+
+  expected:
+    - out1:
+        - [1, {v: "42"}]
+      out2:
+        - [1, {v: "42"}]
+    - out1:
+        - [1, {v: "99"}]
+      out2:
+        - [1, {v: "99"}]
+    - out1:
+        - [-1, {v: "42"}]
+      out2:
+        - [-1, {v: "42"}]
