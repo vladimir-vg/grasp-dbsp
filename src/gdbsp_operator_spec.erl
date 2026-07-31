@@ -157,6 +157,9 @@ produces_full_output(_)                 -> false.
 agg_init_update(sum) ->
     {fun(V, W) -> V * W end, fun(Acc, V, W) -> Acc + V * W end,
      fun(V) -> V end};
+agg_init_update(avg) ->
+    {fun(V, W) -> V * W end, fun(Acc, V, W) -> Acc + V * W end,
+     fun(V) -> V end};
 agg_init_update(count) ->
     {fun(_V, W) -> W end, fun(Acc, _V, W) -> Acc + W end,
      fun(V) -> V end};

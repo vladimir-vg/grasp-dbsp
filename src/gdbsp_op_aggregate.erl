@@ -44,41 +44,25 @@ init(#{init_fn := InitFn, update_fn := UpdateFn, result_fn := ResultFn}) ->
        seen => #{}, results => #{}, buffer => [], downstream_label => default},
      [default], [default]}.
 
-%% Aggregate init/update/result dispatch (relocated from gdbsp_operator_spec,
-%% which gg-basic does not carry — reuse Phase C2.1).
+%% Aggregate init/update/result dispatch — delegates to gdbsp_operator_spec
+%% for common aggregates; xor keeps its own Value:bytewise_xor integration.
 -spec agg_init_update(atom(), module()) ->
     {fun((term(), integer()) -> term()),
      fun((term(), term(), integer()) -> term()),
      fun((term()) -> term() | drop)}.
-agg_init_update(sum, _Value) ->
-    {fun(V, W) -> V * W end, fun(Acc, V, W) -> Acc + V * W end,
-     fun(V) -> V end};
-agg_init_update(count, _Value) ->
-    {fun(_V, W) -> W end, fun(Acc, _V, W) -> Acc + W end,
-     fun(V) -> V end};
-agg_init_update(avg, _Value) ->
-    {fun(V, W) -> V * W end, fun(Acc, V, W) -> Acc + V * W end,
-     fun(V) -> V end};
-agg_init_update(min, _Value) ->
-    {fun(V, _W) -> V end, fun(Acc, V, _W) -> erlang:min(Acc, V) end,
-     fun(V) -> V end};
-agg_init_update(max, _Value) ->
-    {fun(V, _W) -> V end, fun(Acc, V, _W) -> erlang:max(Acc, V) end,
-     fun(V) -> V end};
 agg_init_update('xor', Value) ->
     {fun(V, _W) -> {byte_size(V), V} end,
      fun({poisoned, _} = Acc, _V, _W) -> Acc;
-        ({Len, Acc}, V, _W) when byte_size(V) =:= Len ->
-            {Len, try Value:bytewise_xor(Acc, V)
-                  catch error:undef -> Acc bxor V end};
-        (_, _, _) -> {poisoned, none}
+         ({Len, Acc}, V, _W) when byte_size(V) =:= Len ->
+             {Len, try Value:bytewise_xor(Acc, V)
+                   catch error:undef -> Acc bxor V end};
+         (_, _, _) -> {poisoned, none}
      end,
      fun({poisoned, _}) -> drop;
-        ({_, Acc}) -> Acc
+         ({_, Acc}) -> Acc
      end};
-agg_init_update(_, _Value) ->
-    {fun(V, W) -> V * W end, fun(Acc, V, W) -> Acc + V * W end,
-     fun(V) -> V end}.
+agg_init_update(Agg, _Value) ->
+    gdbsp_operator_spec:agg_init_update(Agg).
 
 
 -spec handle_delta(op_state(), term(), {delta, map(), [term()]}) ->

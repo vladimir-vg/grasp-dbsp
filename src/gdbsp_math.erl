@@ -11,6 +11,26 @@
 
 -include("gdbsp_type.hrl").
 
+%% ── Macros ──────────────────────────────────────────────────────────
+
+-define(SIGNED_BINOP(Fn, Op, Type, Bits),
+    Fn({value, Type, A}, {value, Type, B}) ->
+        {value, Type, wrap_signed(A Op B, Bits)}).
+
+-define(UNSIGNED_BINOP(Fn, Op, Type, Bits),
+    Fn({value, Type, A}, {value, Type, B}) ->
+        {value, Type, wrap_unsigned(A Op B, Bits)}).
+
+-define(SIGNED_DIVMOD(Fn, Op, Type),
+    Fn({value, Type, _A}, {value, Type, 0}) -> throw(drop_row);
+    Fn({value, Type, A}, {value, Type, B}) ->
+        {value, Type, A Op B}).
+
+-define(UNSIGNED_DIVMOD(Fn, Op, Type),
+    Fn({value, Type, _A}, {value, Type, 0}) -> throw(drop_row);
+    Fn({value, Type, A}, {value, Type, B}) ->
+        {value, Type, A Op B}).
+
 %% ── math: Binary Arithmetic ─────────────────────────────────────────
 -export([math_add_i8_i8/2, math_add_i16_i16/2, math_add_i32_i32/2, math_add_i64_i64/2]).
 -export([math_add_u8_u8/2, math_add_u16_u16/2, math_add_u32_u32/2, math_add_u64_u64/2]).
@@ -66,33 +86,16 @@
 %% math: Binary Arithmetic — add
 %%====================================================================
 
--spec math_add_i8_i8(value(), value()) -> value().
-math_add_i8_i8({value, i8, A}, {value, i8, B}) ->
-    {value, i8, wrap_signed(A + B, 8)}.
+%% -spec for each signed variant: math_add_T_T(value(), value()) -> value().
+?SIGNED_BINOP(math_add_i8_i8, +, i8, 8).
+?SIGNED_BINOP(math_add_i16_i16, +, i16, 16).
+?SIGNED_BINOP(math_add_i32_i32, +, i32, 32).
+?SIGNED_BINOP(math_add_i64_i64, +, i64, 64).
 
--spec math_add_i16_i16(value(), value()) -> value().
-math_add_i16_i16({value, i16, A}, {value, i16, B}) ->
-    {value, i16, wrap_signed(A + B, 16)}.
-
--spec math_add_i32_i32(value(), value()) -> value().
-math_add_i32_i32({value, i32, A}, {value, i32, B}) ->
-    {value, i32, wrap_signed(A + B, 32)}.
-
--spec math_add_i64_i64(value(), value()) -> value().
-math_add_i64_i64({value, i64, A}, {value, i64, B}) ->
-    {value, i64, wrap_signed(A + B, 64)}.
-
-math_add_u8_u8({value, u8, A}, {value, u8, B}) ->
-    {value, u8, wrap_unsigned(A + B, 8)}.
-
-math_add_u16_u16({value, u16, A}, {value, u16, B}) ->
-    {value, u16, wrap_unsigned(A + B, 16)}.
-
-math_add_u32_u32({value, u32, A}, {value, u32, B}) ->
-    {value, u32, wrap_unsigned(A + B, 32)}.
-
-math_add_u64_u64({value, u64, A}, {value, u64, B}) ->
-    {value, u64, wrap_unsigned(A + B, 64)}.
+?UNSIGNED_BINOP(math_add_u8_u8, +, u8, 8).
+?UNSIGNED_BINOP(math_add_u16_u16, +, u16, 16).
+?UNSIGNED_BINOP(math_add_u32_u32, +, u32, 32).
+?UNSIGNED_BINOP(math_add_u64_u64, +, u64, 64).
 
 math_add_integer_integer({value, integer, A}, {value, integer, B}) ->
     {value, integer, A + B};
@@ -167,33 +170,16 @@ math_add_f32_f32({value, f32, A}, {value, f32, B}) when is_float(A), is_float(B)
 %% math: Binary Arithmetic — sub
 %%====================================================================
 
--spec math_sub_i8_i8(value(), value()) -> value().
-math_sub_i8_i8({value, i8, A}, {value, i8, B}) ->
-    {value, i8, wrap_signed(A - B, 8)}.
+%% -spec for each signed variant: math_sub_T_T(value(), value()) -> value().
+?SIGNED_BINOP(math_sub_i8_i8, -, i8, 8).
+?SIGNED_BINOP(math_sub_i16_i16, -, i16, 16).
+?SIGNED_BINOP(math_sub_i32_i32, -, i32, 32).
+?SIGNED_BINOP(math_sub_i64_i64, -, i64, 64).
 
--spec math_sub_i16_i16(value(), value()) -> value().
-math_sub_i16_i16({value, i16, A}, {value, i16, B}) ->
-    {value, i16, wrap_signed(A - B, 16)}.
-
--spec math_sub_i32_i32(value(), value()) -> value().
-math_sub_i32_i32({value, i32, A}, {value, i32, B}) ->
-    {value, i32, wrap_signed(A - B, 32)}.
-
--spec math_sub_i64_i64(value(), value()) -> value().
-math_sub_i64_i64({value, i64, A}, {value, i64, B}) ->
-    {value, i64, wrap_signed(A - B, 64)}.
-
-math_sub_u8_u8({value, u8, A}, {value, u8, B}) ->
-    {value, u8, wrap_unsigned(A - B, 8)}.
-
-math_sub_u16_u16({value, u16, A}, {value, u16, B}) ->
-    {value, u16, wrap_unsigned(A - B, 16)}.
-
-math_sub_u32_u32({value, u32, A}, {value, u32, B}) ->
-    {value, u32, wrap_unsigned(A - B, 32)}.
-
-math_sub_u64_u64({value, u64, A}, {value, u64, B}) ->
-    {value, u64, wrap_unsigned(A - B, 64)}.
+?UNSIGNED_BINOP(math_sub_u8_u8, -, u8, 8).
+?UNSIGNED_BINOP(math_sub_u16_u16, -, u16, 16).
+?UNSIGNED_BINOP(math_sub_u32_u32, -, u32, 32).
+?UNSIGNED_BINOP(math_sub_u64_u64, -, u64, 64).
 
 math_sub_integer_integer({value, integer, A}, {value, integer, B}) ->
     {value, integer, A - B};
@@ -272,33 +258,16 @@ math_sub_f32_f32({value, f32, A}, {value, f32, B}) when is_float(A), is_float(B)
 %% math: Binary Arithmetic — mul
 %%====================================================================
 
--spec math_mul_i8_i8(value(), value()) -> value().
-math_mul_i8_i8({value, i8, A}, {value, i8, B}) ->
-    {value, i8, wrap_signed(A * B, 8)}.
+%% -spec for each signed variant: math_mul_T_T(value(), value()) -> value().
+?SIGNED_BINOP(math_mul_i8_i8, *, i8, 8).
+?SIGNED_BINOP(math_mul_i16_i16, *, i16, 16).
+?SIGNED_BINOP(math_mul_i32_i32, *, i32, 32).
+?SIGNED_BINOP(math_mul_i64_i64, *, i64, 64).
 
--spec math_mul_i16_i16(value(), value()) -> value().
-math_mul_i16_i16({value, i16, A}, {value, i16, B}) ->
-    {value, i16, wrap_signed(A * B, 16)}.
-
--spec math_mul_i32_i32(value(), value()) -> value().
-math_mul_i32_i32({value, i32, A}, {value, i32, B}) ->
-    {value, i32, wrap_signed(A * B, 32)}.
-
--spec math_mul_i64_i64(value(), value()) -> value().
-math_mul_i64_i64({value, i64, A}, {value, i64, B}) ->
-    {value, i64, wrap_signed(A * B, 64)}.
-
-math_mul_u8_u8({value, u8, A}, {value, u8, B}) ->
-    {value, u8, wrap_unsigned(A * B, 8)}.
-
-math_mul_u16_u16({value, u16, A}, {value, u16, B}) ->
-    {value, u16, wrap_unsigned(A * B, 16)}.
-
-math_mul_u32_u32({value, u32, A}, {value, u32, B}) ->
-    {value, u32, wrap_unsigned(A * B, 32)}.
-
-math_mul_u64_u64({value, u64, A}, {value, u64, B}) ->
-    {value, u64, wrap_unsigned(A * B, 64)}.
+?UNSIGNED_BINOP(math_mul_u8_u8, *, u8, 8).
+?UNSIGNED_BINOP(math_mul_u16_u16, *, u16, 16).
+?UNSIGNED_BINOP(math_mul_u32_u32, *, u32, 32).
+?UNSIGNED_BINOP(math_mul_u64_u64, *, u64, 64).
 
 math_mul_integer_integer({value, integer, A}, {value, integer, B}) ->
     {value, integer, A * B};
@@ -402,41 +371,16 @@ math_mul_f32_f32({value, f32, A}, {value, f32, B}) when is_float(A), is_float(B)
 %% math: Binary Arithmetic — div
 %%====================================================================
 
--spec math_div_i8_i8(value(), value()) -> value().
-math_div_i8_i8({value, i8, _A}, {value, i8, 0}) -> throw(drop_row);
-math_div_i8_i8({value, i8, A}, {value, i8, B}) ->
-    {value, i8, A div B}.
+%% -spec for each signed variant: math_div_T_T(value(), value()) -> value().
+?SIGNED_DIVMOD(math_div_i8_i8, div, i8).
+?SIGNED_DIVMOD(math_div_i16_i16, div, i16).
+?SIGNED_DIVMOD(math_div_i32_i32, div, i32).
+?SIGNED_DIVMOD(math_div_i64_i64, div, i64).
 
--spec math_div_i16_i16(value(), value()) -> value().
-math_div_i16_i16({value, i16, _A}, {value, i16, 0}) -> throw(drop_row);
-math_div_i16_i16({value, i16, A}, {value, i16, B}) ->
-    {value, i16, A div B}.
-
--spec math_div_i32_i32(value(), value()) -> value().
-math_div_i32_i32({value, i32, _A}, {value, i32, 0}) -> throw(drop_row);
-math_div_i32_i32({value, i32, A}, {value, i32, B}) ->
-    {value, i32, A div B}.
-
--spec math_div_i64_i64(value(), value()) -> value().
-math_div_i64_i64({value, i64, _A}, {value, i64, 0}) -> throw(drop_row);
-math_div_i64_i64({value, i64, A}, {value, i64, B}) ->
-    {value, i64, A div B}.
-
-math_div_u8_u8({value, u8, _A}, {value, u8, 0}) -> throw(drop_row);
-math_div_u8_u8({value, u8, A}, {value, u8, B}) ->
-    {value, u8, A div B}.
-
-math_div_u16_u16({value, u16, _A}, {value, u16, 0}) -> throw(drop_row);
-math_div_u16_u16({value, u16, A}, {value, u16, B}) ->
-    {value, u16, A div B}.
-
-math_div_u32_u32({value, u32, _A}, {value, u32, 0}) -> throw(drop_row);
-math_div_u32_u32({value, u32, A}, {value, u32, B}) ->
-    {value, u32, A div B}.
-
-math_div_u64_u64({value, u64, _A}, {value, u64, 0}) -> throw(drop_row);
-math_div_u64_u64({value, u64, A}, {value, u64, B}) ->
-    {value, u64, A div B}.
+?UNSIGNED_DIVMOD(math_div_u8_u8, div, u8).
+?UNSIGNED_DIVMOD(math_div_u16_u16, div, u16).
+?UNSIGNED_DIVMOD(math_div_u32_u32, div, u32).
+?UNSIGNED_DIVMOD(math_div_u64_u64, div, u64).
 
 math_div_integer_integer({value, integer, _A}, {value, integer, 0}) -> throw(drop_row);
 math_div_integer_integer({value, integer, A}, {value, integer, B}) ->
@@ -547,41 +491,16 @@ math_div_f32_f32({value, f32, A}, {value, f32, B}) when is_float(A), is_float(B)
 %% math: Binary Arithmetic — mod
 %%====================================================================
 
--spec math_mod_i8_i8(value(), value()) -> value().
-math_mod_i8_i8({value, i8, _A}, {value, i8, 0}) -> throw(drop_row);
-math_mod_i8_i8({value, i8, A}, {value, i8, B}) ->
-    {value, i8, A rem B}.
+%% -spec for each signed variant: math_mod_T_T(value(), value()) -> value().
+?SIGNED_DIVMOD(math_mod_i8_i8, rem, i8).
+?SIGNED_DIVMOD(math_mod_i16_i16, rem, i16).
+?SIGNED_DIVMOD(math_mod_i32_i32, rem, i32).
+?SIGNED_DIVMOD(math_mod_i64_i64, rem, i64).
 
--spec math_mod_i16_i16(value(), value()) -> value().
-math_mod_i16_i16({value, i16, _A}, {value, i16, 0}) -> throw(drop_row);
-math_mod_i16_i16({value, i16, A}, {value, i16, B}) ->
-    {value, i16, A rem B}.
-
--spec math_mod_i32_i32(value(), value()) -> value().
-math_mod_i32_i32({value, i32, _A}, {value, i32, 0}) -> throw(drop_row);
-math_mod_i32_i32({value, i32, A}, {value, i32, B}) ->
-    {value, i32, A rem B}.
-
--spec math_mod_i64_i64(value(), value()) -> value().
-math_mod_i64_i64({value, i64, _A}, {value, i64, 0}) -> throw(drop_row);
-math_mod_i64_i64({value, i64, A}, {value, i64, B}) ->
-    {value, i64, A rem B}.
-
-math_mod_u8_u8({value, u8, _A}, {value, u8, 0}) -> throw(drop_row);
-math_mod_u8_u8({value, u8, A}, {value, u8, B}) ->
-    {value, u8, A rem B}.
-
-math_mod_u16_u16({value, u16, _A}, {value, u16, 0}) -> throw(drop_row);
-math_mod_u16_u16({value, u16, A}, {value, u16, B}) ->
-    {value, u16, A rem B}.
-
-math_mod_u32_u32({value, u32, _A}, {value, u32, 0}) -> throw(drop_row);
-math_mod_u32_u32({value, u32, A}, {value, u32, B}) ->
-    {value, u32, A rem B}.
-
-math_mod_u64_u64({value, u64, _A}, {value, u64, 0}) -> throw(drop_row);
-math_mod_u64_u64({value, u64, A}, {value, u64, B}) ->
-    {value, u64, A rem B}.
+?UNSIGNED_DIVMOD(math_mod_u8_u8, rem, u8).
+?UNSIGNED_DIVMOD(math_mod_u16_u16, rem, u16).
+?UNSIGNED_DIVMOD(math_mod_u32_u32, rem, u32).
+?UNSIGNED_DIVMOD(math_mod_u64_u64, rem, u64).
 
 math_mod_integer_integer({value, integer, _A}, {value, integer, 0}) -> throw(drop_row);
 math_mod_integer_integer({value, integer, A}, {value, integer, B}) ->

@@ -14,6 +14,8 @@
 -include("gdbsp_type.hrl").
 -include("gdbsp_lowered.hrl").
 
+-import(gdbsp_string_util, [parse_string_list/1]).
+
 -export([infer_lowered/3]).
 
 -type fn_registry() :: #{binary() => map()}.
@@ -272,91 +274,6 @@ get_string_list_arg(Args, Pos) ->
             end;
         [H | _] = L when is_binary(H) -> L;
         _ -> error({bad_arg, Pos, string_list})
-    end.
-
-parse_string_list(Bin) ->
-    Trimmed = trim_bin(Bin),
-    case Trimmed of
-        <<"[", _/binary>> ->
-            Inner = binary:part(Trimmed, 1, byte_size(Trimmed) - 2),
-            Tokens = split_top(Inner, <<",">>),
-            [dequote(trim_bin(T)) || T <- Tokens, trim_bin(T) =/= <<>>];
-        _ -> [Trimmed]
-    end.
-
-%%====================================================================
-%% String helpers (minimal subset, inlined to avoid deps)
-%%====================================================================
-
-trim_bin(<<>>) -> <<>>;
-trim_bin(Bin) -> trim_left(trim_right(Bin)).
-
-trim_left(<<>>) -> <<>>;
-trim_left(<<$\s, Rest/binary>>) -> trim_left(Rest);
-trim_left(<<$\t, Rest/binary>>) -> trim_left(Rest);
-trim_left(Bin) -> Bin.
-
-trim_right(<<>>) -> <<>>;
-trim_right(Bin) ->
-    Size = byte_size(Bin),
-    case binary:at(Bin, Size - 1) of
-        $\s -> trim_right(binary:part(Bin, 0, Size - 1));
-        $\t -> trim_right(binary:part(Bin, 0, Size - 1));
-        $\r -> trim_right(binary:part(Bin, 0, Size - 1));
-        $\n -> trim_right(binary:part(Bin, 0, Size - 1));
-        _ -> Bin
-    end.
-
-dequote(Bin) ->
-    Trimmed = trim_bin(Bin),
-    Size = byte_size(Trimmed),
-    if Size >= 2 ->
-        case {binary:first(Trimmed), binary:last(Trimmed)} of
-            {$", $"} -> binary:part(Trimmed, 1, Size - 2);
-            _ -> Trimmed
-        end;
-       true -> Trimmed
-    end.
-
-split_top(Bin, Sep) ->
-    split_top(Bin, Sep, 0, 0, [], <<>>).
-
-split_top(<<>>, _Sep, _Depth, _Quote, Acc, Buf) ->
-    case trim_bin(Buf) of
-        <<>> -> lists:reverse(Acc);
-        _ -> lists:reverse([Buf | Acc])
-    end;
-split_top(<<C, Rest/binary>>, Sep, Depth, Quote, Acc, Buf) ->
-    SepSize = byte_size(Sep),
-    case {Depth, Quote} of
-        {0, 0} when C =:= $" ->
-            split_top(Rest, Sep, 0, 1, Acc, <<Buf/binary, C>>);
-        {0, 1} when C =:= $" ->
-            split_top(Rest, Sep, 0, 0, Acc, <<Buf/binary, C>>);
-        {_, _} when C =:= $[ ->
-            split_top(Rest, Sep, Depth + 1, Quote, Acc, <<Buf/binary, C>>);
-        {_, _} when C =:= $] ->
-            split_top(Rest, Sep, Depth - 1, Quote, Acc, <<Buf/binary, C>>);
-        {_, _} when C =:= $( ->
-            split_top(Rest, Sep, Depth + 1, Quote, Acc, <<Buf/binary, C>>);
-        {_, _} when C =:= $) ->
-            split_top(Rest, Sep, Depth - 1, Quote, Acc, <<Buf/binary, C>>);
-        {0, 0} ->
-            Remaining = <<C, Rest/binary>>,
-            case binary:longest_common_prefix([Remaining, Sep]) of
-                L when L >= SepSize ->
-                    <<_:SepSize/binary, AfterSep/binary>> = Remaining,
-                    case trim_bin(Buf) of
-                        <<>> -> split_top(AfterSep, Sep, 0, 0, Acc, <<>>);
-                        BufTrim -> split_top(AfterSep, Sep, 0, 0,
-                                             [BufTrim | Acc], <<>>)
-                    end;
-                _ ->
-                    split_top(Rest, Sep, Depth, Quote, Acc,
-                              <<Buf/binary, C>>)
-            end;
-        _ ->
-            split_top(Rest, Sep, Depth, Quote, Acc, <<Buf/binary, C>>)
     end.
 
 %%====================================================================

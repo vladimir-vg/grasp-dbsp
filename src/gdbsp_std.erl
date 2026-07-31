@@ -10,6 +10,10 @@
 
 -include("gdbsp_type.hrl").
 
+-define(INT_CMP(Fn, Op, Type),
+    Fn({value, Type, A}, {value, Type, B}) ->
+        {value, ?BOOL, A Op B}).
+
 %% ── std: eq ─────────────────────────────────────────────────────────
 -export([std_eq_i8_i8/2, std_eq_i16_i16/2, std_eq_i32_i32/2, std_eq_i64_i64/2]).
 -export([std_eq_u8_u8/2, std_eq_u16_u16/2, std_eq_u32_u32/2, std_eq_u64_u64/2]).
@@ -80,22 +84,14 @@
 %% std: eq
 %%====================================================================
 
--spec std_eq_i8_i8(value(), value()) -> value().
-std_eq_i8_i8({value, i8, A}, {value, i8, B}) -> {value, ?BOOL, A =:= B}.
-
--spec std_eq_i16_i16(value(), value()) -> value().
-std_eq_i16_i16({value, i16, A}, {value, i16, B}) -> {value, ?BOOL, A =:= B}.
-
--spec std_eq_i32_i32(value(), value()) -> value().
-std_eq_i32_i32({value, i32, A}, {value, i32, B}) -> {value, ?BOOL, A =:= B}.
-
--spec std_eq_i64_i64(value(), value()) -> value().
-std_eq_i64_i64({value, i64, A}, {value, i64, B}) -> {value, ?BOOL, A =:= B}.
-
-std_eq_u8_u8({value, u8, A}, {value, u8, B}) -> {value, ?BOOL, A =:= B}.
-std_eq_u16_u16({value, u16, A}, {value, u16, B}) -> {value, ?BOOL, A =:= B}.
-std_eq_u32_u32({value, u32, A}, {value, u32, B}) -> {value, ?BOOL, A =:= B}.
-std_eq_u64_u64({value, u64, A}, {value, u64, B}) -> {value, ?BOOL, A =:= B}.
+?INT_CMP(std_eq_i8_i8, =:=, i8).
+?INT_CMP(std_eq_i16_i16, =:=, i16).
+?INT_CMP(std_eq_i32_i32, =:=, i32).
+?INT_CMP(std_eq_i64_i64, =:=, i64).
+?INT_CMP(std_eq_u8_u8, =:=, u8).
+?INT_CMP(std_eq_u16_u16, =:=, u16).
+?INT_CMP(std_eq_u32_u32, =:=, u32).
+?INT_CMP(std_eq_u64_u64, =:=, u64).
 std_eq_integer_integer({value, integer, A}, {value, integer, B}) -> {value, ?BOOL, A =:= B};
 std_eq_integer_integer({value, _, A}, {value, _, B}) when is_integer(A), is_integer(B) ->
     {value, ?BOOL, A =:= B}.
@@ -113,22 +109,14 @@ std_eq_numeric_fixed_numeric_fixed({value, {numeric, _, _}, A}, {value, {numeric
 %% std: neq
 %%====================================================================
 
--spec std_neq_i8_i8(value(), value()) -> value().
-std_neq_i8_i8({value, i8, A}, {value, i8, B}) -> {value, ?BOOL, A =/= B}.
-
--spec std_neq_i16_i16(value(), value()) -> value().
-std_neq_i16_i16({value, i16, A}, {value, i16, B}) -> {value, ?BOOL, A =/= B}.
-
--spec std_neq_i32_i32(value(), value()) -> value().
-std_neq_i32_i32({value, i32, A}, {value, i32, B}) -> {value, ?BOOL, A =/= B}.
-
--spec std_neq_i64_i64(value(), value()) -> value().
-std_neq_i64_i64({value, i64, A}, {value, i64, B}) -> {value, ?BOOL, A =/= B}.
-
-std_neq_u8_u8({value, u8, A}, {value, u8, B}) -> {value, ?BOOL, A =/= B}.
-std_neq_u16_u16({value, u16, A}, {value, u16, B}) -> {value, ?BOOL, A =/= B}.
-std_neq_u32_u32({value, u32, A}, {value, u32, B}) -> {value, ?BOOL, A =/= B}.
-std_neq_u64_u64({value, u64, A}, {value, u64, B}) -> {value, ?BOOL, A =/= B}.
+?INT_CMP(std_neq_i8_i8, =/=, i8).
+?INT_CMP(std_neq_i16_i16, =/=, i16).
+?INT_CMP(std_neq_i32_i32, =/=, i32).
+?INT_CMP(std_neq_i64_i64, =/=, i64).
+?INT_CMP(std_neq_u8_u8, =/=, u8).
+?INT_CMP(std_neq_u16_u16, =/=, u16).
+?INT_CMP(std_neq_u32_u32, =/=, u32).
+?INT_CMP(std_neq_u64_u64, =/=, u64).
 std_neq_integer_integer({value, integer, A}, {value, integer, B}) -> {value, ?BOOL, A =/= B}.
 std_neq_boolean_boolean({value, ?BOOL, A}, {value, ?BOOL, B}) -> {value, ?BOOL, A =/= B}.
 std_neq_absent_absent({value, absent, A}, {value, absent, B}) -> {value, ?BOOL, A =/= B}.
@@ -144,22 +132,14 @@ std_neq_numeric_fixed_numeric_fixed({value, {numeric, _, _}, A}, {value, {numeri
 %% std: lt
 %%====================================================================
 
--spec std_lt_i8_i8(value(), value()) -> value().
-std_lt_i8_i8({value, i8, A}, {value, i8, B}) -> {value, ?BOOL, A < B}.
-
--spec std_lt_i16_i16(value(), value()) -> value().
-std_lt_i16_i16({value, i16, A}, {value, i16, B}) -> {value, ?BOOL, A < B}.
-
--spec std_lt_i32_i32(value(), value()) -> value().
-std_lt_i32_i32({value, i32, A}, {value, i32, B}) -> {value, ?BOOL, A < B}.
-
--spec std_lt_i64_i64(value(), value()) -> value().
-std_lt_i64_i64({value, i64, A}, {value, i64, B}) -> {value, ?BOOL, A < B}.
-
-std_lt_u8_u8({value, u8, A}, {value, u8, B}) -> {value, ?BOOL, A < B}.
-std_lt_u16_u16({value, u16, A}, {value, u16, B}) -> {value, ?BOOL, A < B}.
-std_lt_u32_u32({value, u32, A}, {value, u32, B}) -> {value, ?BOOL, A < B}.
-std_lt_u64_u64({value, u64, A}, {value, u64, B}) -> {value, ?BOOL, A < B}.
+?INT_CMP(std_lt_i8_i8, <, i8).
+?INT_CMP(std_lt_i16_i16, <, i16).
+?INT_CMP(std_lt_i32_i32, <, i32).
+?INT_CMP(std_lt_i64_i64, <, i64).
+?INT_CMP(std_lt_u8_u8, <, u8).
+?INT_CMP(std_lt_u16_u16, <, u16).
+?INT_CMP(std_lt_u32_u32, <, u32).
+?INT_CMP(std_lt_u64_u64, <, u64).
 std_lt_integer_integer({value, integer, A}, {value, integer, B}) -> {value, ?BOOL, A < B}.
 std_lt_boolean_boolean({value, ?BOOL, A}, {value, ?BOOL, B}) -> {value, ?BOOL, A < B}.
 std_lt_absent_absent({value, absent, A}, {value, absent, B}) -> {value, ?BOOL, A < B}.
@@ -175,22 +155,14 @@ std_lt_numeric_fixed_numeric_fixed({value, {numeric, _, _}, A}, {value, {numeric
 %% std: gt
 %%====================================================================
 
--spec std_gt_i8_i8(value(), value()) -> value().
-std_gt_i8_i8({value, i8, A}, {value, i8, B}) -> {value, ?BOOL, A > B}.
-
--spec std_gt_i16_i16(value(), value()) -> value().
-std_gt_i16_i16({value, i16, A}, {value, i16, B}) -> {value, ?BOOL, A > B}.
-
--spec std_gt_i32_i32(value(), value()) -> value().
-std_gt_i32_i32({value, i32, A}, {value, i32, B}) -> {value, ?BOOL, A > B}.
-
--spec std_gt_i64_i64(value(), value()) -> value().
-std_gt_i64_i64({value, i64, A}, {value, i64, B}) -> {value, ?BOOL, A > B}.
-
-std_gt_u8_u8({value, u8, A}, {value, u8, B}) -> {value, ?BOOL, A > B}.
-std_gt_u16_u16({value, u16, A}, {value, u16, B}) -> {value, ?BOOL, A > B}.
-std_gt_u32_u32({value, u32, A}, {value, u32, B}) -> {value, ?BOOL, A > B}.
-std_gt_u64_u64({value, u64, A}, {value, u64, B}) -> {value, ?BOOL, A > B}.
+?INT_CMP(std_gt_i8_i8, >, i8).
+?INT_CMP(std_gt_i16_i16, >, i16).
+?INT_CMP(std_gt_i32_i32, >, i32).
+?INT_CMP(std_gt_i64_i64, >, i64).
+?INT_CMP(std_gt_u8_u8, >, u8).
+?INT_CMP(std_gt_u16_u16, >, u16).
+?INT_CMP(std_gt_u32_u32, >, u32).
+?INT_CMP(std_gt_u64_u64, >, u64).
 std_gt_integer_integer({value, integer, A}, {value, integer, B}) -> {value, ?BOOL, A > B}.
 std_gt_boolean_boolean({value, ?BOOL, A}, {value, ?BOOL, B}) -> {value, ?BOOL, A > B}.
 std_gt_absent_absent({value, absent, A}, {value, absent, B}) -> {value, ?BOOL, A > B}.
@@ -206,22 +178,14 @@ std_gt_numeric_fixed_numeric_fixed({value, {numeric, _, _}, A}, {value, {numeric
 %% std: lte
 %%====================================================================
 
--spec std_lte_i8_i8(value(), value()) -> value().
-std_lte_i8_i8({value, i8, A}, {value, i8, B}) -> {value, ?BOOL, A =< B}.
-
--spec std_lte_i16_i16(value(), value()) -> value().
-std_lte_i16_i16({value, i16, A}, {value, i16, B}) -> {value, ?BOOL, A =< B}.
-
--spec std_lte_i32_i32(value(), value()) -> value().
-std_lte_i32_i32({value, i32, A}, {value, i32, B}) -> {value, ?BOOL, A =< B}.
-
--spec std_lte_i64_i64(value(), value()) -> value().
-std_lte_i64_i64({value, i64, A}, {value, i64, B}) -> {value, ?BOOL, A =< B}.
-
-std_lte_u8_u8({value, u8, A}, {value, u8, B}) -> {value, ?BOOL, A =< B}.
-std_lte_u16_u16({value, u16, A}, {value, u16, B}) -> {value, ?BOOL, A =< B}.
-std_lte_u32_u32({value, u32, A}, {value, u32, B}) -> {value, ?BOOL, A =< B}.
-std_lte_u64_u64({value, u64, A}, {value, u64, B}) -> {value, ?BOOL, A =< B}.
+?INT_CMP(std_lte_i8_i8, =<, i8).
+?INT_CMP(std_lte_i16_i16, =<, i16).
+?INT_CMP(std_lte_i32_i32, =<, i32).
+?INT_CMP(std_lte_i64_i64, =<, i64).
+?INT_CMP(std_lte_u8_u8, =<, u8).
+?INT_CMP(std_lte_u16_u16, =<, u16).
+?INT_CMP(std_lte_u32_u32, =<, u32).
+?INT_CMP(std_lte_u64_u64, =<, u64).
 std_lte_integer_integer({value, integer, A}, {value, integer, B}) -> {value, ?BOOL, A =< B}.
 std_lte_boolean_boolean({value, ?BOOL, A}, {value, ?BOOL, B}) -> {value, ?BOOL, A =< B}.
 std_lte_absent_absent({value, absent, A}, {value, absent, B}) -> {value, ?BOOL, A =< B}.
@@ -237,22 +201,14 @@ std_lte_numeric_fixed_numeric_fixed({value, {numeric, _, _}, A}, {value, {numeri
 %% std: gte
 %%====================================================================
 
--spec std_gte_i8_i8(value(), value()) -> value().
-std_gte_i8_i8({value, i8, A}, {value, i8, B}) -> {value, ?BOOL, A >= B}.
-
--spec std_gte_i16_i16(value(), value()) -> value().
-std_gte_i16_i16({value, i16, A}, {value, i16, B}) -> {value, ?BOOL, A >= B}.
-
--spec std_gte_i32_i32(value(), value()) -> value().
-std_gte_i32_i32({value, i32, A}, {value, i32, B}) -> {value, ?BOOL, A >= B}.
-
--spec std_gte_i64_i64(value(), value()) -> value().
-std_gte_i64_i64({value, i64, A}, {value, i64, B}) -> {value, ?BOOL, A >= B}.
-
-std_gte_u8_u8({value, u8, A}, {value, u8, B}) -> {value, ?BOOL, A >= B}.
-std_gte_u16_u16({value, u16, A}, {value, u16, B}) -> {value, ?BOOL, A >= B}.
-std_gte_u32_u32({value, u32, A}, {value, u32, B}) -> {value, ?BOOL, A >= B}.
-std_gte_u64_u64({value, u64, A}, {value, u64, B}) -> {value, ?BOOL, A >= B}.
+?INT_CMP(std_gte_i8_i8, >=, i8).
+?INT_CMP(std_gte_i16_i16, >=, i16).
+?INT_CMP(std_gte_i32_i32, >=, i32).
+?INT_CMP(std_gte_i64_i64, >=, i64).
+?INT_CMP(std_gte_u8_u8, >=, u8).
+?INT_CMP(std_gte_u16_u16, >=, u16).
+?INT_CMP(std_gte_u32_u32, >=, u32).
+?INT_CMP(std_gte_u64_u64, >=, u64).
 std_gte_integer_integer({value, integer, A}, {value, integer, B}) -> {value, ?BOOL, A >= B}.
 std_gte_boolean_boolean({value, ?BOOL, A}, {value, ?BOOL, B}) -> {value, ?BOOL, A >= B}.
 std_gte_absent_absent({value, absent, A}, {value, absent, B}) -> {value, ?BOOL, A >= B}.
