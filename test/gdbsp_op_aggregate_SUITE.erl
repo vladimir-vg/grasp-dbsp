@@ -109,7 +109,7 @@ start_aggregate() ->
         update_fn => fun(Acc, V, W) -> Acc + V * W end,
         result_fn => fun(V) -> V end
     }),
-    Op ! {wiring_update, #{Up => default}, #{default => Down}},
+    Op ! {wiring_update, #{Up => [default]}, #{default => Down}},
     {Op, Up, Down}.
 
 %% IndexedZSet helper: {OuterW, {Key, [{W, V}]}} where V must be numeric for sum agg

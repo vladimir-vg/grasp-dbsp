@@ -1,6 +1,6 @@
 # 2-link chain: c0 feeds into c1.
 # c0 := step(e: src, p: src) → combined = plus(src, src) = 2*{v:5}
-# c1 := step(e: src, p: c0.combined) → combined = plus(src, 2*src) = 4*{v:5}
+# c1 := step(e: src, p: c0.combined) → combined = plus(src, 2*src) = 3*{v:5}
 - source: |
     circuit step(e: edge, p: path):
         combined := plus(edge, path)
@@ -18,4 +18,4 @@
 
   expected:
     - out:
-        - [4, {v: "5"}]
+        - [3, {v: "5"}]
