@@ -1,0 +1,19 @@
+# Direct fixpoint nesting — ERROR.
+# 'fixpoint outer' where outer's body directly has 'fixpoint inner'.
+- source: |
+    circuit inner(x: v):
+        y := distinct(plus(v, v))
+
+    circuit outer(a: w):
+        fp := fixpoint inner(x: w)
+        a := distinct(plus(w, fp.y))
+
+    src := source("data")
+    src :: stream(struct("v": i64))
+
+    result := fixpoint outer(a: src)
+    out := result.a
+
+  expected_errors:
+    - class: "fixpoint_error"
+      message: "fixpoint inside fixpoint body"

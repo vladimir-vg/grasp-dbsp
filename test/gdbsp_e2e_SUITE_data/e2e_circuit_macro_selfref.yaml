@@ -1,0 +1,20 @@
+# Self-ref parameter in macro mode — just inlined, no fixpoint boundary.
+# 'x' is both a parameter keyword and a body node name, but in macro mode
+# this is just a regular node definition, no distinct required.
+- source: |
+    circuit wrap(x: s):
+        x := plus(s, s)
+
+    src := source("data")
+    src :: stream(struct("v": i64))
+
+    w := wrap(x: src)
+    out := w.x
+
+  input:
+    - data:
+        - [1, {v: "7"}]
+
+  expected:
+    - out:
+        - [2, {v: "7"}]

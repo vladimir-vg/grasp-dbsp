@@ -1,0 +1,69 @@
+# Fixpoint body calls a non-fixpoint macro circuit — OK.
+# countdown produces {0,1} from source {v:1}. The fixpoint body calls 'double'
+# on the filtered intermediate (inside the body, not externally exposed).
+- source: |
+    circuit double(v: val):
+        result := map(val, mult_two)
+
+    circuit countdown(base: input, result: r):
+        filtered := filter(r, gt_zero)
+        doubled := double(v: filtered)
+        next := map(doubled.result, dec_fn)
+        combined := plus(input, next)
+        result := distinct(combined)
+
+    src := source("data")
+    src :: stream(struct("v": i64))
+
+    fp := fixpoint countdown(base: src, result: src)
+    out := fp.result
+
+  functions:
+    mult_two:
+      call: "struct"
+      kwargs:
+        v:
+          call: "math:mul"
+          args:
+            - call: "struct:get"
+              args:
+                - arg: row
+              kwargs:
+                key:
+                  type: string
+                  value: "v"
+            - {type: i64, value: "2"}
+    gt_zero:
+      call: "gt"
+      args:
+        - call: "struct:get"
+          args:
+            - arg: row
+          kwargs:
+            key:
+              type: string
+              value: "v"
+        - {type: i64, value: "0"}
+    dec_fn:
+      call: "struct"
+      kwargs:
+        v:
+          call: "math:sub"
+          args:
+            - call: "struct:get"
+              args:
+                - arg: row
+              kwargs:
+                key:
+                  type: string
+                  value: "v"
+            - {type: i64, value: "1"}
+
+  input:
+    - data:
+        - [1, {v: "1"}]
+
+  expected:
+    - out:
+        - [1, {v: "0"}]
+        - [1, {v: "1"}]

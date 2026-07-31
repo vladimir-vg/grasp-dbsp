@@ -1,0 +1,55 @@
+# Top-level circuit call contains fixpoint — OK.
+# 'pipeline' calls 'countdown' as a fixpoint inside its body.
+# When 'pipeline' is called at top level (not inside another fixpoint), it's fine.
+- source: |
+    circuit countdown(base: input, result: r):
+        filtered := filter(r, gt_zero)
+        next := map(filtered, dec_fn)
+        combined := plus(input, next)
+        result := distinct(combined)
+
+    circuit pipeline(s: val):
+        fp := fixpoint countdown(base: s, result: s)
+        result := fp.result
+
+    src := source("data")
+    src :: stream(struct("v": i64))
+
+    p := pipeline(s: src)
+    out := p.result
+
+  functions:
+    gt_zero:
+      call: "gt"
+      args:
+        - call: "struct:get"
+          args:
+            - arg: row
+          kwargs:
+            key:
+              type: string
+              value: "v"
+        - {type: i64, value: "0"}
+    dec_fn:
+      call: "struct"
+      kwargs:
+        v:
+          call: "math:sub"
+          args:
+            - call: "struct:get"
+              args:
+                - arg: row
+              kwargs:
+                key:
+                  type: string
+                  value: "v"
+            - {type: i64, value: "1"}
+
+  input:
+    - data:
+        - [1, {v: "1"}]
+
+  expected:
+    - out:
+        - [1, {v: "0"}]
+        - [1, {v: "1"}]

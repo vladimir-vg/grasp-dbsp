@@ -98,16 +98,22 @@ handle_info({wiring_update, Upstream, Downstream},
             exit({wiring_after_epoch_started})
     end;
 handle_info({delta, Meta, Deltas, From},
-             State) ->
+              State) ->
     #{epoch := E} = Meta,
     State1 = advance_epoch(E, State),
     #{pidmap := PM1, op_state := St2, mod := Mod} = State1,
-    Label = try maps:get(From, PM1)
-            catch error:{badkey, _} ->
-                ?DBG("OP ~p pid=~p WARN: unknown delta sender ~p (not in pidmap)",
-                       [Mod, self(), From]),
-                error({unknown_sender, From})
-            end,
+    Labels = try maps:get(From, PM1)
+             catch error:{badkey, _} ->
+                 ?DBG("OP ~p pid=~p WARN: unknown delta sender ~p (not in pidmap)",
+                        [Mod, self(), From]),
+                 error({unknown_sender, From})
+             end,
+    {Label, State2} = case Labels of
+        [L] -> {L, State1};
+        [L | Rest] ->
+            {L, State1#{pidmap := PM1#{From := Rest ++ [L]}}};
+        [] -> error({empty_label_list, From, PM1})
+    end,
     Barrier = maps:get(barrier, Meta, undefined),
     ?DBG("OP ~p pid=~p IN: barrier=~p deltas=~w label=~p from=~w",
            [Mod, self(), Barrier, length(Deltas), Label, From]),
@@ -124,8 +130,8 @@ handle_info({delta, Meta, Deltas, From},
         _ -> ?DBG("OP ~p OUT: barrier=~p actions=~w",
                     [Mod, Barrier, ActionCount])
     end,
-    execute_actions(Actions, State1),
-    {noreply, State1#{op_state := St3}};
+    execute_actions(Actions, State2),
+    {noreply, State2#{op_state := St3}};
 handle_info(stop, State) ->
     {stop, normal, State};
 handle_info({reset, Ref, ReplyTo},

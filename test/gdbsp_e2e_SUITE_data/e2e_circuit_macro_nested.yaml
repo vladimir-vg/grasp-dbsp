@@ -1,0 +1,27 @@
+# 3-level nested circuit instantiation: A → B → C.
+# Each level adds its own plus operation.
+- source: |
+    circuit C(v: val):
+        result := plus(val, val)
+
+    circuit B(v: val):
+        c := C(v: val)
+        result := c.result
+
+    circuit A(v: val):
+        b := B(v: val)
+        result := b.result
+
+    src := source("data")
+    src :: stream(struct("v": i64))
+
+    a := A(v: src)
+    out := a.result
+
+  input:
+    - data:
+        - [1, {v: "3"}]
+
+  expected:
+    - out:
+        - [2, {v: "6"}]

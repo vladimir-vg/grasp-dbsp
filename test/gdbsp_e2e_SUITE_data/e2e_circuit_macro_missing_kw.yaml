@@ -1,0 +1,13 @@
+# Calling a circuit without supplying a required keyword argument.
+- source: |
+    circuit add(a: x, b: y):
+        combined := plus(x, y)
+
+    src := source("data")
+    src :: stream(struct("v": i64))
+
+    c1 := add(a: src)
+
+  expected_errors:
+    - class: "fixpoint_error"
+      message: "missing"

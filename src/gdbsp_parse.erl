@@ -102,18 +102,28 @@ try_node_def_single(Line, St) ->
     case binary:split(Line, <<" := ">>) of
         [Name, OpCall] ->
             TrimmedCall = trim(OpCall),
-            case split_op_inner(TrimmedCall) of
-                {Op, <<")">>} ->
-                    {done, mk_node(Name, Op, [], St)};
-                {Op, Inner} ->
-                    case extract_parens_content(Inner) of
-                        {closed, InnerClean} ->
-                            Args = parse_args(InnerClean),
-                            {done, mk_node(Name, Op, Args, St)};
-                        {open, _} ->
-                            {done, mk_node(Name, Op, [], St)}
+            case binary:match(TrimmedCall, <<"(">>) of
+                nomatch ->
+                    case binary:match(TrimmedCall, <<".">>) of
+                        nomatch -> false;
+                        _ ->
+                            Node = mk_circuit_access_node(Name, TrimmedCall, St),
+                            {done, Node}
                     end;
-                false -> false
+                _ ->
+                    case split_op_inner(TrimmedCall) of
+                        {Op, <<")">>} ->
+                            {done, mk_node(Name, Op, [], St)};
+                        {Op, Inner} ->
+                            case extract_parens_content(Inner) of
+                                {closed, InnerClean} ->
+                                    Args = parse_args(InnerClean),
+                                    {done, mk_node(Name, Op, Args, St)};
+                                {open, _} ->
+                                    {done, mk_node(Name, Op, [], St)}
+                            end;
+                        false -> false
+                    end
             end;
         _ -> false
     end.
@@ -133,14 +143,19 @@ parse_circuit_header(Line, LineNum) ->
     case binary:split(trim_right(Rest0), <<"(">>) of
         [Name0, ParamsAndColon] ->
             Name = trim(Name0),
-            %% ParamsAndColon looks like: "key1: internal1, key2: internal2):"
-            case binary:match(ParamsAndColon, <<"):">>) of
-                {Pos2, _} ->
-                    <<ParamsBin:Pos2/binary, _:2/binary>> = ParamsAndColon,
-                    Params = parse_circuit_params(ParamsBin, LineNum),
-                    {ok, {Name, Params}};
-                nomatch ->
-                    {error, <<"expected '):' after circuit parameters">>}
+            case known_op(Name) of
+                true ->
+                    {error, <<"reserved operator name cannot be used as circuit name: ", Name/binary>>};
+                false ->
+                    %% ParamsAndColon looks like: "key1: internal1, key2: internal2):"
+                    case binary:match(ParamsAndColon, <<"):">>) of
+                        {Pos2, _} ->
+                            <<ParamsBin:Pos2/binary, _:2/binary>> = ParamsAndColon,
+                            Params = parse_circuit_params(ParamsBin, LineNum),
+                            {ok, {Name, Params}};
+                        nomatch ->
+                            {error, <<"expected '):' after circuit parameters">>}
+                    end
             end;
         _ ->
             {error, <<"expected '(' after circuit name">>}
@@ -441,15 +456,25 @@ trim_trailing_comma(Bin) ->
     end.
 
 mk_node(Name, OpBin, Args, St) ->
-    known_op(OpBin) orelse parse_error(St#st.line, "unknown operator: ~s", [OpBin]),
-    OpAtom = binary_to_atom(OpBin, utf8),
-    ParArgs = lists:map(fun parse_node_arg/1, Args),
-    #gdbsp_node_def{
-        name = Name,
-        op   = OpAtom,
-        args = ParArgs,
-        line = St#st.line
-    }.
+    case known_op(OpBin) of
+        true ->
+            OpAtom = binary_to_atom(OpBin, utf8),
+            ParArgs = lists:map(fun parse_node_arg/1, Args),
+            #gdbsp_node_def{
+                name = Name,
+                op   = OpAtom,
+                args = ParArgs,
+                line = St#st.line
+            };
+        false ->
+            ParArgs = [{var, OpBin} | lists:map(fun parse_node_arg/1, Args)],
+            #gdbsp_node_def{
+                name = Name,
+                op   = circuit_call,
+                args = ParArgs,
+                line = St#st.line
+            }
+    end.
 
 %% Minimal set (12) + extended (4)
 known_op(<<"source">>)             -> true;

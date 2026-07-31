@@ -177,6 +177,9 @@ topo_loop(Queue, InDeg, Consumers, NameTable, Acc) ->
 new_lg() -> #lowered_graph{}.
 
 lower_nodes(NameTable, Order, CircuitMap, LG0) ->
+    lower_nodes(NameTable, Order, CircuitMap, LG0, []).
+
+lower_nodes(NameTable, Order, CircuitMap, LG0, ExpansionStack) ->
     lists:foldl(
         fun(Name, LG) ->
             Info = maps:get(Name, NameTable),
@@ -185,6 +188,8 @@ lower_nodes(NameTable, Order, CircuitMap, LG0) ->
                     expand_fixpoint(Name, Info, CircuitMap, LG, NameTable);
                 circuit_access ->
                     resolve_circuit_access(Name, Info, LG);
+                circuit_call ->
+                    expand_circuit_call(Name, Info, CircuitMap, LG, ExpansionStack);
                 _ ->
                     lower_regular_node(Name, Info, LG)
             end
@@ -244,7 +249,24 @@ expand_fixpoint(Name, Info, CircuitMap, LG0, _NameTable) ->
             #gdbsp_circuit_def{params = Params, body = BodyNodes} = Def,
             KwMap = build_kw_map(KwArgs, Line),
             ok = validate_fixpoint_args(Params, KwMap, CircuitName, Line),
+            %% Reject fixpoints inside fixpoint bodies (transitive)
+            case circuit_has_fixpoint_transitive(CircuitName, CircuitMap,
+                                                  sets:new([{version, 2}])) of
+                true ->
+                    throw_lower_error(Line,
+                        io_lib:format("fixpoint inside fixpoint body: ~s",
+                                       [CircuitName]));
+                false -> ok
+            end,
             SelfRefKws = find_self_ref_kws(Params, BodyNodes),
+            %% Also check direct fixpoint nodes in body
+            case has_direct_fixpoint(BodyNodes) of
+                true ->
+                    throw_lower_error(Line,
+                        io_lib:format("fixpoint inside fixpoint body: ~s",
+                                       [CircuitName]));
+                false -> ok
+            end,
             case SelfRefKws of
                 [] ->
                     expand_trivial(FpName, BodyNodes, Params, KwMap, LG0, Line);
@@ -272,7 +294,8 @@ expand_trivial(FpName, BodyNodes, Params, KwMap, LG0, _Line) ->
             Tag = <<Prefix/binary, BodyName/binary>>,
             SubstitutedArgs = substitute_params(BodyArgs, InternalToArg),
             Inputs = resolve_inputs(SubstitutedArgs, LG#lowered_graph.tag_map),
-            {NewLG, _NodeId} = add_node(BodyOp, Inputs, SubstitutedArgs, [Tag], undefined, LG),
+            {NewLG, _NodeId} = add_node(BodyOp, Inputs, SubstitutedArgs,
+                                        [BodyName, Tag], undefined, LG),
             NewLG
         end,
         LG0,
@@ -422,6 +445,156 @@ build_fixpoint_metadata(Params, SelfRefKws, InputMap, BodyIds, Prefix,
     }.
 
 %%--------------------------------------------------------------------
+%% Circuit call expansion (non-fixpoint macro expansion)
+%%--------------------------------------------------------------------
+
+expand_circuit_call(Name, Info, CircuitMap, LG0, ExpansionStack) ->
+    #node_info{args = Args, line = Line} = Info,
+    [{var, CircuitName} | KwArgs] = Args,
+    case lists:member(CircuitName, ExpansionStack) of
+        true ->
+            throw_lower_error(Line,
+                io_lib:format("recursive circuit definition: ~s",
+                               [join_names(lists:reverse([CircuitName | ExpansionStack]))]));
+        false -> ok
+    end,
+    case maps:find(CircuitName, CircuitMap) of
+        error ->
+            throw_lower_error(Line,
+                io_lib:format("unknown circuit: ~s", [CircuitName]));
+        {ok, Def} ->
+            #gdbsp_circuit_def{params = Params, body = BodyNodes} = Def,
+            KwMap = build_kw_map(KwArgs, Line),
+            ok = validate_circuit_args(Params, KwMap, CircuitName, Line),
+            Prefix = <<Name/binary, ".">>,
+            InternalToArg = maps:fold(
+                fun(Kw, Internal, A) ->
+                    A#{Internal => maps:get(Kw, KwMap)}
+                end,
+                #{},
+                Params),
+            Stack2 = [CircuitName | ExpansionStack],
+            expand_body_nodes(BodyNodes, InternalToArg, Prefix, Stack2,
+                              CircuitMap, Line, LG0)
+    end.
+
+expand_body_nodes([], _InternalToArg, _Prefix, _Stack,
+                  _CircuitMap, _Line, LG) -> LG;
+expand_body_nodes([#gdbsp_node_def{name = BodyName, op = BodyOp,
+                                   args = BodyArgs} | Rest],
+                  InternalToArg, Prefix, Stack, CircuitMap, Line, LG0) ->
+    Tag = <<Prefix/binary, BodyName/binary>>,
+    SubstArgs = substitute_params(BodyArgs, InternalToArg),
+    LG1 = case BodyOp of
+        circuit_call ->
+            [CircNameArg | RestKwArgs] = SubstArgs,
+            CircName = case CircNameArg of
+                {var, N} -> N;
+                _ -> throw_lower_error(Line, "invalid nested circuit call")
+            end,
+            case lists:member(CircName, Stack) of
+                true ->
+                    throw_lower_error(Line,
+                        io_lib:format("recursive circuit definition: ~s",
+                                       [join_names(lists:reverse([CircName | Stack]))]));
+                false -> ok
+            end,
+            case maps:find(CircName, CircuitMap) of
+                error ->
+                    throw_lower_error(Line,
+                        io_lib:format("unknown circuit: ~s", [CircName]));
+                {ok, NestedDef} ->
+                    NestedPrefix = <<BodyName/binary, ".">>,
+                    NestedKwMap = build_kw_map(RestKwArgs, Line),
+                    NestedParams = NestedDef#gdbsp_circuit_def.params,
+                    ok = validate_circuit_args(NestedParams, NestedKwMap, CircName, Line),
+                    NestedToArg = maps:fold(
+                        fun(Kw, Internal, A) ->
+                            A#{Internal => maps:get(Kw, NestedKwMap)}
+                        end, #{}, NestedParams),
+                    NestedStack = [CircName | Stack],
+                    expand_body_nodes(NestedDef#gdbsp_circuit_def.body,
+                                      NestedToArg, NestedPrefix, NestedStack,
+                                      CircuitMap, Line, LG0)
+            end;
+        circuit_access ->
+            %% Resolve directly: look up Var.Field tag, create plus alias
+            case SubstArgs of
+                [{var, Var}, {var, Field}] ->
+                    AccessTag = <<Var/binary, ".", Field/binary>>,
+                    case maps:find(AccessTag, LG0#lowered_graph.tag_map) of
+                        {ok, ResolvedId} ->
+                            {NewLG2, _} = add_node(plus, [ResolvedId],
+                                                   [{var, AccessTag}],
+                                                   [BodyName, Tag],
+                                                   undefined, LG0),
+                            NewLG2;
+                        error ->
+                            throw_lower_error(Line,
+                                io_lib:format("unresolved circuit access: ~s.~s",
+                                               [Var, Field]))
+                    end;
+                _ ->
+                    throw_lower_error(Line, "invalid circuit_access in circuit body")
+            end;
+        _ ->
+            Inputs = resolve_inputs(SubstArgs, LG0#lowered_graph.tag_map),
+            {NewLG, _NodeId} = add_node(BodyOp, Inputs, SubstArgs,
+                                        [BodyName, Tag], undefined, LG0),
+            NewLG
+    end,
+    expand_body_nodes(Rest, InternalToArg, Prefix, Stack,
+                      CircuitMap, Line, LG1).
+
+validate_circuit_args(Params, KwMap, CircuitName, Line) ->
+    ParamKeys = maps:keys(Params),
+    KwKeys = maps:keys(KwMap),
+    Missing = ParamKeys -- KwKeys,
+    case Missing of
+        [] -> ok;
+        _ -> throw_lower_error(Line, io_lib:format(
+            "missing arguments for circuit ~s: ~s",
+            [CircuitName, join_keys(Missing)]))
+    end,
+    Extra = KwKeys -- ParamKeys,
+    case Extra of
+        [] -> ok;
+        _ -> throw_lower_error(Line, io_lib:format(
+            "unknown arguments for circuit ~s: ~s",
+            [CircuitName, join_keys(Extra)]))
+    end.
+
+%%--------------------------------------------------------------------
+%% Fixpoint body validation — no transitive fixpoints in body
+%%--------------------------------------------------------------------
+
+circuit_has_fixpoint_transitive(CircuitName, CircuitMap, Visited) ->
+    case sets:is_element(CircuitName, Visited) of
+        true -> false;
+        false ->
+            case maps:find(CircuitName, CircuitMap) of
+                error -> false;
+                {ok, Def} ->
+                    Visited2 = sets:add_element(CircuitName, Visited),
+                    lists:any(
+                        fun(#gdbsp_node_def{op = Op, args = Args}) ->
+                            case Op of
+                                fixpoint -> true;
+                                circuit_call ->
+                                    [{var, CalledName} | _] = Args,
+                                    circuit_has_fixpoint_transitive(CalledName, CircuitMap, Visited2);
+                                _ -> false
+                            end
+                        end,
+                        Def#gdbsp_circuit_def.body)
+            end
+    end.
+
+join_names(Names) ->
+    Parts = [N || N <- Names],
+    iolist_to_binary(lists:join(<<" → ">>, Parts)).
+
+%%--------------------------------------------------------------------
 %% Content-addressed node insertion
 %%--------------------------------------------------------------------
 
@@ -551,6 +724,12 @@ validate_fixpoint_args(Params, KwMap, _CircuitName, _Line) ->
             "unknown arguments for circuit ~s: ~s",
             [_CircuitName, join_keys(Extra)]))
     end.
+
+has_direct_fixpoint(BodyNodes) ->
+    lists:any(
+        fun(#gdbsp_node_def{op = Op}) ->
+            Op =:= fixpoint
+        end, BodyNodes).
 
 find_self_ref_kws(Params, BodyNodes) ->
     BodyNodeNames = [N || #gdbsp_node_def{name = N} <- BodyNodes],

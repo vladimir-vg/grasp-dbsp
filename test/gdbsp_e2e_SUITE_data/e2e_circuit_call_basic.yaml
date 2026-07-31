@@ -1,0 +1,20 @@
+# Basic circuit call — two positional-arg-style inputs, dot-notation output.
+# add(a: src, b: src) where src has v=10.
+# combined := plus(x, y) with x=y={v:10} → weight 2.
+- source: |
+    circuit add(a: x, b: y):
+        combined := plus(x, y)
+
+    src := source("data")
+    src :: stream(struct("v": i64))
+
+    c1 := add(a: src, b: src)
+    out := c1.combined
+
+  input:
+    - data:
+        - [1, {v: "10"}]
+
+  expected:
+    - out:
+        - [2, {v: "10"}]

@@ -1,0 +1,33 @@
+# Circuit call with dot-notation output access.
+# normalize filters → maps → dedupes via distinct.
+- source: |
+    circuit normalize(s: val):
+        mapped := map(val, identity)
+        deduped := distinct(mapped)
+
+    src := source("data")
+    src :: stream(struct("v": i64))
+
+    n := normalize(s: src)
+    out := n.deduped
+
+  functions:
+    identity:
+      call: "struct"
+      kwargs:
+        v:
+          call: "struct:get"
+          args:
+            - arg: row
+          kwargs:
+            key:
+              type: string
+              value: "v"
+
+  input:
+    - data:
+        - [1, {v: "5"}]
+
+  expected:
+    - out:
+        - [1, {v: "5"}]

@@ -1,0 +1,13 @@
+# Calling a circuit with an extra keyword argument not declared in params.
+- source: |
+    circuit add(a: x):
+        result := x
+
+    src := source("data")
+    src :: stream(struct("v": i64))
+
+    c1 := add(a: src, b: src)
+
+  expected_errors:
+    - class: "fixpoint_error"
+      message: "unknown"

@@ -83,7 +83,7 @@ lowered_topo_loop(Q, InDeg, Consumers, Total, Acc) ->
                         0 -> {queue:in(Dep, QI), ID2};
                         _ -> {QI, ID2}
                     end
-                end, {RestQ, InDeg}, sets:to_list(sets:from_list(Dependents))),
+                end, {RestQ, InDeg}, Dependents),
             lowered_topo_loop(NewQ, NewIndeg, Consumers, Total, NewAcc)
     end.
 

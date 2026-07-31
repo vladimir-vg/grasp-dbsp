@@ -1,0 +1,28 @@
+# Transitive fixpoint nesting — ERROR.
+# fixpoint top → middle → leaf → fixpoint step (4 levels deep).
+- source: |
+    circuit step(input: v):
+        y := distinct(plus(v, v))
+
+    circuit leaf(x: w):
+        fp := fixpoint step(input: w)
+        result := fp.y
+
+    circuit middle(y: u):
+        c := leaf(x: u)
+        result := c.result
+
+    circuit top(z: t):
+        c := middle(y: t)
+        a := plus(t, c.result)
+        result := distinct(a)
+
+    src := source("data")
+    src :: stream(struct("v": i64))
+
+    result := fixpoint top(z: src)
+    out := result.result
+
+  expected_errors:
+    - class: "fixpoint_error"
+      message: "fixpoint inside fixpoint body"

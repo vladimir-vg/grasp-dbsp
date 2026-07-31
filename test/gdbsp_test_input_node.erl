@@ -183,8 +183,8 @@ buffer_deltas(Deltas, #{paused_buffer := Buf} = State) ->
 %%====================================================================
 
 apply_wiring(Downstream, #{downstream_pids := OldPids} = State) ->
-    NewPids = lists:usort(flatten_map_values(maps:values(Downstream))),
-    State#{downstream_pids := lists:usort(OldPids ++ NewPids)}.
+    NewPids = flatten_map_values(maps:values(Downstream)),
+    State#{downstream_pids := OldPids ++ NewPids}.
 
 %%====================================================================
 %% Internal — epoch advance + pending wiring

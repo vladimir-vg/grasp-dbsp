@@ -323,7 +323,8 @@ build_wiring_maps(Tuples, Resolve) ->
                     case is_pid(SndrPid) of
                         true ->
                             Up0 = maps:get(RR, Acc, #{}),
-                            Acc#{RR => Up0#{SndrPid => RL}};
+                            Existing = maps:get(SndrPid, Up0, []),
+                            Acc#{RR => Up0#{SndrPid => [RL | Existing]}};
                         false -> Acc
                     end;
                 false -> Acc

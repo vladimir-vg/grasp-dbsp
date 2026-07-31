@@ -1,0 +1,12 @@
+# Calling an undefined circuit produces a compile error.
+- source: |
+    c1 := nonexistent(a: src)
+
+    src := source("data")
+    src :: stream(struct("v": i64))
+
+    out := c1.result
+
+  expected_errors:
+    - class: "fixpoint_error"
+      message: "unknown circuit"

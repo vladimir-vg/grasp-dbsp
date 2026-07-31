@@ -1,0 +1,35 @@
+# Circuit parameterised over a function reference.
+# Circuit 'transform' applies a function to the input via map.
+- source: |
+    circuit transform(i: val, f: fn):
+        mapped := map(val, fn)
+
+    src := source("data")
+    src :: stream(struct("v": i64))
+
+    t := transform(i: src, f: dec_fn)
+    out := t.mapped
+
+  functions:
+    dec_fn:
+      call: "struct"
+      kwargs:
+        v:
+          call: "math:sub"
+          args:
+            - call: "struct:get"
+              args:
+                - arg: row
+              kwargs:
+                key:
+                  type: string
+                  value: "v"
+            - {type: i64, value: "1"}
+
+  input:
+    - data:
+        - [1, {v: "5"}]
+
+  expected:
+    - out:
+        - [1, {v: "4"}]

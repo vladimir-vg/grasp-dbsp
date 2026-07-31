@@ -1,0 +1,20 @@
+# Recursive circuit definition — ERROR.
+# Circuit A calls B, B calls A — would cause infinite expansion.
+- source: |
+    circuit A(x: v):
+        b := B(y: v)
+        result := plus(v, b.result)
+
+    circuit B(y: w):
+        a := A(x: w)
+        result := plus(w, a.result)
+
+    src := source("data")
+    src :: stream(struct("v": i64))
+
+    c := A(x: src)
+    out := c.result
+
+  expected_errors:
+    - class: "fixpoint_error"
+      message: "recursive circuit definition"
