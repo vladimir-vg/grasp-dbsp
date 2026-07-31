@@ -610,9 +610,12 @@ convert_input_row([W, RowMap], Type) ->
 
 collect_and_consolidate(OutputCols, Epoch) ->
     AllDeltas = maps:fold(
-        fun(_Name, Col, Acc) ->
-            Acc ++ gdbsp_test_collector_proc:get_by_epoch(Col, Epoch)
+        fun(Name, Col, Acc) ->
+            Deltas = gdbsp_test_collector_proc:get_by_epoch(Col, Epoch),
+            ct:pal("EPOCH ~w ~s deltas: ~p", [Epoch, Name, Deltas]),
+            Acc ++ Deltas
         end, [], OutputCols),
+    ct:pal("EPOCH ~w aggregated: ~p", [Epoch, AllDeltas]),
     lists:foldl(
         fun({W, Row}, Acc) ->
             Norm = norm_row(Row),
