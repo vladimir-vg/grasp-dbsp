@@ -7,7 +7,7 @@
 
     src := source("data")
     src :: stream(struct("v": i64))
-    fp := fixpoint countdown(base: src, result: src)
+    fp := fixpoint(countdown(base: src, result: src))
     out := fp.result
 
   functions:

@@ -5,13 +5,13 @@
         y := distinct(plus(v, v))
 
     circuit outer(a: w):
-        fp := fixpoint inner(x: w)
+        fp := fixpoint(inner(x: w))
         a := distinct(plus(w, fp.y))
 
     src := source("data")
     src :: stream(struct("v": i64))
 
-    result := fixpoint outer(a: src)
+    result := fixpoint(outer(a: src))
     out := result.a
 
   expected_errors:

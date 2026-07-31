@@ -187,6 +187,7 @@ norm_args([{Key, Val} | Rest]) ->
     [#{Key => norm_arg_val(Val)} | norm_args(Rest)];
 norm_args([]) -> [].
 
+norm_arg_val({var, B}) when is_binary(B) -> #{var => binary_to_atom(B, utf8)};
 norm_arg_val(B) when is_binary(B) -> binary_to_atom(B, utf8);
 norm_arg_val(V) -> V.
 

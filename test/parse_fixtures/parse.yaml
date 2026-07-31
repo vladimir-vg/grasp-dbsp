@@ -412,3 +412,17 @@
     - class: parse_error
       line: 1
       contains: "expected '(' in function declaration"
+- description: "Multi-line fixpoint instantiation"
+  input: |
+    fp := fixpoint(countdown(
+        base: src,
+        result: src
+    ))
+  expected:
+    - name: fp
+      op: fixpoint
+      args:
+        - {var: countdown}
+        - {base: {var: src}}
+        - {result: {var: src}}
+      line: 1

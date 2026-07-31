@@ -10,7 +10,7 @@
 
     src := source("data")
     src :: stream(struct("v": i64))
-    fp := fixpoint countdown(base: src, result: src)
+    fp := fixpoint(countdown(base: src, result: src))
     out := fp.result
 
   functions:
@@ -74,7 +74,7 @@
 
     src := source("data")
     src :: stream(struct("v": i64))
-    fp := fixpoint countdown(base: src, result: src)
+    fp := fixpoint(countdown(base: src, result: src))
     out := fp.result
 
   functions:
@@ -137,7 +137,7 @@
     src_b := source("rb")
     src_b :: stream(struct("k": i64, "b": string("UTF-8")))
 
-    fp := fixpoint accumulator(base: src_a, state: src_b)
+    fp := fixpoint(accumulator(base: src_a, state: src_b))
     out := fp.state
 
   input:
@@ -169,8 +169,8 @@
     src_str := source("strs")
     src_str :: stream(struct("v": string("UTF-8")))
 
-    fp_i64 := fixpoint echo_i64(x: src_i64)
-    fp_str := fixpoint echo_str(x: src_str)
+    fp_i64 := fixpoint(echo_i64(x: src_i64))
+    fp_str := fixpoint(echo_str(x: src_str))
 
     out_i64 := fp_i64.result
     out_str := fp_str.result
@@ -206,8 +206,8 @@
     src := source("data")
     src :: stream(struct("v": i64))
 
-    fp1 := fixpoint echo(x: src)
-    fp2 := fixpoint echo(x: fp1.result)
+    fp1 := fixpoint(echo(x: src))
+    fp2 := fixpoint(echo(x: fp1.result))
 
     out1 := fp1.result
     out2 := fp2.result

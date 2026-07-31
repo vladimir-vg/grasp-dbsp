@@ -5,7 +5,7 @@
         y := distinct(plus(v, v))
 
     circuit leaf(x: w):
-        fp := fixpoint step(input: w)
+        fp := fixpoint(step(input: w))
         result := fp.y
 
     circuit middle(y: u):
@@ -20,7 +20,7 @@
     src := source("data")
     src :: stream(struct("v": i64))
 
-    result := fixpoint top(z: src)
+    result := fixpoint(top(z: src))
     out := result.result
 
   expected_errors:

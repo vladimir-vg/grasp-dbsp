@@ -6,7 +6,7 @@
     src_a :: stream(struct("via": i64, "la": i64))
     src_b := source("right")
     src_b :: stream(struct("via": i64, "lb": i64))
-    fp := fixpoint join_two(a: src_a, b: src_b)
+    fp := fixpoint(join_two(a: src_a, b: src_b))
     out := fp.result
 
   input:

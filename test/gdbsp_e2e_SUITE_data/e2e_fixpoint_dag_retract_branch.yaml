@@ -24,9 +24,9 @@
     src_b := source("data_b")
     src_b :: stream(struct("v": i64))
 
-    fp_a := fixpoint countdown(base: src_a, result: src_a)
-    fp_b := fixpoint countdown(base: src_b, result: src_b)
-    fp_m := fixpoint merge_two(base1: fp_a.result, base2: fp_b.result, result: fp_a.result)
+    fp_a := fixpoint(countdown(base: src_a, result: src_a))
+    fp_b := fixpoint(countdown(base: src_b, result: src_b))
+    fp_m := fixpoint(merge_two(base1: fp_a.result, base2: fp_b.result, result: fp_a.result))
 
     out_m := fp_m.result
 

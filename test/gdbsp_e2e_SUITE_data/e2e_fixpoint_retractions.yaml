@@ -4,7 +4,7 @@
 
     src := source("data")
     src :: stream(struct("v": i64))
-    fp := fixpoint acc(base: src, result: src)
+    fp := fixpoint(acc(base: src, result: src))
     out := fp.result
 
   input:
@@ -25,7 +25,7 @@
 
     src := source("data")
     src :: stream(struct("v": i64))
-    fp := fixpoint acc(base: src, result: src)
+    fp := fixpoint(acc(base: src, result: src))
     out := fp.result
 
   input:
@@ -48,7 +48,7 @@
 
     src := source("data")
     src :: stream(struct("v": i64))
-    fp := fixpoint acc(base: src, result: src)
+    fp := fixpoint(acc(base: src, result: src))
     out := fp.result
 
   input:
@@ -73,7 +73,7 @@
 
     src := source("data")
     src :: stream(struct("v": i64))
-    fp := fixpoint acc(base: src, result: src)
+    fp := fixpoint(acc(base: src, result: src))
     out := fp.result
 
   input:
@@ -102,7 +102,7 @@
 
     src := source("data")
     src :: stream(struct("v": i64))
-    fp := fixpoint acc(base: src, result: src)
+    fp := fixpoint(acc(base: src, result: src))
     out := fp.result
 
   input:

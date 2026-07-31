@@ -11,7 +11,7 @@
     src_b := source("unused")
     src_b :: stream(struct("v": i64))
 
-    fp := fixpoint unused_base(base: src_b, result: src_a)
+    fp := fixpoint(unused_base(base: src_b, result: src_a))
     out := fp.result
 
   ensure_matches_incremental: true
@@ -38,7 +38,7 @@
     src := source("data")
     src :: stream(struct("x": i64))
 
-    fp := fixpoint add_feedback(base: src, result: src)
+    fp := fixpoint(add_feedback(base: src, result: src))
     out := fp.result
 
   ensure_matches_incremental: true
@@ -64,7 +64,7 @@
     src := source("data")
     src :: stream(struct("v": i64))
 
-    fp := fixpoint filter_loop(base: src, result: src)
+    fp := fixpoint(filter_loop(base: src, result: src))
     out := fp.result
 
   functions:

@@ -217,8 +217,8 @@ circuit_trivial_dedup(_Config) ->
           "    result := map(v, fn1)\n"
           "s := source(\"data\")\n"
           "s :: stream(struct(\"x\": i64))\n"
-          "fp1 := fixpoint pass(x: s)\n"
-          "fp2 := fixpoint pass(x: s)\n"
+          "fp1 := fixpoint(pass(x: s))\n"
+          "fp2 := fixpoint(pass(x: s))\n"
           "out1 := fp1.result\n"
           "out2 := fp2.result\n",
     {ok, LG} = lower(Src),
@@ -237,8 +237,8 @@ circuit_trivial_different_args(_Config) ->
           "s1 :: stream(struct(\"x\": i64))\n"
           "s2 := source(\"data2\")\n"
           "s2 :: stream(struct(\"x\": i64))\n"
-          "fp1 := fixpoint pass(x: s1)\n"
-          "fp2 := fixpoint pass(x: s2)\n"
+          "fp1 := fixpoint(pass(x: s1))\n"
+          "fp2 := fixpoint(pass(x: s2))\n"
           "out1 := fp1.result\n"
           "out2 := fp2.result\n",
     {ok, LG} = lower(Src),
@@ -251,10 +251,10 @@ circuit_trivial_nested_tags(_Config) ->
     Src = "circuit inner(x: v):\n"
           "    result := map(v, fn1)\n"
           "circuit outer(x: v):\n"
-          "    inner_fp := fixpoint inner(x: v)\n"
+          "    inner_fp := fixpoint(inner(x: v))\n"
           "s := source(\"data\")\n"
           "s :: stream(struct(\"x\": i64))\n"
-          "fp := fixpoint outer(x: s)\n"
+          "fp := fixpoint(outer(x: s))\n"
           "out := fp.inner_fp.result\n",
     {ok, LG} = lower(Src),
     %% Tags should include nested path like "fp.inner_fp.result"
@@ -266,7 +266,7 @@ circuit_trivial_circuit_access(_Config) ->
           "    result := map(v, fn1)\n"
           "s := source(\"data\")\n"
           "s :: stream(struct(\"x\": i64))\n"
-          "fp := fixpoint pass(x: s)\n"
+          "fp := fixpoint(pass(x: s))\n"
           "out := fp.result\n",
     {ok, LG} = lower(Src),
     %% circuit_access "fp.result" should resolve to the body output tag
@@ -286,7 +286,7 @@ fixpoint_selfref_inputs_isolated(_Config) ->
           "    result := distinct(r)\n"
           "s := source(\"data\")\n"
           "s :: stream(struct(\"v\": i64))\n"
-          "fp := fixpoint acc(base: s, result: s)\n"
+          "fp := fixpoint(acc(base: s, result: s))\n"
           "out := fp.result\n",
     {ok, LG} = lower(Src),
     %% Both base and result params map to same source "s",
@@ -305,7 +305,7 @@ fixpoint_selfref_tags(_Config) ->
           "    result := distinct(r)\n"
           "s := source(\"data\")\n"
           "s :: stream(struct(\"v\": i64))\n"
-          "fp := fixpoint acc(base: s, result: s)\n"
+          "fp := fixpoint(acc(base: s, result: s))\n"
           "out := fp.result\n",
     {ok, LG} = lower(Src),
     %% fixpoint_output has tag "fp.result", fixpoint_input does NOT
@@ -323,7 +323,7 @@ fixpoint_selfref_body_wiring(_Config) ->
           "    result := distinct(r)\n"
           "s := source(\"data\")\n"
           "s :: stream(struct(\"v\": i64))\n"
-          "fp := fixpoint acc(base: s, result: s)\n"
+          "fp := fixpoint(acc(base: s, result: s))\n"
           "out := fp.result\n",
     {ok, LG} = lower(Src),
     %% The body distinct node should consume a fixpoint_input (self-ref),
@@ -342,7 +342,7 @@ fixpoint_selfref_metadata(_Config) ->
           "    result := distinct(r)\n"
           "s := source(\"data\")\n"
           "s :: stream(struct(\"v\": i64))\n"
-          "fp := fixpoint acc(base: s, result: s)\n"
+          "fp := fixpoint(acc(base: s, result: s))\n"
           "out := fp.result\n",
     {ok, LG} = lower(Src),
     1 = map_size(LG#lowered_graph.fixpoints),
@@ -372,7 +372,7 @@ fixpoint_selfref_distinct_valid(_Config) ->
           "    result := distinct(r)\n"
           "s := source(\"data\")\n"
           "s :: stream(struct(\"v\": i64))\n"
-          "fp := fixpoint ok(base: s, result: s)\n"
+          "fp := fixpoint(ok(base: s, result: s))\n"
           "out := fp.result\n",
     {ok, _LG} = lower(Src),
     ok.
@@ -382,7 +382,7 @@ fixpoint_selfref_distinct_error(_Config) ->
           "    result := map(r, fn1)\n"
           "s := source(\"data\")\n"
           "s :: stream(struct(\"v\": i64))\n"
-          "fp := fixpoint bad(base: s, result: s)\n"
+          "fp := fixpoint(bad(base: s, result: s))\n"
           "out := fp.result\n",
     {error, {fixpoint_error, {_Line, Msg}}} = lower(Src),
     true = (binary:match(Msg, <<"distinct">>) =/= nomatch),
@@ -394,7 +394,7 @@ fixpoint_forbidden_operator(_Config) ->
           "    agg := aggregate(r, sum_sal, by: [\"dept\"], value: \"sal\", as: \"total\")\n"
           "s := source(\"data\")\n"
           "s :: stream(struct(\"v\": i64))\n"
-          "fp := fixpoint bad(base: s, result: s)\n"
+          "fp := fixpoint(bad(base: s, result: s))\n"
           "out := fp.result\n",
     {error, {fixpoint_error, {_Line, Msg}}} = lower(Src),
     true = (binary:match(Msg, <<"aggregate">>) =/= nomatch),
@@ -405,7 +405,7 @@ fixpoint_trivial_no_fixpoint_info(_Config) ->
           "    result := map(v, fn1)\n"
           "s := source(\"data\")\n"
           "s :: stream(struct(\"x\": i64))\n"
-          "fp := fixpoint pass(x: s)\n"
+          "fp := fixpoint(pass(x: s))\n"
           "out := fp.result\n",
     {ok, LG} = lower(Src),
     0 = map_size(LG#lowered_graph.fixpoints),
@@ -420,7 +420,7 @@ circuit_access_resolved(_Config) ->
           "    result := map(v, fn1)\n"
           "s := source(\"data\")\n"
           "s :: stream(struct(\"x\": i64))\n"
-          "fp := fixpoint pass(x: s)\n"
+          "fp := fixpoint(pass(x: s))\n"
           "out := fp.result\n",
     {ok, LG} = lower(Src),
     %% "out" should exist and be a plus wrapping the body output
@@ -436,7 +436,7 @@ tag_map_completeness(_Config) ->
           "    result := map(v, fn1)\n"
           "s := source(\"data\")\n"
           "s :: stream(struct(\"x\": i64))\n"
-          "fp := fixpoint pass(x: s)\n"
+          "fp := fixpoint(pass(x: s))\n"
           "out := fp.result\n",
     {ok, LG} = lower(Src),
     %% Every source-level name should be in tag_map

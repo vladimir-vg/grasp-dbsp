@@ -9,7 +9,7 @@
         result := distinct(combined)
 
     circuit pipeline(s: val):
-        fp := fixpoint countdown(base: s, result: s)
+        fp := fixpoint(countdown(base: s, result: s))
         result := fp.result
 
     src := source("data")

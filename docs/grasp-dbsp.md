@@ -23,7 +23,7 @@ repeat identically (no-op); a conflicting repeat is an error.
 - Function declarations: `fn :: function((params) -> ret)`
 - Aggregate function declarations: `fn :: aggregate_function((val) -> ret)`
 - Circuit definitions: `circuit name(key: internal, ...): ...` (see [circuits.md](circuits.md))
-- Fixpoint instantiation: `fp := fixpoint name(key: expr, ...)` (see [fixpoint-circuits.md](fixpoint-circuits.md))
+- Fixpoint instantiation: `fp := fixpoint(name(key: expr, ...))` (see [fixpoint-circuits.md](fixpoint-circuits.md))
 - Comments: `# text`
 
 Column names in keyword arguments are quoted strings. Node names and function

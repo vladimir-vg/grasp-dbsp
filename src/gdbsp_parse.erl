@@ -127,20 +127,8 @@ try_node_def_single(Line, St) ->
                         {Op, Inner} ->
                             case Op of
                                 <<"fixpoint">> ->
-                                    case binary:match(Inner, <<"(">>) of
-                                        {Pos, 1} ->
-                                            CName = trim(binary:part(Inner, 0, Pos)),
-                                            <<_:Pos/binary, "(", More/binary>> = Inner,
-                                            case extract_parens_content(<<"(", More/binary>>) of
-                                                {closed, InnerClean} ->
-                                                    Args = parse_args(InnerClean),
-                                                    {done, mk_node(Name, Op, [CName | Args], St)};
-                                                {open, _} ->
-                                                    {done, mk_node(Name, Op, [CName], St)}
-                                            end;
-                                        nomatch ->
-                                            {done, mk_node(Name, Op, [trim(Inner)], St)}
-                                    end;
+                                    {Args, _Rest, _St2} = extract_fixpoint_args(Inner, [], St, 1),
+                                    {done, mk_node(Name, Op, Args, St)};
                                 _ ->
                                     case extract_parens_content(Inner) of
                                         {closed, InnerClean} ->
@@ -301,34 +289,14 @@ mk_circuit_access_node(Name, VarField, St) ->
 
 split_op_inner(OpCall) ->
     case binary:split(OpCall, <<"(">>) of
-        [Op, Inner] ->
-            case Op of
-                <<"fixpoint ", CName/binary>> ->
-                    {<<"fixpoint">>, <<CName/binary, "(", Inner/binary>>};
-                _ ->
-                    {Op, Inner}
-            end;
-        _ ->
-            false
+        [Op, Inner] -> {Op, Inner};
+        _ -> false
     end.
 
-collect_node_args_inner(_OpCall, Op, Inner, St, Rest) ->
-    case Op of
+collect_node_args_inner(_OpCall, _Op, Inner, St, Rest) ->
+    case _Op of
         <<"fixpoint">> ->
-            case binary:match(Inner, <<"(">>) of
-                nomatch ->
-                    {[trim(Inner)], Rest, St};
-                {ParenPos, 1} ->
-                    CName = trim(binary:part(Inner, 0, ParenPos)),
-                    <<_:ParenPos/binary, "(", More/binary>> = Inner,
-                    case content_between_parens(More, 1, 0, <<>>, false) of
-                        {closed, KwArgsStr} ->
-                            KwTokens = parse_args_raw(KwArgsStr),
-                            {[CName | KwTokens], Rest, St};
-                        {open, _} ->
-                            {[CName], Rest, St}
-                    end
-            end;
+            extract_fixpoint_args(Inner, Rest, St, length(Rest));
         _ ->
             case extract_parens_content(Inner) of
                 {closed, InnerClean} ->
@@ -356,6 +324,37 @@ extract_parens_content(Inner) ->
             <<_:Pos/binary, "(", More/binary>> = Inner,
             content_between_parens(More, 1, 0, <<>>, false)
     end.
+
+extract_fixpoint_args(Inner, Rest, St, _RestStart) ->
+    case binary:match(Inner, <<"(">>) of
+        nomatch ->
+            CName = trim(Inner),
+            {[CName], Rest, St};
+        {ParenPos, 1} ->
+            CName = trim(binary:part(Inner, 0, ParenPos)),
+            <<_:ParenPos/binary, "(", More/binary>> = Inner,
+            case content_between_parens(More, 1, 0, <<>>, false) of
+                {closed, KwArgsStr} ->
+                    KwTokens = parse_args_raw(KwArgsStr),
+                    {[CName | KwTokens], Rest, St};
+                {open, Partial} ->
+                    feed_fixpoint_lines(CName, Partial, Rest, St, _RestStart - length(Rest))
+            end
+    end.
+
+feed_fixpoint_lines(CName, Partial, [Line0 | Rest], St, Consumed) ->
+    Line = trim(trim_right(Line0)),
+    More = <<Partial/binary, Line/binary>>,
+    case content_between_parens(More, 1, 0, <<>>, false) of
+        {closed, KwArgsStr} ->
+            KwTokens = parse_args_raw(KwArgsStr),
+            {[CName | KwTokens], Rest, St#st{line = St#st.line + Consumed + 1}};
+        {open, NewPartial} ->
+            feed_fixpoint_lines(CName, NewPartial, Rest, St, Consumed + 1)
+    end;
+feed_fixpoint_lines(CName, Partial, [], St, Consumed) ->
+    KwTokens = parse_args_raw(Partial),
+    {[CName | KwTokens], [], St#st{line = St#st.line + Consumed}}.
 
 collect_node_args(OpCall, Op, St, Rest) ->
     %% OpCall looks like "map(src, fn)"
@@ -532,7 +531,6 @@ known_op(<<"project">>)            -> true;
 known_op(<<"antijoin">>)           -> true;
 known_op(<<"circuit_access">>)     -> true;
 known_op(<<"fixpoint">>)           -> true;
-known_op(<<"fixpoint_rec">>)       -> true;
 known_op(_)                        -> false.
 
 parse_node_arg(Arg) when is_binary(Arg) ->

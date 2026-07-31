@@ -23,11 +23,11 @@ This document extends [circuits.md](circuits.md). Concepts introduced there
 ## 2. Syntax
 
 ```
-fp := fixpoint name(key1: expr1, key2: expr2)
+fp := fixpoint(name(key1: expr1, key2: expr2))
 result := plus(fp.node1, fp.node2)
 ```
 
-The `fixpoint` keyword precedes the circuit name. Arguments are passed by
+The `fixpoint` keyword wraps a circuit instantiation. Arguments are passed by
 keyword, identical to macro-expansion syntax. Accessing internal nodes via
 `fp.node` returns the convergent value after all iterations complete.
 
@@ -165,7 +165,7 @@ self-referential parameter is wrapped in `distinct`. Then for any arguments
 `A1, ..., An`:
 
 ```
-fixpoint f(k1: A1, ..., kn: An).N
+fixpoint(f, k1: A1, ..., kn: An).N
 ```
 
 produces the same Z-set value as:
@@ -222,10 +222,10 @@ circuit inner(x: v):
     y := distinct(plus(v, processing))
 
 circuit outer(a: w):
-    fp := fixpoint inner(x: w)
+    fp := fixpoint(inner(x: w))
     a := distinct(map(fp.y, fn))
 
-result := fixpoint outer(a: src)
+result := fixpoint(outer(a: src))
 ```
 
 The outer fixpoint iterates. Each outer iteration runs the inner fixpoint to
@@ -312,7 +312,7 @@ circuit tc_body(edge: e, path: p):
 edge_src := source("edge")
 edge_src :: stream(struct("from": i64, "to": i64))
 
-fp := fixpoint tc_body(edge: edge_src, path: empty)
+fp := fixpoint(tc_body(edge: edge_src, path: empty))
 path_state := integrate(fp.path)
 path_deltas := differentiate(path_state)
 ```
@@ -342,7 +342,7 @@ circuit mutual_body(init: prev_init, r1: prev_r1, r2: prev_r2):
 
 init_src := source("init")
 
-fp := fixpoint mutual_body(init: init_src, r1: init_src, r2: empty)
+fp := fixpoint(mutual_body(init: init_src, r1: init_src, r2: empty))
 r1_state := integrate(fp.r1)
 r2_state := integrate(fp.r2)
 ```
@@ -372,10 +372,10 @@ circuit inner(x: v):
     y := distinct(plus(v, shift))
 
 circuit outer(a: w):
-    fp := fixpoint inner(x: w)
+    fp := fixpoint(inner(x: w))
     a := distinct(plus(w, fp.y))
 
-result := fixpoint outer(a: src)
+result := fixpoint(outer(a: src))
 ```
 
 Each outer iteration runs the inner fixpoint to convergence before computing

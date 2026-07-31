@@ -119,7 +119,7 @@ lg_fixpoint_boundary_nodes(_Config) ->
         "s :: stream(struct(\"a\": i64))\n"
         "circuit tc(base: input, result: r):\n"
         "  result := distinct(r)\n"
-        "fp := fixpoint tc(base: s, result: s)\n"
+        "fp := fixpoint(tc(base: s, result: s))\n"
     >>,
     {ok, LG} = lower(Src),
     Dot = lists:flatten(gdbsp_graphviz:lowered_to_dot(LG)),
@@ -133,7 +133,7 @@ lg_fixpoint_legend(_Config) ->
         "s :: stream(struct(\"a\": i64))\n"
         "circuit tc(base: input, result: r):\n"
         "  result := distinct(r)\n"
-        "fp := fixpoint tc(base: s, result: s)\n"
+        "fp := fixpoint(tc(base: s, result: s))\n"
     >>,
     {ok, LG} = lower(Src),
     Dot = lists:flatten(gdbsp_graphviz:lowered_to_dot(LG)),
@@ -193,7 +193,7 @@ cg_rec_nodes(_Config) ->
         "s :: stream(struct(\"from\": i64, \"to\": i64))\n"
         "circuit tc(base: input, result: r):\n"
         "  result := distinct(r)\n"
-        "fp := fixpoint tc(base: s, result: s)\n"
+        "fp := fixpoint(tc(base: s, result: s))\n"
     >>,
     {ok, CG, _} = compile_minimal(Src),
     Dot = lists:flatten(gdbsp_graphviz:circuit_to_dot(CG)),
@@ -235,7 +235,7 @@ cg_scc_body_comment(_Config) ->
         "s :: stream(struct(\"from\": i64, \"to\": i64))\n"
         "circuit tc(base: input, result: r):\n"
         "  result := distinct(r)\n"
-        "fp := fixpoint tc(base: s, result: s)\n"
+        "fp := fixpoint(tc(base: s, result: s))\n"
     >>,
     {ok, CG, _} = compile_minimal(Src),
     Dot = lists:flatten(gdbsp_graphviz:circuit_to_dot(CG)),

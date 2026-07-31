@@ -67,13 +67,13 @@ Non-fixpoint circuit calls at the top level may contain fixpoints freely.
 
 ```
 circuit A():
-    fixpoint inner(x: src)
+    fixpoint(inner(x: src))
     out := inner.result
 
 circuit B():
     c := A()
 
-fixpoint B()   # ERROR: B → A → fixpoint inner
+fixpoint(B())   # ERROR: B → A → fixpoint inner
 ```
 
 ## 6. Recursive Circuit Definitions

@@ -9,8 +9,8 @@
     src_str := source("strs")
     src_str :: stream(struct("v": string("UTF-8")))
 
-    fp_i64 := fixpoint echo(x: src_i64)
-    fp_str := fixpoint echo(x: src_str)
+    fp_i64 := fixpoint(echo(x: src_i64))
+    fp_str := fixpoint(echo(x: src_str))
 
     out_i64 := fp_i64.output
     out_str := fp_str.output
@@ -43,8 +43,8 @@
     src_f64 := source("right2")
     src_f64 :: stream(struct("k": i64, "b": f64))
 
-    fp1 := fixpoint pair(a: src_i64_i64, b: src_i64_i64r)
-    fp2 := fixpoint pair(a: src_str_f64, b: src_f64)
+    fp1 := fixpoint(pair(a: src_i64_i64, b: src_i64_i64r))
+    fp2 := fixpoint(pair(a: src_str_f64, b: src_f64))
 
     out1 := fp1.result
     out2 := fp2.result
@@ -76,7 +76,7 @@
     src_b := source("right")
     src_b :: stream(struct("k1": i64, "k2": string("UTF-8"), "b": i32))
 
-    fp := fixpoint pair2(a: src_a, b: src_b)
+    fp := fixpoint(pair2(a: src_a, b: src_b))
     out := fp.result
 
   input:
@@ -102,7 +102,7 @@
     src_b := source("rb")
     src_b :: stream(struct("k": i64, "b": string("UTF-8")))
 
-    fp := fixpoint accumulator(base: src_a, state: src_b)
+    fp := fixpoint(accumulator(base: src_a, state: src_b))
     out := fp.state
 
   input:
@@ -126,7 +126,7 @@
     src := source("data")
     src :: stream(struct("id": i64, "val": i64))
 
-    fp := fixpoint add_label(base: src, result: src)
+    fp := fixpoint(add_label(base: src, result: src))
     out := fp.result
 
   functions:
@@ -172,7 +172,7 @@
     src := source("data")
     src :: stream(struct("id": i64, "name": string("UTF-8"), "extra": i64))
 
-    fp := fixpoint narrow(base: src, result: src)
+    fp := fixpoint(narrow(base: src, result: src))
     out := fp.result
 
   input:
@@ -193,7 +193,7 @@
     src := source("data")
     src :: stream(struct("a": i64, "b": string("UTF-8")))
 
-    fp := fixpoint rename_fields(x: src)
+    fp := fixpoint(rename_fields(x: src))
     out := fp.result
 
   functions:

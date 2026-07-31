@@ -51,7 +51,7 @@ in the final circuit graph.
 
 ### 3.2 Fixpoint Expansion
 
-Fixpoint calls (`fixpoint Name(kw: args...)`) are classified as either
+Fixpoint calls (`fixpoint(Name(kw: args...))`) are classified as either
 **trivial** (no self-referential parameters) or **self-referential** (at
 least one parameter maps to a body node, creating a feedback loop).
 

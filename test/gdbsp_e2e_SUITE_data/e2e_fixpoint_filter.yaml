@@ -4,7 +4,7 @@
 
     src := source("data")
     src :: stream(struct("val": i64))
-    fp := fixpoint pass_pos(x: src)
+    fp := fixpoint(pass_pos(x: src))
     out := fp.result
 
   functions:

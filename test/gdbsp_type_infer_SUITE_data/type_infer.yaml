@@ -459,7 +459,7 @@
         result := distinct(val)
     src := source("data")
     src :: stream(struct("a": i64, "b": i64))
-    fp := fixpoint passthrough(x: src)
+    fp := fixpoint(passthrough(x: src))
     out := fp.result
   expected:
     fp.result:
