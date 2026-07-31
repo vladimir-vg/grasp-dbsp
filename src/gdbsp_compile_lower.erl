@@ -283,48 +283,16 @@ expand_trivial(FpName, BodyNodes, Params, KwMap, LG0, _Line) ->
 %%--------------------------------------------------------------------
 
 expand_selfref(_FpName, NodeName, CircuitName, Params, BodyNodes,
-               SelfRefKws, KwMap, LG0, Line) ->
+                SelfRefKws, KwMap, LG0, Line) ->
     FpHmac = fixpoint_hash(CircuitName, KwMap),
 
     ok = validate_selfref_distinct(BodyNodes, SelfRefKws, CircuitName, Line),
 
     Prefix = <<NodeName/binary, ".">>,
 
-    %% Create fixpoint_input nodes for ALL parameters.
-    %% Assign each an internal name for the graph compiler's name resolution.
-    {LG1, InputMap, _FpInNames} = lists:foldl(
-        fun({Kw, Internal}, {LG, AccById, AccByTag}) ->
-            KwBin = atom_to_binary(Kw, utf8),
-            case maps:find(Kw, KwMap) of
-                {ok, {var, ExtName}} ->
-                    case maps:find(ExtName, LG#lowered_graph.tag_map) of
-                        {ok, ExtId} ->
-                            FpInName = fixpoint_input_name(FpHmac, KwBin),
-                            %% Include param name in args for content-addressing.
-                            %% No user-facing tag — only internal name.
-                            {LG2, InpId} = add_node(fixpoint_input, [ExtId],
-                                                    [{string, KwBin}],
-                                                    [], undefined, LG),
-                            LG3 = register_internal_name(LG2, FpInName, InpId),
-                            {LG3, AccById#{Internal => InpId},
-                             AccByTag#{KwBin => InpId}};
-                        error ->
-                            throw_lower_error(Line,
-                                io_lib:format(
-                                    "unresolved fixpoint argument ~s for ~s",
-                                    [ExtName, KwBin]))
-                    end;
-                _ ->
-                    {LG, AccById, AccByTag}
-            end
-        end,
-        {LG0, #{}, #{}},
-        maps:to_list(Params)),
+    {LG1, InputMap} = create_fixpoint_inputs(Params, KwMap, FpHmac, LG0, Line),
 
     %% Build substitution map: internal names → fixpoint_input node names.
-    %% All params (both base and self-ref) are wired through fixpoint_input
-    %% nodes so that the circuit graph compiler can route them through Rec
-    %% nodes with proper iteration barriers.
     InternalNameMap = maps:fold(
         fun(Kw, Internal, A) ->
             KwBin = atom_to_binary(Kw, utf8),
@@ -359,7 +327,61 @@ expand_selfref(_FpName, NodeName, CircuitName, Params, BodyNodes,
         {LG2, #{}},
         SelfRefKwBins),
 
-    %% Record fixpoint metadata
+    FixInfo = build_fixpoint_metadata(Params, SelfRefKws, InputMap, BodyIds,
+                                       Prefix, CircuitName, NodeName),
+
+    %% Add fixpoint_output tags to tag_map for external access
+    LG4 = maps:fold(
+        fun(KwBin, OutId, LGAcc) ->
+            Tag = <<Prefix/binary, KwBin/binary>>,
+            LGAcc#lowered_graph{tag_map = maps:put(Tag, OutId, LGAcc#lowered_graph.tag_map)}
+        end,
+        LG3,
+        OutIdMap),
+
+    LG4#lowered_graph{fixpoints = maps:put(FpHmac, FixInfo, LG4#lowered_graph.fixpoints)}.
+
+%%--------------------------------------------------------------------
+%% Fixpoint self-ref helpers
+%%--------------------------------------------------------------------
+
+-spec create_fixpoint_inputs(#{atom() => binary()}, map(),
+                             fixpoint_hash(), #lowered_graph{},
+                             pos_integer()) ->
+    {#lowered_graph{}, #{binary() => lnode_id()}}.
+create_fixpoint_inputs(Params, KwMap, FpHmac, LG, Line) ->
+    lists:foldl(
+        fun({Kw, Internal}, {LGAcc, AccById}) ->
+            KwBin = atom_to_binary(Kw, utf8),
+            case maps:find(Kw, KwMap) of
+                {ok, {var, ExtName}} ->
+                    case maps:find(ExtName, LGAcc#lowered_graph.tag_map) of
+                        {ok, ExtId} ->
+                            FpInName = fixpoint_input_name(FpHmac, KwBin),
+                            {LG2, InpId} = add_node(fixpoint_input, [ExtId],
+                                                    [{string, KwBin}],
+                                                    [], undefined, LGAcc),
+                            LG3 = register_internal_name(LG2, FpInName, InpId),
+                            {LG3, AccById#{Internal => InpId}};
+                        error ->
+                            throw_lower_error(Line,
+                                io_lib:format(
+                                    "unresolved fixpoint argument ~s for ~s",
+                                    [ExtName, KwBin]))
+                    end;
+                _ ->
+                    {LGAcc, AccById}
+            end
+        end,
+        {LG, #{}},
+        maps:to_list(Params)).
+
+-spec build_fixpoint_metadata(#{atom() => binary()}, [atom()],
+                               #{binary() => lnode_id()},
+                               #{binary() => lnode_id()}, binary(),
+                               binary(), binary()) -> fixpoint_info().
+build_fixpoint_metadata(Params, SelfRefKws, InputMap, BodyIds, Prefix,
+                         CircuitName, NodeName) ->
     ParamsInfo = maps:fold(
         fun(Kw, Internal, Acc) ->
             KwBin = atom_to_binary(Kw, utf8),
@@ -381,23 +403,11 @@ expand_selfref(_FpName, NodeName, CircuitName, Params, BodyNodes,
         end,
         #{},
         Params),
-
-    FixInfo = #{
+    #{
         circuit_name => CircuitName,
         tags => [NodeName],
         params => ParamsInfo
-    },
-
-    %% Add fixpoint_output tags to tag_map for external access
-    LG4 = maps:fold(
-        fun(KwBin, OutId, LGAcc) ->
-            Tag = <<Prefix/binary, KwBin/binary>>,
-            LGAcc#lowered_graph{tag_map = maps:put(Tag, OutId, LGAcc#lowered_graph.tag_map)}
-        end,
-        LG3,
-        OutIdMap),
-
-    LG4#lowered_graph{fixpoints = maps:put(FpHmac, FixInfo, LG4#lowered_graph.fixpoints)}.
+    }.
 
 %%--------------------------------------------------------------------
 %% Content-addressed node insertion

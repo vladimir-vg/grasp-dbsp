@@ -296,42 +296,64 @@ construct_fixpoints(G, Fixpoints, LnIdMap, CircuitFixpointInputs,
 
 construct_one_fixpoint(G0, _FpHmac, FixInfo, LnIdMap, CInputMap,
                         _COutputMap, ROIdsAcc) ->
-    #{circuit_name := _CName, params := ParamsInfo} = FixInfo,
+    #{params := ParamsInfo} = FixInfo,
     ParamsList = maps:to_list(ParamsInfo),
     SelfRefParams = [{K, V} || {K, V} <- ParamsList,
                                 maps:get(kind, V) =:= self_ref],
     BaseParams = [{K, V} || {K, V} <- ParamsList,
                             maps:get(kind, V) =:= base],
-
     AllParams = SelfRefParams ++ BaseParams,
-
     SccId = G0#circuit_graph.next_id,
+    Nodes = G0#circuit_graph.nodes,
 
-    %% Read original integrate node inputs before overwriting with Rec nodes.
-    %% Each fixpoint_input becomes an integrate node in the circuit graph;
-    %% we replace each with a {rec} node while preserving the original source
-    %% wiring.
-    OriginalInputs = maps:from_list(
+    OrigIns    = original_inputs_for_params(AllParams, CInputMap, Nodes),
+    DSet       = build_downstream_set(AllParams, CInputMap, Nodes),
+    {G1, RIds} = create_rec_nodes(AllParams, OrigIns, DSet, LnIdMap, SccId, G0),
+    {G2, ROIds, BodyToRO} = create_rec_output_nodes(SelfRefParams, LnIdMap, SccId, G1),
+
+    RecIdList = maps:values(RIds) ++ maps:values(ROIds),
+    ROIdSet   = maps:from_list([{Id, Id} || {_, Id} <- maps:to_list(ROIds)]),
+    G3 = mark_scc_body_nodes(G2, RecIdList, ROIdSet),
+    G4 = rewire_body_consumers(G3, BodyToRO),
+    G5 = propagate_fixpoint_schemas(G4, BaseParams, CInputMap, RIds, ROIds),
+
+    NewROAcc = maps:merge(ROIdsAcc, maps:from_list(
+        [{maps:get(label, maps:get(KwBin, ParamsInfo)), ROId}
+         || {KwBin, ROId} <- maps:to_list(ROIds)])),
+    {G5, NewROAcc}.
+
+%%--------------------------------------------------------------------
+%% Fixpoint helpers
+%%--------------------------------------------------------------------
+
+-spec original_inputs_for_params([{binary(), map()}], map(), map()) ->
+    map().
+original_inputs_for_params(AllParams, CInputMap, Nodes) ->
+    maps:from_list(
         [{K, begin
             PlaceholderId = maps:get(maps:get(input, ParamInfo), CInputMap),
-            case maps:find(PlaceholderId, G0#circuit_graph.nodes) of
+            case maps:find(PlaceholderId, Nodes) of
                 {ok, #circuit_node{inputs = Ins}} -> {PlaceholderId, Ins};
                 error -> {PlaceholderId, []}
             end
-         end} || {K, ParamInfo} <- AllParams]),
+         end} || {K, ParamInfo} <- AllParams]).
 
-    %% Create Rec nodes only for params whose fixpoint_input integrate has
-    %% downstream consumers in the body circuit.  Base params that are not
-    %% referenced by any body operator stay as plain integrates — they need
-    %% no iteration barrier and would cause deadlocks with empty body PIDs.
+-spec build_downstream_set([{binary(), map()}], map(), map()) ->
+    sets:set().
+build_downstream_set(AllParams, CInputMap, Nodes) ->
     DownstreamIds = [
         begin
             PlaceholderId = maps:get(maps:get(input, ParamInfo), CInputMap),
-            {PlaceholderId, has_downstream_consumers(PlaceholderId, G0#circuit_graph.nodes)}
+            {PlaceholderId, has_downstream_consumers(PlaceholderId, Nodes)}
         end || {_K, ParamInfo} <- AllParams],
-    DownstreamSet = sets:from_list([Id || {Id, true} <- DownstreamIds]),
+    sets:from_list([Id || {Id, true} <- DownstreamIds]).
 
-    {G1, AllRecIds} = lists:foldl(
+-spec create_rec_nodes([{binary(), map()}], map(), sets:set(),
+                       map(), non_neg_integer(), #circuit_graph{}) ->
+    {#circuit_graph{}, map()}.
+create_rec_nodes(AllParams, OriginalInputs, DownstreamSet,
+                 LnIdMap, SccId, G) ->
+    lists:foldl(
         fun({KwBin, ParamInfo}, {GA, RIds}) ->
             {PlaceholderId, OrigIns} = maps:get(KwBin, OriginalInputs),
             IsSelfRef = maps:get(kind, ParamInfo) =:= self_ref,
@@ -363,11 +385,14 @@ construct_one_fixpoint(G0, _FpHmac, FixInfo, LnIdMap, CInputMap,
                     {GA#circuit_graph{nodes = Nodes2}, RIds#{KwBin => PlaceholderId}}
             end
         end,
-        {G0, #{}},
-        AllParams),
+        {G, #{}},
+        AllParams).
 
-    %% Create RecOutput nodes (only for self-ref params)
-    {G2, RecOutputIds, BodyToRecOut} = lists:foldl(
+-spec create_rec_output_nodes([{binary(), map()}], map(),
+                              non_neg_integer(), #circuit_graph{}) ->
+    {#circuit_graph{}, map(), map()}.
+create_rec_output_nodes(SelfRefParams, LnIdMap, SccId, G) ->
+    lists:foldl(
         fun({KwBin, ParamInfo}, {GA, OutIds, BToR}) ->
             BodyOutLId = maps:get(body_out, ParamInfo),
             BodyOutCId = maps:get(BodyOutLId, LnIdMap),
@@ -380,64 +405,58 @@ construct_one_fixpoint(G0, _FpHmac, FixInfo, LnIdMap, CInputMap,
                 meta = #{scc_body => true}},
             Nodes3 = maps:put(RecOutId, RONode, GA#circuit_graph.nodes),
             GA2 = GA#circuit_graph{next_id = RecOutId + 1, nodes = Nodes3},
-
             Schema = get_schema(GA, BodyOutCId),
             GA3 = set_schema(GA2, RecOutId, Schema),
             {GA3, OutIds#{KwBin => RecOutId}, BToR#{BodyOutCId => RecOutId}}
         end,
-        {G1, #{}, #{}},
-        SelfRefParams),
+        {G, #{}, #{}},
+        SelfRefParams).
 
-    RecIdList = [Id || {_, Id} <- maps:to_list(AllRecIds)] ++
-               [Id || {_, Id} <- maps:to_list(RecOutputIds)],
-    RecOutputIdSet = maps:from_list(
-        [{Id, Id} || {_, Id} <- maps:to_list(RecOutputIds)]),
-    G3 = mark_scc_body_nodes(G2, RecIdList, RecOutputIdSet),
-
-    G4 = case map_size(BodyToRecOut) of
-        0 ->
-            G3;
-        _ ->
-            FixedNodes = maps:map(
-                fun(_NId, CNode = #circuit_node{inputs = CIns, meta = CMeta}) ->
-                    case maps:is_key(scc_body, CMeta) of
-                        true -> CNode;
-                        false ->
-                            NewIns = lists:map(
-                                fun(InId) ->
-                                    case maps:find(InId, BodyToRecOut) of
-                                        {ok, RecOutId} -> RecOutId;
-                                        error -> InId
-                                    end
-                                end, CIns),
-                            case NewIns =:= CIns of
-                                true -> CNode;
-                                false -> CNode#circuit_node{inputs = NewIns}
+-spec rewire_body_consumers(#circuit_graph{}, map()) -> #circuit_graph{}.
+rewire_body_consumers(G, BodyToRecOut) when map_size(BodyToRecOut) =:= 0 ->
+    G;
+rewire_body_consumers(G, BodyToRecOut) ->
+    FixedNodes = maps:map(
+        fun(_NId, CNode = #circuit_node{inputs = CIns, meta = CMeta}) ->
+            case maps:is_key(scc_body, CMeta) of
+                true -> CNode;
+                false ->
+                    NewIns = lists:map(
+                        fun(InId) ->
+                            case maps:find(InId, BodyToRecOut) of
+                                {ok, RecOutId} -> RecOutId;
+                                error -> InId
                             end
+                        end, CIns),
+                    case NewIns =:= CIns of
+                        true -> CNode;
+                        false -> CNode#circuit_node{inputs = NewIns}
                     end
-                end, G3#circuit_graph.nodes),
-            G3#circuit_graph{nodes = FixedNodes}
-    end,
+            end
+        end, G#circuit_graph.nodes),
+    G#circuit_graph{nodes = FixedNodes}.
 
+-spec propagate_fixpoint_schemas(#circuit_graph{}, [{binary(), map()}],
+                                 map(), map(), map()) -> #circuit_graph{}.
+propagate_fixpoint_schemas(G, BaseParams, CInputMap, RecIds, RecOutputIds) ->
     BaseInputIds = [maps:get(maps:get(input, V), CInputMap)
                     || {_K, V} <- BaseParams],
     {BaseSchema, BaseType} = case BaseInputIds of
         [FirstBaseId | _] ->
-            {get_schema(G4, FirstBaseId), get_type(G4, FirstBaseId)};
+            {get_schema(G, FirstBaseId), get_type(G, FirstBaseId)};
         [] ->
             {[], undefined}
     end,
-    G5 = lists:foldl(
-        fun(RecId, GAcc) -> GA = set_schema(GAcc, RecId, BaseSchema), set_type(GA, RecId, BaseType) end,
-        G4, maps:values(AllRecIds)),
-    G6 = lists:foldl(
-        fun(ROId, GAcc) -> GA = set_schema(GAcc, ROId, BaseSchema), set_type(GA, ROId, BaseType) end,
-        G5, maps:values(RecOutputIds)),
-
-    NewROAcc = maps:merge(ROIdsAcc, maps:from_list(
-        [{maps:get(label, maps:get(KwBin, ParamsInfo)), ROId}
-         || {KwBin, ROId} <- maps:to_list(RecOutputIds)])),
-    {G6, NewROAcc}.
+    G1 = lists:foldl(
+        fun(RecId, GAcc) ->
+            GA = set_schema(GAcc, RecId, BaseSchema),
+            set_type(GA, RecId, BaseType)
+        end, G, maps:values(RecIds)),
+    lists:foldl(
+        fun(ROId, GAcc) ->
+            GA = set_schema(GAcc, ROId, BaseSchema),
+            set_type(GA, ROId, BaseType)
+        end, G1, maps:values(RecOutputIds)).
 
 %% @doc Does the integrate node at PlaceholderId have any downstream
 %% consumers in the circuit graph (any node with PlaceholderId in its
