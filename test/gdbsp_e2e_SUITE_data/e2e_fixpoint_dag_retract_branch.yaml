@@ -1,0 +1,70 @@
+# Minimal diamond: partial retraction — retract only one branch.
+# E0: src_a{v:1} + src_b{v:1} → both countdowns produce {0,1}
+#     merge sees {0,1} from all 3 inputs; distinct emits only first +1 per value.
+#     out_m = {0:+1, 1:+1}
+# E1: retract only src_a{v:1} → fp_a retracts, fp_b unchanged
+#     merge should retract one branch's contribution: out_m = {0:-1, 1:-1}
+- source: |
+    circuit countdown(base: input, result: r):
+        filtered := filter(r, gt_zero)
+        next := map(filtered, dec_fn)
+        combined := plus(input, next)
+        result := distinct(combined)
+
+    circuit merge_two(base1: x, base2: y, result: r):
+        combined := plus(x, y, r)
+        result := distinct(combined)
+
+    src_a := source("data_a")
+    src_a :: stream(struct("v": i64))
+    src_b := source("data_b")
+    src_b :: stream(struct("v": i64))
+
+    fp_a := fixpoint countdown(base: src_a, result: src_a)
+    fp_b := fixpoint countdown(base: src_b, result: src_b)
+    fp_m := fixpoint merge_two(base1: fp_a.result, base2: fp_b.result, result: fp_a.result)
+
+    out_m := fp_m.result
+
+  functions:
+    gt_zero:
+      call: "gt"
+      args:
+        - call: "struct:get"
+          args:
+            - arg: row
+          kwargs:
+            key:
+              type: string
+              value: "v"
+        - {type: "i64", value: "0"}
+    dec_fn:
+      call: "struct"
+      kwargs:
+        v:
+          call: "math:sub"
+          args:
+            - call: "struct:get"
+              args:
+                - arg: row
+              kwargs:
+                key:
+                  type: string
+                  value: "v"
+            - {type: "i64", value: "1"}
+
+  input:
+    - data_a:
+        - [1, {v: "1"}]
+      data_b:
+        - [1, {v: "1"}]
+    - data_a:
+        - [-1, {v: "1"}]
+
+  expected:
+    - out_m:
+        - [1, {v: "0"}]
+        - [1, {v: "1"}]
+    - out_m:
+        - [-1, {v: "0"}]
+        - [-1, {v: "1"}]
