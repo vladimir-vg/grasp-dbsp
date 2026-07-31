@@ -1,0 +1,23 @@
+# 2-level nested circuit call: call_double calls double via keyword arg.
+# Tests that keyword arg {v, {var, val}} gets substituted to {v, {var, src}}.
+- source: |
+    circuit double(x: v):
+        result := plus(v, v)
+
+    circuit call_double(src: val):
+        c := double(x: val)
+        result := c.result
+
+    src := source("data")
+    src :: stream(struct("v": i64))
+
+    w := call_double(src: src)
+    out := w.result
+
+  input:
+    - data:
+        - [1, {v: "7"}]
+
+  expected:
+    - out:
+        - [2, {v: "7"}]

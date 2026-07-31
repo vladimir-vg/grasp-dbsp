@@ -504,7 +504,7 @@ expand_body_nodes([#gdbsp_node_def{name = BodyName, op = BodyOp,
                     throw_lower_error(Line,
                         io_lib:format("unknown circuit: ~s", [CircName]));
                 {ok, NestedDef} ->
-                    NestedPrefix = <<BodyName/binary, ".">>,
+                    NestedPrefix = <<Prefix/binary, BodyName/binary, ".">>,
                     NestedKwMap = build_kw_map(RestKwArgs, Line),
                     NestedParams = NestedDef#gdbsp_circuit_def.params,
                     ok = validate_circuit_args(NestedParams, NestedKwMap, CircName, Line),
@@ -521,7 +521,7 @@ expand_body_nodes([#gdbsp_node_def{name = BodyName, op = BodyOp,
             %% Resolve directly: look up Var.Field tag, create plus alias
             case SubstArgs of
                 [{var, Var}, {var, Field}] ->
-                    AccessTag = <<Var/binary, ".", Field/binary>>,
+                    AccessTag = <<Prefix/binary, Var/binary, ".", Field/binary>>,
                     case maps:find(AccessTag, LG0#lowered_graph.tag_map) of
                         {ok, ResolvedId} ->
                             {NewLG2, _} = add_node(plus, [ResolvedId],
@@ -778,6 +778,17 @@ substitute_params(Args, SubMap) ->
             case maps:find(Tag, SubMap) of
                 {ok, Replacement} -> Replacement;
                 error -> {circuit_access, Var, Field}
+            end;
+           ({Kw, {var, Name}}) ->
+            case maps:find(Name, SubMap) of
+                {ok, Replacement} -> {Kw, Replacement};
+                error -> {Kw, {var, Name}}
+            end;
+           ({Kw, {circuit_access, Var, Field}}) ->
+            Tag = <<Var/binary, ".", Field/binary>>,
+            case maps:find(Tag, SubMap) of
+                {ok, Replacement} -> {Kw, Replacement};
+                error -> {Kw, {circuit_access, Var, Field}}
             end;
            (Other) -> Other
         end,

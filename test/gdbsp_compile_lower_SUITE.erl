@@ -37,6 +37,9 @@
     fixpoint_trivial_no_fixpoint_info/1,
     circuit_access_resolved/1,
     tag_map_completeness/1,
+    circuit_macro_kw_substitution/1,
+    circuit_macro_multi_kw_substitution/1,
+    circuit_macro_kw_alias_substitution/1,
     duplicate_node_error/1,
     cycle_error/1
 ]).
@@ -62,9 +65,12 @@ all() ->
      fixpoint_selfref_distinct_error,
      fixpoint_forbidden_operator,
      fixpoint_trivial_no_fixpoint_info,
-     circuit_access_resolved,
-     tag_map_completeness,
-     duplicate_node_error,
+      circuit_access_resolved,
+      tag_map_completeness,
+      circuit_macro_kw_substitution,
+      circuit_macro_multi_kw_substitution,
+      circuit_macro_kw_alias_substitution,
+      duplicate_node_error,
      cycle_error
     ].
 
@@ -437,6 +443,57 @@ tag_map_completeness(_Config) ->
     assert_has_tag(<<"s">>, LG),
     assert_has_tag(<<"fp.result">>, LG),
     assert_has_tag(<<"out">>, LG),
+    ok.
+
+circuit_macro_kw_substitution(_Config) ->
+    Src = "circuit double(x: v):\n"
+          "    result := plus(v, v)\n"
+          "circuit call_double(src: val):\n"
+          "    c := double(x: val)\n"
+          "    result := c.result\n"
+          "s := source(\"data\")\n"
+          "s :: stream(struct(\"v\": i64))\n"
+          "w := call_double(src: s)\n"
+          "out := w.result\n",
+    {ok, LG} = lower(Src),
+    %% The inner plus node under w.c.result must have source s as both inputs
+    CResultNode = element(2, find_by_tag(<<"w.c.result">>, LG)),
+    SrcId = assert_has_tag(<<"s">>, LG),
+    [SrcId, SrcId] = lnode_inputs(CResultNode),
+    ok.
+
+circuit_macro_multi_kw_substitution(_Config) ->
+    Src = "circuit combine(a: x, b: y):\n"
+          "    result := plus(x, y)\n"
+          "circuit gather(p: v, q: w):\n"
+          "    c := combine(a: v, b: w)\n"
+          "    result := c.result\n"
+          "s := source(\"data\")\n"
+          "s :: stream(struct(\"v\": i64))\n"
+          "g := gather(p: s, q: s)\n"
+          "out := g.result\n",
+    {ok, LG} = lower(Src),
+    %% The plus node under g.c.result must have source s as both inputs
+    GCombNode = element(2, find_by_tag(<<"g.c.result">>, LG)),
+    SrcId = assert_has_tag(<<"s">>, LG),
+    [SrcId, SrcId] = lnode_inputs(GCombNode),
+    ok.
+
+circuit_macro_kw_alias_substitution(_Config) ->
+    Src = "circuit pass(x: v):\n"
+          "    result := v\n"
+          "circuit wrap(s: val):\n"
+          "    c := pass(x: val)\n"
+          "    result := c.result\n"
+          "src := source(\"data\")\n"
+          "src :: stream(struct(\"v\": i64))\n"
+          "w := wrap(s: src)\n"
+          "out := w.result\n",
+    {ok, LG} = lower(Src),
+    %% The pass alias node under w.c.result must have src as input
+    CResultNode = element(2, find_by_tag(<<"w.c.result">>, LG)),
+    SrcId = assert_has_tag(<<"src">>, LG),
+    [SrcId] = lnode_inputs(CResultNode),
     ok.
 
 %%====================================================================

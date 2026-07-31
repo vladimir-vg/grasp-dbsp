@@ -1,0 +1,23 @@
+# Multiple keyword args in one circuit call, both referencing parameters.
+# Tests that both {a, {var, v}} and {b, {var, w}} get substituted.
+- source: |
+    circuit combine(a: x, b: y):
+        result := plus(x, y)
+
+    circuit gather(p: v, q: w):
+        c := combine(a: v, b: w)
+        result := c.result
+
+    src := source("data")
+    src :: stream(struct("v": i64))
+
+    g := gather(p: src, q: src)
+    out := g.result
+
+  input:
+    - data:
+        - [1, {v: "13"}]
+
+  expected:
+    - out:
+        - [2, {v: "13"}]
