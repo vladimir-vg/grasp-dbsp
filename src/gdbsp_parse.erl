@@ -105,7 +105,17 @@ try_node_def_single(Line, St) ->
             case binary:match(TrimmedCall, <<"(">>) of
                 nomatch ->
                     case binary:match(TrimmedCall, <<".">>) of
-                        nomatch -> false;
+                        nomatch ->
+                            case TrimmedCall of
+                                <<>> -> false;
+                                _ ->
+                                    {done, #gdbsp_node_def{
+                                        name = Name,
+                                        op = plus,
+                                        args = [{var, TrimmedCall}],
+                                        line = St#st.line
+                                    }}
+                            end;
                         _ ->
                             Node = mk_circuit_access_node(Name, TrimmedCall, St),
                             {done, Node}
@@ -227,7 +237,18 @@ try_node_def(Line, St, Rest) ->
             case binary:match(TrimmedCall, <<"(">>) of
                 nomatch ->
                     case binary:match(TrimmedCall, <<".">>) of
-                        nomatch -> false;
+                        nomatch ->
+                            case TrimmedCall of
+                                <<>> -> false;
+                                _ ->
+                                    Node = #gdbsp_node_def{
+                                        name = Name,
+                                        op = plus,
+                                        args = [{var, TrimmedCall}],
+                                        line = St#st.line
+                                    },
+                                    {done, parse_lines(Rest, St#st{nodes = [Node | St#st.nodes]})}
+                            end;
                         _ ->
                             Node = mk_circuit_access_node(Name, TrimmedCall, St),
                             {done, parse_lines(Rest, St#st{nodes = [Node | St#st.nodes]})}

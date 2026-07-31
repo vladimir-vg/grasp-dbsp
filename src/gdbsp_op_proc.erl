@@ -112,7 +112,8 @@ handle_info({delta, Meta, Deltas, From},
         [L] -> {L, State1};
         [L | Rest] ->
             {L, State1#{pidmap := PM1#{From := Rest ++ [L]}}};
-        [] -> error({empty_label_list, From, PM1})
+        [] -> error({empty_label_list, From, PM1});
+        _ -> {Labels, State1}
     end,
     Barrier = maps:get(barrier, Meta, undefined),
     ?DBG("OP ~p pid=~p IN: barrier=~p deltas=~w label=~p from=~w",
