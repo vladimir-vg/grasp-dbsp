@@ -96,7 +96,7 @@ build_circuit(Plan, Inputs, Outputs, Gen, OpStates, DoKickoff) ->
     validate_wiring(OpPids, RecPids, Inputs, Outputs),
 
     wire_rec_body(RecPids, Tuples, ResolveStd),
-    wire_rec_source(RecPids, RecRefs, Tuples, ResolveStd, Inputs, Outputs, DoKickoff),
+    wire_rec_source(RecPids, RecRefs, Tuples, ResolveWithRO, Inputs, Outputs, DoKickoff),
     wire_output_consumers(RecPids, ROToRec, Tuples, ResolveWithRO),
 
     AllPids = maps:merge(OpPids, RecPids),
@@ -235,8 +235,8 @@ synthetic_source_done(RecPid) ->
 
 wire_output_consumers(RecPids, ROToRec, Tuples, Resolve) ->
     RecRefToRecPid = maps:from_list([{RecRef, RecPid} || {RecRef, RecPid} <- maps:to_list(RecPids)]),
-    AllOutputPids = lists:usort(
-        [Resolve(RR) || {_SR, _SL, RR, _RL} <- Tuples, element(1, RR) =:= output]),
+    OutputReachability = build_output_reachability(Tuples, Resolve),
+    RecConsumerPids = build_rec_consumers(Tuples, ROToRec, RecRefToRecPid),
     maps:foreach(
         fun({rec, _Name, _SccId, _} = RecRef, RecPid) ->
             DirectOutputs = [Resolve(RR) || {SR, _SL, RR, _RL} <- Tuples,
@@ -244,15 +244,70 @@ wire_output_consumers(RecPids, ROToRec, Tuples, Resolve) ->
                                               element(1, RR) =:= output,
                                               maps:get(SR, RecRefToRecPid, undefined) =:= RecPid],
             RecOutputPairs = [{RO, R} || {RO, R} <- maps:to_list(ROToRec), R =:= RecRef],
-            IndirectOutputs = [Resolve(RR) || {SR, _SL, RR, _RL} <- Tuples,
-                                               element(1, RR) =:= output,
-                                               lists:keyfind(SR, 1, RecOutputPairs) =/= false],
-            AllConsumers = case DirectOutputs ++ IndirectOutputs of
-                [] -> AllOutputPids;
-                Found -> Found
+            OutputPids = lists:usort(
+                [maps:get(RO, OutputReachability, []) || {RO, _} <- RecOutputPairs]),
+            IndirectOutputs = lists:flatten(OutputPids),
+            OutputConsumers = case DirectOutputs ++ IndirectOutputs of
+                [] -> [];
+                Found -> lists:usort(Found)
             end,
+            RecConsumersForMe = maps:get(RecRef, RecConsumerPids, []),
+            AllConsumers = lists:usort(OutputConsumers ++ RecConsumersForMe),
             gen_server:call(RecPid, {set_consumers, AllConsumers})
         end, RecPids).
+
+%%--------------------------------------------------------------------
+%% Rec consumer wiring helpers
+%%--------------------------------------------------------------------
+
+build_rec_consumers(Tuples, ROToRec, RecRefToRecPid) ->
+    lists:foldl(
+        fun({SR, _SL, RR, RL}, Acc) ->
+            case {element(1, RR), RL} of
+                {rec, source} ->
+                    case maps:find(SR, ROToRec) of
+                        {ok, UpstreamRecRef} ->
+                            DownstreamPid = maps:get(RR, RecRefToRecPid),
+                            maps:update_with(UpstreamRecRef,
+                                fun(L) -> [DownstreamPid | L] end,
+                                [DownstreamPid], Acc);
+                        error -> Acc
+                    end;
+                _ -> Acc
+            end
+        end, #{}, Tuples).
+
+build_output_reachability(Tuples, Resolve) ->
+    Forward = lists:foldl(
+        fun({SR, _, RR, _}, Acc) ->
+            maps:update_with(SR, fun(L) -> [RR | L] end, [RR], Acc)
+        end, #{}, Tuples),
+    RefsOfInterest = [SR || {SR, _, _, _} <- Tuples, element(1, SR) =:= rec_output],
+    maps:from_list(
+        lists:map(
+            fun(RORef) ->
+                {RORef, dfs_output_pids(RORef, Forward, Resolve, sets:new([{version, 2}]))}
+            end, lists:usort(RefsOfInterest))).
+
+dfs_output_pids(Ref, Forward, Resolve, Visited) ->
+    case sets:is_element(Ref, Visited) of
+        true -> [];
+        false ->
+            Visited2 = sets:add_element(Ref, Visited),
+            case element(1, Ref) of
+                output ->
+                    Pid = Resolve(Ref),
+                    case is_pid(Pid) of true -> [Pid]; false -> [] end;
+                rec ->
+                    [];
+                _ ->
+                    Children = maps:get(Ref, Forward, []),
+                    lists:flatmap(
+                        fun(Child) ->
+                            dfs_output_pids(Child, Forward, Resolve, Visited2)
+                        end, Children)
+            end
+    end.
 
 %%====================================================================
 %% Wiring maps

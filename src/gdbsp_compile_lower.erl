@@ -377,7 +377,7 @@ resolve_fixpoint_input(ExtName, KwBin, FpHmac, Internal, LGAcc, AccById, Line) -
         {ok, ExtId} ->
             FpInName = fixpoint_input_name(FpHmac, KwBin),
             {LG2, InpId} = add_node(fixpoint_input, [ExtId],
-                                    [{string, KwBin}],
+                                    [{string, KwBin}, {fixpoint, FpHmac}],
                                     [], undefined, LGAcc),
             LG3 = register_internal_name(LG2, FpInName, InpId),
             {LG3, AccById#{Internal => InpId}};

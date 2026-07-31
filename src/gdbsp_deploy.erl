@@ -151,7 +151,9 @@ config_for({output, _}, _Inputs, _Ref, _Meta, _Overrides, _ValueMod) ->
     skip;
 config_for({rec, Name, SccId}, _Inputs, _Ref, Meta, _Overrides, _ValueMod) ->
     IsSourced = maps:get(sourced, Meta, false),
-    {ok, #{name => Name, scc_id => SccId, sourced => IsSourced}};
+    HasBodyOut = maps:get(has_body_out, Meta, false),
+    {ok, #{name => Name, scc_id => SccId, sourced => IsSourced,
+           meta => #{has_body_out => HasBodyOut}}};
 config_for({rec_output, _, _}, _Inputs, _Ref, _Meta, _Overrides, _ValueMod) ->
     skip;
 config_for(Op, Inputs, _Ref, Meta, Overrides, ValueMod) ->
