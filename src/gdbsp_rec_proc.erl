@@ -60,6 +60,8 @@ handle_call(get_coordinator, _From, #{coordinator := Coord} = State) ->
     {reply, {ok, Coord}, State};
 handle_call({set_consumer, Pid}, _From, State) ->
     {reply, ok, State#{consumers := [Pid]}};
+handle_call({set_consumers, Pids}, _From, State) ->
+    {reply, ok, State#{consumers := Pids}};
 handle_call({add_consumer, Pid}, _From, #{consumers := Cs} = State) ->
     {reply, ok, State#{consumers := [Pid | Cs]}};
 handle_call(_Call, _From, State) ->

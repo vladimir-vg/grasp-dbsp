@@ -77,7 +77,7 @@ build_circuit(Plan, Inputs, Outputs, Gen, OpStates, DoKickoff) ->
     RefToPid = maps:merge(OpPids, RecPids),
 
     RORefs = [R || R = {rec_output, _, _, _} <- maps:keys(Configs)],
-    ROToRec = rec_output_to_rec(RecRefs, RORefs),
+    ROToRec = rec_output_to_rec(RecRefs, RORefs, Configs),
 
     CoordPids = spawn_coordinators(RecPids, Configs),
 
@@ -131,10 +131,21 @@ wrap_args(_, Args) -> Args.
 %% Rec wiring helpers
 %%====================================================================
 
-rec_output_to_rec(RecRefs, RORefs) ->
+rec_output_to_rec(RecRefs, RORefs, Configs) ->
     SccIdToRec = lists:foldl(
         fun({rec, _Name, SccId, _} = RecRef, Acc) ->
-            Acc#{SccId => RecRef}
+            Config = maps:get(RecRef, Configs),
+            Meta = maps:get(meta, Config, #{}),
+            HasBodyOut = maps:get(has_body_out, Meta, false),
+            case HasBodyOut of
+                true ->
+                    Acc#{SccId => RecRef};
+                false ->
+                    case maps:is_key(SccId, Acc) of
+                        true -> Acc;
+                        false -> Acc#{SccId => RecRef}
+                    end
+            end
         end, #{}, RecRefs),
     maps:from_list(
         lists:filtermap(
@@ -236,10 +247,7 @@ wire_output_consumers(RecPids, ROToRec, Tuples, Resolve) ->
                 [] -> AllOutputPids;
                 Found -> Found
             end,
-            lists:foreach(
-                fun(C) ->
-                    gen_server:call(RecPid, {set_consumer, C})
-                end, AllConsumers)
+            gen_server:call(RecPid, {set_consumers, AllConsumers})
         end, RecPids).
 
 %%====================================================================
