@@ -2,7 +2,7 @@
 %%% @doc Lowering stage — transforms parsed #gdbsp_program{} into
 %%% a content-addressed #lowered_graph{} with deduplication.
 %%%
-%%% Runs after type inference, before circuit graph construction.
+%%% Runs before type inference, before circuit graph construction.
 %%% Handles:
 %%%   - Node deduplication (content-addressing via sorted inputs)
 %%%   - Fixpoint circuit expansion (trivial → inline; self-ref → boundary markers)

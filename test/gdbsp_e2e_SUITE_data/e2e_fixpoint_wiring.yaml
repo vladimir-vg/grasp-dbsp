@@ -1,0 +1,98 @@
+# Test 1: Unused base param — the base param is passed to the fixpoint
+# but never referenced by any body operator. Verifies that the
+# has_downstream_consumers optimisation leaves the integrate node
+# intact (no Rec) and that the unused base does not leak into output.
+- source: |
+    circuit unused_base(base: input, result: r):
+        result := distinct(r)
+
+    src_a := source("ints")
+    src_a :: stream(struct("v": i64))
+    src_b := source("unused")
+    src_b :: stream(struct("v": i64))
+
+    fp := fixpoint unused_base(base: src_b, result: src_a)
+    out := fp.result
+
+  ensure_matches_incremental: true
+
+  input:
+    - ints:
+        - [1, {v: "10"}]
+      unused:
+        - [1, {v: "99"}]
+
+  expected:
+    - out:
+        - [1, {v: "10"}]
+
+# Test 2: Self-ref plus base combined via `plus` inside the SCC body.
+# The plus operator takes both the base input and the feedback from
+# the self-ref. Verifies Rec input assembly (sources + body output addon)
+# and correct wiring of the plus inside the SCC boundary.
+- source: |
+    circuit add_feedback(base: input, result: r):
+        combined := plus(input, r)
+        result := distinct(combined)
+
+    src := source("data")
+    src :: stream(struct("x": i64))
+
+    fp := fixpoint add_feedback(base: src, result: src)
+    out := fp.result
+
+  ensure_matches_incremental: true
+
+  input:
+    - data:
+        - [1, {x: "42"}]
+
+  expected:
+    - out:
+        - [1, {x: "42"}]
+
+# Test 3: Self-ref with `filter` inside the SCC body.
+# The body has two operators (filter + distinct) in the feedback loop.
+# Verifies SCC body marking propagates through filter and that
+# the RecOutput wrapping correctly rewires downstream consumers.
+- source: |
+    circuit filter_loop(base: input, result: r):
+        filtered := filter(r, is_even)
+        combined := plus(input, filtered)
+        result := distinct(combined)
+
+    src := source("data")
+    src :: stream(struct("v": i64))
+
+    fp := fixpoint filter_loop(base: src, result: src)
+    out := fp.result
+
+  functions:
+    is_even:
+      call: "eq"
+      args:
+        - call: "math:mod"
+          args:
+            - call: "struct:get"
+              args:
+                - arg: row
+              kwargs:
+                key:
+                  type: string
+                  value: "v"
+            - {type: "i64", value: "2"}
+        - {type: "i64", value: "0"}
+
+  ensure_matches_incremental: true
+
+  input:
+    - data:
+        - [1, {v: "2"}]
+        - [1, {v: "3"}]
+        - [1, {v: "4"}]
+
+  expected:
+    - out:
+        - [1, {v: "2"}]
+        - [1, {v: "3"}]
+        - [1, {v: "4"}]

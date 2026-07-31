@@ -92,8 +92,6 @@
 # B3: Join inside self-ref fixpoint feedback loop.
 # One input is base (external source), the other is self-ref state.
 # Verifies join type merge through the fixpoint boundary.
-# NOTE: blocked by barrier-mismatch bug (epoch_done vs {iter,0,0});
-#       same root cause as e2e_fixpoint_multi_iter.
 - source: |
     circuit accumulator(base: input, state: s):
         joined := join(input, s, on: ["k"])

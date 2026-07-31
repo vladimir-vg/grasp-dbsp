@@ -148,15 +148,23 @@ run_one_fixture(Fixture, GroupName, Config) ->
             ExpectedErrors = deep_binify_vals(ExpectedErrorsRaw),
             run_negative(Prog0, Functions, ExpectedErrors);
         error ->
-            run_positive(Prog0, GroupName, Functions, InputEpochs, ExpectedEpochs,
-                         ExpectedExactEpochs, Config)
+            EnsureMatchesIncr = maps:get(
+                <<"ensure_matches_incremental">>, Fixture, false),
+            case EnsureMatchesIncr of
+                true ->
+                    run_dual(Prog0, GroupName, Functions, InputEpochs,
+                             ExpectedEpochs, ExpectedExactEpochs, Config);
+                _ ->
+                    run_positive(Prog0, GroupName, Functions, InputEpochs,
+                                 ExpectedEpochs, ExpectedExactEpochs, Config)
+            end
     end.
 
 run_negative(Prog0, Functions, ExpectedErrors) ->
     try
         %% Use a dummy output name — we expect compilation to fail,
         %% so this placeholder never actually runs.
-        compile_to_plan(Prog0, Functions, [<<"dummy">>]),
+        compile_to_plan(Prog0, Functions, [<<"dummy">>], true),
         ct:fail("expected compilation to fail but it succeeded")
     catch
         Class:Reason:_Stacktrace ->
@@ -233,7 +241,7 @@ run_positive(Prog0, GroupName, Functions, InputEpochs, ExpectedEpochs, ExpectedE
     write_e2e_lowered_dot(Prog0, Functions, GroupName, Config),
 
     {Plan, SourceTypeMap, OutputTypes, Graph1} =
-        compile_to_plan(Prog0, Functions, OutputNames),
+        compile_to_plan(Prog0, Functions, OutputNames, true),
 
     %% Generate circuit graph DOT
     write_dot_file("e2e", GroupName, "circuit",
@@ -259,10 +267,137 @@ run_positive(Prog0, GroupName, Functions, InputEpochs, ExpectedEpochs, ExpectedE
     end.
 
 %%====================================================================
+%% Dual-run (incrementalization comparison)
+%%====================================================================
+
+run_dual(Prog0, GroupName, Functions, InputEpochs, ExpectedEpochs,
+         ExpectedExactEpochs, Config) ->
+    {MatchMode, EpochExpected} = case {ExpectedEpochs, ExpectedExactEpochs} of
+        {[], []} -> {subset, []};
+        {[_ | _], []} -> {subset, ExpectedEpochs};
+        {[], [_ | _]} -> {exact, ExpectedExactEpochs};
+        {[_ | _], [_ | _]} ->
+            ct:fail("cannot specify both 'expected' and 'expected_exact'")
+    end,
+
+    OutputNames = lists:usort(lists:flatmap(
+        fun(Epoch) when is_map(Epoch) -> maps:keys(Epoch);
+           (_) -> []
+        end, EpochExpected)),
+
+    %% Generate lowered graph DOT once
+    write_e2e_lowered_dot(Prog0, Functions, GroupName, Config),
+
+    ct:pal("=== Dual-run: incrementalize=false ===", []),
+    {GotNoIncr, OutputTypes} = run_one_incr_mode(Prog0, GroupName, Functions,
+                                                  InputEpochs, OutputNames,
+                                                  Config, false),
+
+    ct:pal("=== Dual-run: incrementalize=true ===", []),
+    {GotWithIncr, _} = run_one_incr_mode(Prog0, GroupName, Functions, InputEpochs,
+                                          OutputNames, Config, true),
+
+    ct:pal("=== Dual-run: comparing results ===", []),
+    ok = compare_epoch_results(GotNoIncr, GotWithIncr),
+
+    ct:pal("=== Dual-run: asserting against expected ===", []),
+    ok = assert_epochs(GotNoIncr, EpochExpected, OutputTypes, MatchMode).
+
+run_one_incr_mode(Prog0, GroupName, Functions, InputEpochs, OutputNames, Config, Incr) ->
+    {Plan, SourceTypeMap, OutputTypes, Graph1} =
+        compile_to_plan(Prog0, Functions, OutputNames, Incr),
+
+    %% Generate circuit graph DOT for the incr=true run only
+    write_dot_file("e2e", GroupName, "circuit",
+                   gdbsp_graphviz:circuit_to_dot(Graph1), Config),
+
+    SourceMap = spawn_inputs(SourceTypeMap),
+    OutputCols = spawn_output_collectors(OutputNames),
+
+    {ok, Circuit} = gdbsp_circuit_proc:start_link(),
+    Inputs = maps:map(fun(_TableName, {InputPid, _Type}) -> InputPid end, SourceMap),
+    Outputs = maps:map(fun(_Name, Col) -> gdbsp_test_collector_proc:pid(Col) end,
+                       OutputCols),
+    ok = gen_server:call(Circuit, {circuit_update, Plan, Inputs, Outputs}),
+
+    try
+        Results = run_epochs_collect(SourceMap, OutputCols, InputEpochs, 0),
+        {Results, OutputTypes}
+    after
+        catch gen_server:call(Circuit, stop),
+        maps:foreach(fun(_Name, Col) ->
+            catch gdbsp_test_collector_proc:stop(Col)
+        end, OutputCols)
+    end.
+
+%% Collect epoch deltas without asserting against expected.
+%% Returns a list of maps: #{norm_row() => weight()}, one per epoch.
+run_epochs_collect(_SourceMap, _OutputCols, [], _Epoch) ->
+    [];
+run_epochs_collect(SourceMap, OutputCols, [InputEpoch | InputRest], Epoch) ->
+    send_epoch_deltas(InputEpoch, SourceMap, Epoch),
+    send_epoch_done(SourceMap, Epoch),
+
+    maps:foreach(fun(_Name, Col) ->
+        gdbsp_test_collector_proc:await_done(Col, Epoch, 10000)
+    end, OutputCols),
+
+    AllGot = collect_and_consolidate(OutputCols, Epoch),
+    ct:pal("EPOCH ~w got: ~p", [Epoch, AllGot]),
+    [AllGot | run_epochs_collect(SourceMap, OutputCols, InputRest, Epoch + 1)].
+
+%% Compare two result lists epoch by epoch.
+compare_epoch_results(GotA, GotB) when length(GotA) =/= length(GotB) ->
+    ct:fail("epoch count mismatch: incr=false has ~w epochs, incr=true has ~w",
+            [length(GotA), length(GotB)]);
+compare_epoch_results([], []) -> ok;
+compare_epoch_results([AA | RA], [BB | RB]) ->
+    Epoch = length(RA),
+    Missing = maps:fold(
+        fun(Row, W, Acc) ->
+            case maps:find(Row, BB) of
+                {ok, W} -> Acc;
+                {ok, GotW} ->
+                    [{incr_mismatch, {epoch, Epoch}, {row, Row},
+                      {no_incr_weight, W}, {with_incr_weight, GotW}} | Acc];
+                error ->
+                    [{incr_missing_from_with, {epoch, Epoch}, {row, Row},
+                      {weight, W}} | Acc]
+            end
+        end, [], AA),
+    Extra = maps:fold(
+        fun(Row, W, Acc) ->
+            case maps:find(Row, AA) of
+                {ok, _} -> Acc;
+                error ->
+                    [{incr_extra_in_with, {epoch, Epoch}, {row, Row},
+                      {weight, W}} | Acc]
+            end
+        end, [], BB),
+    case Missing ++ Extra of
+        [] -> compare_epoch_results(RA, RB);
+        Errors -> error({incremental_mismatch, Errors})
+    end.
+
+%% Assert collected results against expected.
+assert_epochs([], [], _OutputTypes, _MatchMode) -> ok;
+assert_epochs([], [_ | _], _OutputTypes, _MatchMode) ->
+    ok;
+assert_epochs([Got | GotRest], [ExpectedEpoch | ExpRest], OutputTypes, MatchMode) ->
+    AllExpected = parse_expected_deltas(ExpectedEpoch, OutputTypes),
+    Epoch = length(GotRest),
+    case MatchMode of
+        subset -> ok = subset_match(AllExpected, Got, Epoch);
+        exact -> ok = exact_match(AllExpected, Got, Epoch)
+    end,
+    assert_epochs(GotRest, ExpRest, OutputTypes, MatchMode);
+assert_epochs(_Got, [], _OutputTypes, _MatchMode) -> ok.
+
+%%====================================================================
 %% Compilation
 %%====================================================================
 
-compile_to_plan(Prog0, Functions, OutputNames) ->
+compile_to_plan(Prog0, Functions, OutputNames, Incr) ->
     SourceTypeMap = build_source_type_map(Prog0),
 
     case gdbsp_compile:compile_with_names(
@@ -271,7 +406,10 @@ compile_to_plan(Prog0, Functions, OutputNames) ->
             Graph1 = add_output_nodes(Graph0, OutputNames, NameToId),
             OutTypes = output_types_from_graph(Graph1, NameToId,
                                                 OutputNames, SourceTypeMap),
-            Graph2 = gdbsp_compile_incremental:run(Graph1),
+            Graph2 = case Incr of
+                true  -> gdbsp_compile_incremental:run(Graph1);
+                false -> Graph1
+            end,
             Plan = gdbsp_deploy:plan(Graph2),
             {Plan, SourceTypeMap, OutTypes, Graph1};
         {error, {fixpoint_error, _} = FixErr} ->

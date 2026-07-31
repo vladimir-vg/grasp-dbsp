@@ -2,7 +2,7 @@
 %%% @doc GDBSP compiler — transforms parsed #gdbsp_program{} into
 %%% a deployable #circuit_graph{}.
 %%%
-%%% Pipeline: parse → type-infer → lower → compile-graph → incrementalize
+%%% Pipeline: parse → lower → type-infer → compile-graph → incrementalize
 %%% @end
 %%%-------------------------------------------------------------------
 -module(gdbsp_compile).

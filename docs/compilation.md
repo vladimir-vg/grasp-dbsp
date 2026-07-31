@@ -8,10 +8,10 @@ Status: draft
 ## 1. Overview
 
 Compilation transforms a parsed `.gdbsp` program into a deployable DBSP
-circuit. The pipeline has five stages:
+circuit. The pipeline has six stages:
 
 ```
-parse → type infer → compile to circuit → incrementalize → deploy
+parse → lower → type-infer → compile to circuit → incrementalize → deploy
 ```
 
 Each stage consumes the output of the previous stage and produces a
@@ -34,21 +34,68 @@ full language specification.
 
 ---
 
-## 3. Stage 2 — Type Inference
+## 3. Stage 2 — Lowering
 
-The type inference pass assigns a concrete type to every node in the
-program. It produces a map from node name to type.
+The lowering stage transforms the parsed `#gdbsp_program{}` into a
+**lowered graph** (`#lowered_graph{}`) — a content-addressed intermediate
+representation that performs deduplication and expands fixpoint circuits
+before type inference.
+
+### 3.1 Content Addressing
+
+Each node is assigned a content hash derived from `(operator, sorted inputs,
+non-node arguments)`. Two nodes with identical operator types, the same
+inputs, and the same non-input arguments receive the same hash and are
+merged into a single lowered node. This eliminates redundant computation
+in the final circuit graph.
+
+### 3.2 Fixpoint Expansion
+
+Fixpoint calls (`fixpoint Name(kw: args...)`) are classified as either
+**trivial** (no self-referential parameters) or **self-referential** (at
+least one parameter maps to a body node, creating a feedback loop).
+
+- **Trivial fixpoints** are inlined via macro expansion — the circuit
+  body nodes are copied into the lowered graph with prefixed tags and
+  substituted parameters.
+- **Self-referential fixpoints** introduce boundary markers:
+  `fixpoint_input` nodes for parameter entry points and `fixpoint_output`
+  nodes for body outputs. These markers are consumed by the circuit graph
+  construction stage to create `rec` / `rec_output` operators with proper
+  iteration barriers. Self-referential nodes must be wrapped in `distinct`.
+
+### 3.3 Circuit Access Resolution
+
+Dot-notation access (`fp.output`) to fixpoint results is resolved by
+looking up the prefixed tag in the lowered graph's tag map. The access
+produces a `plus` node that wires the resolved body output to the
+consumer.
+
+### 3.4 Body Validation
+
+The lowering stage validates that fixpoint circuit bodies contain no
+forbidden operators (`aggregate`, `neg`, `antijoin`). These operators
+would break the fixed-point semantics of recursive circuits.
+
+---
+
+## 4. Stage 3 — Type Inference
+
+The type inference pass runs on the lowered graph after deduplication
+and fixpoint expansion. It assigns a concrete type to every node by
+walking the graph in topological order and resolving function call
+expressions against the function registry.
 
 See [type-inference.md](type-inference.md) for the complete semantics.
 
 ---
 
-## 4. Stage 3 — Compile to Circuit Graph
+## 5. Stage 4 — Compile to Circuit Graph
 
-Each source-level node is lowered to one or more circuit-level nodes.
+Each lowered node is expanded to one or more circuit-level nodes.
 The result is a directed graph of operators — the **circuit graph**.
 
-### 4.1 Direct Mapping
+### 5.1 Direct Mapping
 
 | Source operator | Circuit nodes |
 |----------------|-------------|
@@ -64,7 +111,19 @@ The result is a directed graph of operators — the **circuit graph**.
 | `flat_map(node, fn)` | 1 node: `flat_map` with expression tree from function registry |
 | `project(node, [...])` | 1 node: `project` with keep-field list |
 
-### 4.2 Join Decomposition
+### 5.2 Fixpoint Construction
+
+Lowered `fixpoint_input` nodes become `integrate` placeholders, which are
+replaced with `rec` nodes. `fixpoint_output` nodes produce `rec_output`
+wrappers that serve as the boundary between the SCC body and external
+consumers. A **coordinator** process is created per SCC to manage
+epoch boundaries, iteration rounds, and fixpoint detection.
+
+Body nodes downstream of `rec` inputs are marked with `scc_body` metadata.
+Non-SCC nodes whose inputs reference raw body operators are rewired to
+point to the corresponding `rec_output` wrappers.
+
+### 5.3 Join Decomposition
 
 `join(left, right, on: [...])` expands to a chain of **three** nodes:
 
@@ -75,7 +134,7 @@ The result is a directed graph of operators — the **circuit graph**.
 The `map_index` operators partition the struct fields into key and value
 groups, which the `join` operator uses for indexing and lookup.
 
-### 4.3 Aggregate Decomposition
+### 5.4 Aggregate Decomposition
 
 `aggregate(input, fn, by: [...], value: "v", as: "r")` expands to a chain
 of **three** nodes:
@@ -84,7 +143,7 @@ of **three** nodes:
 2. `aggregate` — performs the group-by-and-fold using the aggregate function from the registry
 3. `map(unwrap)` — reconstructs a flat struct from the aggregate's internal representation: `by_fields ++ [result_field]`
 
-### 4.4 Antijoin Expansion
+### 5.5 Antijoin Expansion
 
 `antijoin(left, right, on: [...])` expands to a composite operator chain
 that:
@@ -96,13 +155,13 @@ that:
 
 This expansion is transparent at the source level.
 
-### 4.5 Name Resolution
+### 5.6 Name Resolution
 
 Node names in operator arguments are resolved to internal circuit node
 IDs after all nodes are placed. References to nodes not yet defined
 (forward references) are resolved once the target node is compiled.
 
-### 4.6 Function Resolution
+### 5.7 Function Resolution
 
 Operators that reference functions (`map`, `filter`, `flat_map`,
 `aggregate`) look up the function name in the **function registry**
@@ -111,14 +170,14 @@ Operators that reference functions (`map`, `filter`, `flat_map`,
 
 ---
 
-## 5. Stage 4 — Incrementalization
+## 6. Stage 5 — Incrementalization
 
 DBSP circuits operate on **deltas** (insertions and retractions), but
 certain operators require the full accumulated state (**Z-sets**) as input.
 Incrementalization inserts `integrate` / `differentiate` pairs to convert
 between the two modes.
 
-### 5.1 Operator Classification
+### 6.1 Operator Classification
 
 | Operator | Linear | Needs Full Input | Produces Full Output |
 |----------|--------|-----------------|---------------------|
@@ -135,7 +194,7 @@ between the two modes.
 | `integrate` | no | no | yes |
 | `differentiate` | no | no | no |
 
-### 5.2 I/D Insertion Rules
+### 6.2 I/D Insertion Rules
 
 For each non-linear operator:
 
@@ -149,7 +208,7 @@ Before:                     After:
   B ─┘                       B ─ integrate ─┘
 ```
 
-### 5.3 Simplification
+### 6.3 Simplification
 
 Adjacent `integrate` / `differentiate` pairs cancel out and are removed.
 This eliminates unnecessary state management when two non-linear operators
@@ -160,7 +219,7 @@ integrate → differentiate   →   (removed)
 differentiate → integrate   →   (removed)
 ```
 
-### 5.4 Output Wrapping
+### 6.4 Output Wrapping
 
 Output nodes (designated externally by the runtime) are automatically
 wrapped with `differentiate` if their upstream is in full mode. This
@@ -168,19 +227,19 @@ ensures that externally observable output is always in delta mode.
 
 ---
 
-## 6. Stage 5 — Deploy Plan
+## 7. Stage 6 — Deploy Plan
 
 The final compilation stage produces a **deploy plan** — a deployable
 specification that the runtime uses to instantiate the circuit.
 
-### 6.1 Plan Structure
+### 7.1 Plan Structure
 
 | Component | Content |
 |-----------|---------|
 | `wiring` | Routing tuples: `{FromRef, FromLabel, ToRef, ToLabel}` — specifies which operator output feeds which operator input |
 | `configs` | Per-operator configuration: `#{Ref => #{mod => Module, args => Args, labels => Labels}}` |
 
-### 6.2 Ref Assignment
+### 7.2 Ref Assignment
 
 Each circuit node gets a ref used in wiring and configs:
 
@@ -189,15 +248,17 @@ Each circuit node gets a ref used in wiring and configs:
 | Source node | `{source, TableName, Ref}` |
 | Output node | `{output, OutputName, Ref}` |
 | Internal operator | `{op, Ref}` |
+| Rec operator | `{rec, Name, SccId, Ref}` |
+| RecOutput operator | `{rec_output, Name, SccId, Ref}` |
 
-### 6.3 External Management
+### 7.3 External Management
 
 Source and output nodes are not assigned runtime operators in the configs.
 They are managed externally by the runtime:
 - Source nodes receive data from external input processes
 - Output nodes emit data to external collectors or subscribers
 
-### 6.4 Value Module
+### 7.4 Value Module
 
 The deploy plan allows overriding the value encoding/decoding module.
 This controls how values are serialized on the wire (JSON, protobuf, etc.)
