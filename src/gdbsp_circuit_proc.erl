@@ -197,8 +197,12 @@ wire_rec_source(RecPids, RecRefs, Tuples, Resolve, Inputs, Outputs, DoKickoff) -
             SrcPids = [Resolve(SR) || {SR, _SL, RR, RL} <- Tuples,
                                         RR =:= RecRef, RL =:= source],
             case SrcPids of
-                [SrcPid | _] when SrcPid =/= undefined ->
-                    gen_server:call(RecPid, {set_source, SrcPid});
+                [SrcPid | ExtraSrcPids] when SrcPid =/= undefined ->
+                    gen_server:call(RecPid, {set_source, SrcPid}),
+                    lists:foreach(
+                        fun(ExtraPid) ->
+                            gen_server:call(RecPid, {add_extra_source, ExtraPid})
+                        end, ExtraSrcPids);
                 _ ->
                     case DoKickoff of
                         true ->

@@ -18,6 +18,15 @@
 -spec run(#circuit_graph{}) -> #circuit_graph{}.
 run(G = #circuit_graph{nodes = Nodes, next_id = NextId}) ->
     {ok, Sorted} = topological_sort(G),
+    InitialModeMap = maps:fold(
+        fun(_Id, #circuit_node{op = Op}, Acc) ->
+            OpTag = element(1, Op),
+            case OpTag of
+                integrate -> Acc#{_Id => full};
+                rec -> Acc#{_Id => full};
+                _ -> Acc
+            end
+        end, #{}, Nodes),
     {NewNodes, NewNextId, _ModeMap} =
         lists:foldl(
             fun(NodeId, {AccNodes, AccNextId, ModeMap}) ->
@@ -25,7 +34,7 @@ run(G = #circuit_graph{nodes = Nodes, next_id = NextId}) ->
                 InputModes = get_modes(Node#circuit_node.inputs, ModeMap),
                 process(Node, InputModes, AccNodes, AccNextId, ModeMap)
             end,
-            {Nodes, NextId, #{}},
+            {Nodes, NextId, InitialModeMap},
             Sorted
         ),
     #circuit_graph{nodes = NewNodes, next_id = NewNextId}.
@@ -166,7 +175,7 @@ process(#circuit_node{id = Id, op = {output, _}} = Node, InputModes,
 
 process(#circuit_node{id = Id, op = Op}, _InputModes,
         AccNodes, AccNextId, ModeMap)
-  when element(1, Op) =:= integrate ->
+  when element(1, Op) =:= integrate; element(1, Op) =:= rec ->
     {AccNodes, AccNextId, maps:put(Id, full, ModeMap)};
 
 process(#circuit_node{id = Id, op = {differentiate}}, _InputModes,
@@ -179,7 +188,7 @@ process(#circuit_node{id = Id, op = Op}, InputModes,
        element(1, Op) =:= flat_map; element(1, Op) =:= neg;
        element(1, Op) =:= plus; element(1, Op) =:= map_index;
        element(1, Op) =:= delay;
-       element(1, Op) =:= rec; element(1, Op) =:= rec_output ->
+       element(1, Op) =:= rec_output ->
     OutputMode = merge_modes(InputModes),
     {AccNodes, AccNextId, maps:put(Id, OutputMode, ModeMap)};
 

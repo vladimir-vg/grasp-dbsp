@@ -71,12 +71,15 @@ labels_for({plus}, Inputs, _Meta) -> input_labels(Inputs);
 labels_for({join, _}, _Inputs, _Meta) -> [left, right];
 labels_for({antijoin, _, _}, _Inputs, _Meta) -> [left, right];
 labels_for({rec, _, _}, Inputs, Meta) ->
-    IsSourced = maps:get(sourced, Meta, false),
-    case {length(Inputs), IsSourced} of
-        {1, true} -> [source];
-        {1, false} -> [body_output];
-        {2, _} -> [source, body_output];
-        _ -> [body_output]
+    HasBodyOut = maps:get(has_body_out, Meta, false),
+    N = length(Inputs),
+    case N of
+        0 -> [];
+        1 when HasBodyOut -> [body_output];
+        1 -> [source];
+        _ when HasBodyOut ->
+            lists:duplicate(N - 1, source) ++ [body_output];
+        _ -> lists:duplicate(N, source)
     end;
 labels_for({rec_output, _, _}, _Inputs, _Meta) -> [];
 labels_for(_Op, Inputs, _Meta) -> input_labels(Inputs).

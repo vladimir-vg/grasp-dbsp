@@ -35,8 +35,9 @@ handle_call({set_coordinator, Pid}, _From, State) ->
     {reply, ok, State#{coordinator := Pid}};
 handle_call({set_body_inputs, Pids}, _From, State) ->
     #{name := Name, body_output_pid := BOP} = State,
+    Self = self(),
     _ = case BOP of
-        OutPid when OutPid =/= undefined ->
+        OutPid when OutPid =/= undefined, OutPid =:= Self ->
             case lists:member(OutPid, Pids) of
                 true -> exit({self_loop_body_entry, Name, OutPid});
                 false -> ok
@@ -46,7 +47,7 @@ handle_call({set_body_inputs, Pids}, _From, State) ->
     {reply, ok, State#{body_input_pids := Pids}};
 handle_call({set_body_output, Pid}, _From, State) ->
     #{name := Name, body_input_pids := BIP} = State,
-    case lists:member(Pid, BIP) of
+    case Pid =:= self() andalso lists:member(Pid, BIP) of
         true -> exit({self_loop_body_entry, Name, Pid});
         false -> ok
     end,
@@ -87,7 +88,8 @@ handle_info(_Msg, State) ->
 %%====================================================================
 
 dispatch_delta(From, Msg, State) ->
-    #{name := Name, coordinator := Coord, body_output_pid := BodyOut} = State,
+    #{name := Name, coordinator := Coord, body_output_pid := BodyOut,
+      body_input_pids := BodyEntryPids} = State,
     Source = maps:get(source_pid, State, undefined),
     ExtraSources = maps:get(extra_source_pids, State, []),
     Self = self(),
@@ -105,6 +107,20 @@ dispatch_delta(From, Msg, State) ->
                 false ->
                     exit({unknown_sender, From})
             end
+    end,
+    %% When BodyPids is empty and BodyOut is self, no barrier reaches the
+    %% body handler, so the Rec would never report iter_result.  Inject a
+    %% self-message to ensure the coordinator progresses.
+    _ = case {From, BodyOut, BodyEntryPids} of
+        {Coord, Self, []} when Coord =/= undefined, Self =/= undefined ->
+            {delta, Meta, _Deltas, _Src} = Msg,
+            case maps:is_key(barrier, Meta) of
+                true ->
+                    Self ! {delta, Meta, [], Self},
+                    true;
+                false -> false
+            end;
+        _ -> false
     end,
     maybe_self_loop(State2, Actions, Self),
     run_actions(Actions),

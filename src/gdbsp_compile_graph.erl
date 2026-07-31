@@ -435,66 +435,54 @@ construct_one_fixpoint(G0, _FpHmac, FixInfo, LnIdMap, CInputMap,
     BaseParams = [{K, V} || {K, V} <- ParamsList,
                             maps:get(kind, V) =:= base],
 
+    AllParams = SelfRefParams ++ BaseParams,
 
     SccId = G0#circuit_graph.next_id,
 
-    BaseInputIds = [maps:get(maps:get(input, V), CInputMap)
-                    || {_K, V} <- BaseParams],
-    BodyInputPlaceholders = maps:from_list(
-        [{K, maps:get(maps:get(input, V), CInputMap)} || {K, V} <- SelfRefParams]),
+    %% Read original integrate node inputs before overwriting with Rec nodes.
+    %% Each fixpoint_input becomes an integrate node in the circuit graph;
+    %% we replace each with a {rec} node while preserving the original source
+    %% wiring.
+    OriginalInputs = maps:from_list(
+        [{K, begin
+            PlaceholderId = maps:get(maps:get(input, ParamInfo), CInputMap),
+            case maps:find(PlaceholderId, G0#circuit_graph.nodes) of
+                {ok, #circuit_node{inputs = Ins}} -> {PlaceholderId, Ins};
+                error -> {PlaceholderId, []}
+            end
+         end} || {K, ParamInfo} <- AllParams]),
 
-
-    %% Create Rec nodes (rewrite fixpoint_input placeholders)
-    {G1, RecIds} = lists:foldl(
+    %% Create Rec nodes for ALL params at their fixpoint_input placeholder IDs.
+    {G1, AllRecIds} = lists:foldl(
         fun({KwBin, ParamInfo}, {GA, RIds}) ->
-            PlaceholderId = maps:get(KwBin, BodyInputPlaceholders),
-            BodyOutLId = maps:get(body_out, ParamInfo),
-            BodyOutCId = maps:get(BodyOutLId, LnIdMap),
+            {PlaceholderId, OrigIns} = maps:get(KwBin, OriginalInputs),
             RecName = maps:get(label, ParamInfo),
-            RecInputs = lists:usort(BaseInputIds ++ [BodyOutCId]),
-            HasBase = BaseInputIds =/= [],
+            IsSelfRef = maps:get(kind, ParamInfo) =:= self_ref,
+            BodyOutAddon = case IsSelfRef of
+                true ->
+                    BodyOutLId = maps:get(body_out, ParamInfo),
+                    [maps:get(BodyOutLId, LnIdMap)];
+                false -> []
+            end,
+            RecInputs = lists:usort(OrigIns) ++ BodyOutAddon,
+            HasSource = OrigIns =/= [],
+            RecMeta = #{sourced => HasSource, scc_body => true},
+            RecMeta2 = case IsSelfRef of
+                true -> RecMeta#{has_body_out => true};
+                false -> RecMeta
+            end,
             RecNode = #circuit_node{
                 id = PlaceholderId,
                 op = {rec, RecName, SccId},
                 inputs = RecInputs,
-                meta = #{sourced => HasBase, scc_body => true}},
+                meta = RecMeta2},
             Nodes2 = maps:put(PlaceholderId, RecNode, GA#circuit_graph.nodes),
             {GA#circuit_graph{nodes = Nodes2}, RIds#{KwBin => PlaceholderId}}
         end,
         {G0, #{}},
-        SelfRefParams),
+        AllParams),
 
-    %% Redirect body-operator inputs that reference base integrate nodes
-    %% (which still carry raw epoch_done barriers) to the Rec node so they
-    %% receive data with proper {iter,E,N} barriers.
-    G1_fixed = case {map_size(RecIds), BaseInputIds} of
-        {0, _} -> G1;
-        {_, []} -> G1;
-        _ ->
-            RecId = hd(maps:values(RecIds)),
-            IntegrateToRec = maps:from_list([{BId, RecId} || BId <- BaseInputIds]),
-            FixedBase = maps:map(
-                fun(_NId, CNode = #circuit_node{inputs = CIns, meta = CMeta}) ->
-                    case maps:is_key(scc_body, CMeta) of
-                        true -> CNode;
-                        false ->
-                            NewIns = lists:map(
-                                fun(InId) ->
-                                    case maps:find(InId, IntegrateToRec) of
-                                        {ok, RecId2} -> RecId2;
-                                        error -> InId
-                                    end
-                                end, CIns),
-                            case NewIns =:= CIns of
-                                true -> CNode;
-                                false -> CNode#circuit_node{inputs = NewIns}
-                            end
-                    end
-                end, G1#circuit_graph.nodes),
-            G1#circuit_graph{nodes = FixedBase}
-    end,
-
-    %% Create RecOutput nodes
+    %% Create RecOutput nodes (only for self-ref params)
     {G2, RecOutputIds, BodyToRecOut} = lists:foldl(
         fun({KwBin, ParamInfo}, {GA, OutIds, BToR}) ->
             BodyOutLId = maps:get(body_out, ParamInfo),
@@ -513,17 +501,17 @@ construct_one_fixpoint(G0, _FpHmac, FixInfo, LnIdMap, CInputMap,
             GA3 = set_schema(GA2, RecOutId, Schema),
             {GA3, OutIds#{KwBin => RecOutId}, BToR#{BodyOutCId => RecOutId}}
         end,
-        {G1_fixed, #{}, #{}},
+        {G1, #{}, #{}},
         SelfRefParams),
 
-    RecIdList = [Id || {_, Id} <- maps:to_list(RecIds)] ++
+    RecIdList = [Id || {_, Id} <- maps:to_list(AllRecIds)] ++
                [Id || {_, Id} <- maps:to_list(RecOutputIds)],
     RecOutputIdSet = maps:from_list(
         [{Id, Id} || {_, Id} <- maps:to_list(RecOutputIds)]),
     G3 = mark_scc_body_nodes(G2, RecIdList, RecOutputIdSet),
 
     G4 = case map_size(BodyToRecOut) of
-        0 -> 
+        0 ->
             G3;
         _ ->
             FixedNodes = maps:map(
@@ -547,6 +535,8 @@ construct_one_fixpoint(G0, _FpHmac, FixInfo, LnIdMap, CInputMap,
             G3#circuit_graph{nodes = FixedNodes}
     end,
 
+    BaseInputIds = [maps:get(maps:get(input, V), CInputMap)
+                    || {_K, V} <- BaseParams],
     {BaseSchema, BaseType} = case BaseInputIds of
         [FirstBaseId | _] ->
             {get_schema(G4, FirstBaseId), get_type(G4, FirstBaseId)};
@@ -555,7 +545,7 @@ construct_one_fixpoint(G0, _FpHmac, FixInfo, LnIdMap, CInputMap,
     end,
     G5 = lists:foldl(
         fun(RecId, GAcc) -> GA = set_schema(GAcc, RecId, BaseSchema), set_type(GA, RecId, BaseType) end,
-        G4, maps:values(RecIds)),
+        G4, maps:values(AllRecIds)),
     G6 = lists:foldl(
         fun(ROId, GAcc) -> GA = set_schema(GAcc, ROId, BaseSchema), set_type(GA, ROId, BaseType) end,
         G5, maps:values(RecOutputIds)),
