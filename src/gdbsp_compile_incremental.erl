@@ -214,7 +214,7 @@ wrap_nonlinear(Id, #circuit_node{inputs = Inputs} = Node, InputModes,
 
     Nodes3 = maps:map(
         fun(_CId, CNode = #circuit_node{inputs = CIns, meta = CMeta}) ->
-            case not maps:is_key(scc_body, CMeta) andalso lists:member(Id, CIns) of
+            case not maps:is_key(scc_id, CMeta) andalso lists:member(Id, CIns) of
                 true ->
                     NewCIns = [case I of Id -> DiffId; _ -> I end || I <- CIns],
                     CNode#circuit_node{inputs = NewCIns};
@@ -242,7 +242,7 @@ insert_integrates([InputId | RestInputs], [Mode | RestModes], ParentId,
         delta ->
             IntId = NextId1,
             SccInternal = case maps:find(InputId, AccNodes) of
-                {ok, #circuit_node{meta = #{scc_body := true}}} -> true;
+                {ok, #circuit_node{meta = #{scc_id := _}}} -> true;
                 _ -> false
             end,
             IntOp = case SccInternal of

@@ -314,8 +314,8 @@ construct_one_fixpoint(G0, _FpHmac, FixInfo, LnIdMap, CInputMap,
 
     RecIdList = maps:values(RIds) ++ maps:values(ROIds),
     ROIdSet   = maps:from_list([{Id, Id} || {_, Id} <- maps:to_list(ROIds)]),
-    G3 = mark_scc_body_nodes(G2, RecIdList, ROIdSet),
-    G4 = rewire_body_consumers(G3, BodyToRO),
+    G3 = mark_scc_body_nodes(G2, RecIdList, ROIdSet, SccId),
+    G4 = rewire_body_consumers(G3, BodyToRO, SccId),
     G5 = propagate_fixpoint_schemas(G4, BaseParams, CInputMap, RIds, ROIds),
 
     NewROAcc = maps:merge(ROIdsAcc, maps:from_list(
@@ -372,7 +372,7 @@ create_rec_nodes(AllParams, OriginalInputs, DownstreamSet,
                     end,
                     RecInputs = lists:usort(OrigIns) ++ BodyOutAddon,
                     HasSource = OrigIns =/= [],
-                    RecMeta = #{sourced => HasSource, scc_body => true},
+                    RecMeta = #{sourced => HasSource, scc_id => SccId},
                     RecMeta2 = case IsSelfRef of
                         true -> RecMeta#{has_body_out => true};
                         false -> RecMeta
@@ -403,7 +403,7 @@ create_rec_output_nodes(SelfRefParams, LnIdMap, SccId, G) ->
                 id = RecOutId,
                 op = {rec_output, RecOutName, SccId},
                 inputs = [BodyOutCId],
-                meta = #{scc_body => true}},
+                meta = #{scc_id => SccId}},
             Nodes3 = maps:put(RecOutId, RONode, GA#circuit_graph.nodes),
             GA2 = GA#circuit_graph{next_id = RecOutId + 1, nodes = Nodes3},
             Schema = get_schema(GA, BodyOutCId),
@@ -413,13 +413,14 @@ create_rec_output_nodes(SelfRefParams, LnIdMap, SccId, G) ->
         {G, #{}, #{}},
         SelfRefParams).
 
--spec rewire_body_consumers(#circuit_graph{}, map()) -> #circuit_graph{}.
-rewire_body_consumers(G, BodyToRecOut) when map_size(BodyToRecOut) =:= 0 ->
+-spec rewire_body_consumers(#circuit_graph{}, map(), non_neg_integer()) ->
+    #circuit_graph{}.
+rewire_body_consumers(G, BodyToRecOut, _SccId) when map_size(BodyToRecOut) =:= 0 ->
     G;
-rewire_body_consumers(G, BodyToRecOut) ->
+rewire_body_consumers(G, BodyToRecOut, SccId) ->
     FixedNodes = maps:map(
         fun(_NId, CNode = #circuit_node{inputs = CIns, meta = CMeta}) ->
-            case maps:is_key(scc_body, CMeta) of
+            case is_same_scc_body(CMeta, SccId) of
                 true -> CNode;
                 false ->
                     NewIns = lists:map(
@@ -436,6 +437,11 @@ rewire_body_consumers(G, BodyToRecOut) ->
             end
         end, G#circuit_graph.nodes),
     G#circuit_graph{nodes = FixedNodes}.
+
+-spec is_same_scc_body(map(), non_neg_integer()) -> boolean().
+is_same_scc_body(#{scc_id := NodeSccId}, CurrentSccId) ->
+    NodeSccId =:= CurrentSccId;
+is_same_scc_body(_, _) -> false.
 
 -spec validate_rec_source_inputs(#circuit_graph{}) -> ok.
 validate_rec_source_inputs(#circuit_graph{nodes = Nodes}) ->
@@ -623,20 +629,20 @@ new_graph() ->
 %% Mark body operators as scc_body (downstream of Rec, stops at RecOutput)
 %%--------------------------------------------------------------------
 
-mark_scc_body_nodes(#circuit_graph{nodes = Nodes} = G, RecIds, RecOutputIds) ->
+mark_scc_body_nodes(#circuit_graph{nodes = Nodes} = G, RecIds, RecOutputIds, SccId) ->
     RecOutputIdSet = sets:from_list(maps:values(RecOutputIds), [{version, 2}]),
     RecIdSet = sets:from_list(RecIds, [{version, 2}]),
     ConsumerIndex = build_consumer_index(Nodes),
     Nodes2 = mark_forward(Nodes, RecIds, RecIdSet, RecOutputIdSet, ConsumerIndex,
-                          sets:new([{version, 2}])),
+                          sets:new([{version, 2}]), SccId),
     G#circuit_graph{nodes = Nodes2}.
 
-mark_forward(Nodes, [], _RecIdSet, _RecOutputIdSet, _ConsumerIndex, _Visited) ->
+mark_forward(Nodes, [], _RecIdSet, _RecOutputIdSet, _ConsumerIndex, _Visited, _SccId) ->
     Nodes;
-mark_forward(Nodes, [Id | Rest], RecIdSet, RecOutputIdSet, ConsumerIndex, Visited) ->
+mark_forward(Nodes, [Id | Rest], RecIdSet, RecOutputIdSet, ConsumerIndex, Visited, SccId) ->
     case sets:is_element(Id, Visited) of
         true ->
-            mark_forward(Nodes, Rest, RecIdSet, RecOutputIdSet, ConsumerIndex, Visited);
+            mark_forward(Nodes, Rest, RecIdSet, RecOutputIdSet, ConsumerIndex, Visited, SccId);
         false ->
             Visited1 = sets:add_element(Id, Visited),
             #circuit_node{op = Op, meta = Meta} = maps:get(Id, Nodes),
@@ -644,16 +650,16 @@ mark_forward(Nodes, [Id | Rest], RecIdSet, RecOutputIdSet, ConsumerIndex, Visite
             IsRec = OpTag =:= rec,
             IsRecOutput = OpTag =:= rec_output,
             IsForeignRec = IsRec andalso not sets:is_element(Id, RecIdSet),
-            AlreadyMarked = maps:is_key(scc_body, Meta),
+            AlreadyMarked = maps:is_key(scc_id, Meta),
             case AlreadyMarked orelse IsForeignRec orelse IsRecOutput of
                 true ->
-                    mark_forward(Nodes, Rest, RecIdSet, RecOutputIdSet, ConsumerIndex, Visited1);
+                    mark_forward(Nodes, Rest, RecIdSet, RecOutputIdSet, ConsumerIndex, Visited1, SccId);
                 false ->
-                    NewMeta = maps:put(scc_body, true, Meta),
+                    NewMeta = maps:put(scc_id, SccId, Meta),
                     Nodes1 = maps:put(Id, (maps:get(Id, Nodes))#circuit_node{meta = NewMeta}, Nodes),
                     Children = maps:get(Id, ConsumerIndex, []),
                     mark_forward(Nodes1, Rest ++ Children, RecIdSet, RecOutputIdSet,
-                                 ConsumerIndex, Visited1)
+                                 ConsumerIndex, Visited1, SccId)
             end
     end.
 

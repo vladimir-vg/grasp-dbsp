@@ -265,7 +265,7 @@ circuit_node_dot(#circuit_node{id = Id, op = Op, meta = Meta},
                  Schemas) ->
     Label = circuit_node_label(Op, Schemas, Id),
     Color = circuit_node_color(Op),
-    SccComment = case maps:is_key(scc_body, Meta) of
+    SccComment = case maps:is_key(scc_id, Meta) of
         true -> ["  // scc_body\n"];
         false -> []
     end,
