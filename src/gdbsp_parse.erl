@@ -125,12 +125,30 @@ try_node_def_single(Line, St) ->
                         {Op, <<")">>} ->
                             {done, mk_node(Name, Op, [], St)};
                         {Op, Inner} ->
-                            case extract_parens_content(Inner) of
-                                {closed, InnerClean} ->
-                                    Args = parse_args(InnerClean),
-                                    {done, mk_node(Name, Op, Args, St)};
-                                {open, _} ->
-                                    {done, mk_node(Name, Op, [], St)}
+                            case Op of
+                                <<"fixpoint">> ->
+                                    case binary:match(Inner, <<"(">>) of
+                                        {Pos, 1} ->
+                                            CName = trim(binary:part(Inner, 0, Pos)),
+                                            <<_:Pos/binary, "(", More/binary>> = Inner,
+                                            case extract_parens_content(<<"(", More/binary>>) of
+                                                {closed, InnerClean} ->
+                                                    Args = parse_args(InnerClean),
+                                                    {done, mk_node(Name, Op, [CName | Args], St)};
+                                                {open, _} ->
+                                                    {done, mk_node(Name, Op, [CName], St)}
+                                            end;
+                                        nomatch ->
+                                            {done, mk_node(Name, Op, [trim(Inner)], St)}
+                                    end;
+                                _ ->
+                                    case extract_parens_content(Inner) of
+                                        {closed, InnerClean} ->
+                                            Args = parse_args(InnerClean),
+                                            {done, mk_node(Name, Op, Args, St)};
+                                        {open, _} ->
+                                            {done, mk_node(Name, Op, [], St)}
+                                    end
                             end;
                         false -> false
                     end

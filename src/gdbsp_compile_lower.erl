@@ -289,7 +289,9 @@ expand_trivial(FpName, BodyNodes, Params, KwMap, CircuitMap,
     Prefix = <<FpName/binary, ".">>,
     InternalToArg = maps:fold(
         fun(Kw, Internal, A) ->
-            A#{Internal => maps:get(Kw, KwMap)}
+            KwBin = atom_to_binary(Kw, utf8),
+            ArgVal = maps:get(Kw, KwMap),
+            A#{Internal => ArgVal, KwBin => ArgVal}
         end,
         #{},
         Params),
@@ -497,7 +499,9 @@ expand_circuit_call(Name, Info, CircuitMap, LG0, ExpansionStack) ->
             Prefix = <<Name/binary, ".">>,
             InternalToArg = maps:fold(
                 fun(Kw, Internal, A) ->
-                    A#{Internal => maps:get(Kw, KwMap)}
+                    KwBin = atom_to_binary(Kw, utf8),
+                    ArgVal = maps:get(Kw, KwMap),
+                    A#{Internal => ArgVal, KwBin => ArgVal}
                 end,
                 #{},
                 Params),
@@ -538,7 +542,9 @@ expand_body_nodes([#gdbsp_node_def{name = BodyName, op = BodyOp,
                     ok = validate_circuit_args(NestedParams, NestedKwMap, CircName, Line),
                     NestedToArg = maps:fold(
                         fun(Kw, Internal, A) ->
-                            A#{Internal => maps:get(Kw, NestedKwMap)}
+                            KwBin = atom_to_binary(Kw, utf8),
+                            ArgVal = maps:get(Kw, NestedKwMap),
+                            A#{Internal => ArgVal, KwBin => ArgVal}
                         end, #{}, NestedParams),
                     NestedStack = [CircName | Stack],
                     expand_body_nodes(NestedDef#gdbsp_circuit_def.body,
@@ -565,6 +571,16 @@ expand_body_nodes([#gdbsp_node_def{name = BodyName, op = BodyOp,
                 _ ->
                     throw_lower_error(Line, "invalid circuit_access in circuit body")
             end;
+        fixpoint ->
+            Info = #node_info{
+                name     = <<Prefix/binary, BodyName/binary>>,
+                op       = fixpoint,
+                args     = SubstArgs,
+                typespec = undefined,
+                line     = Line
+            },
+            expand_fixpoint(Info#node_info.name, Info, CircuitMap,
+                            LG0, #{}, Stack);
         _ ->
             Inputs = resolve_inputs(SubstArgs, LG0#lowered_graph.tag_map),
             {NewLG, _NodeId} = add_node(BodyOp, Inputs, SubstArgs,
@@ -591,7 +607,9 @@ expand_fp_body_circuit_call(_BN, BArgs, SubMap, CircuitMap, Stack0,
             ok = validate_circuit_args(Def#gdbsp_circuit_def.params, KwMap, CircName, Line),
             InternalToArg = maps:fold(
                 fun(Kw, Internal, A) ->
-                    A#{Internal => maps:get(Kw, KwMap)}
+                    KwBin = atom_to_binary(Kw, utf8),
+                    ArgVal = maps:get(Kw, KwMap),
+                    A#{Internal => ArgVal, KwBin => ArgVal}
                 end, #{}, Def#gdbsp_circuit_def.params),
             Stack = [CircName | Stack0],
             expand_body_nodes(Def#gdbsp_circuit_def.body,
