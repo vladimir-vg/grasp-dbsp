@@ -1,0 +1,639 @@
+# Test 1: Diamond — Countdown fan-out to double/triple, fan-in to merge.
+# Topology:  src → fp_ct → fp_double → fp_merge
+#                         → fp_triple ↗
+#
+# fp_ct:     input {v:5} → countdown {0,1,2,3,4,5}
+# fp_double: input {0..5} → double self-ref (×2) filtered <20 → {0..5, 6,8,10,12,14,16,18}
+# fp_triple: input {0..5} → triple self-ref (×3) filtered <50 → {0..5, 6,9,12,15,18,27,36}
+# fp_merge:  two base inputs (double + triple) → plus+distinct union
+#            → {0..5, 6,8,9,10,12,14,15,16,18,27,36}
+#
+# E0: all produce output
+# E1: retract src {v:5} → state_reset cascades through all → full retraction
+- source: |
+    circuit countdown(base: input, result: r):
+        filtered := filter(r, gt_zero)
+        next := map(filtered, dec_fn)
+        combined := plus(input, next)
+        result := distinct(combined)
+
+    circuit double_lt_20(base: input, result: r):
+        mapped := map(r, mult_two)
+        filtered := filter(mapped, lt_20)
+        combined := plus(input, filtered)
+        result := distinct(combined)
+
+    circuit triple_lt_50(base: input, result: r):
+        mapped := map(r, mult_three)
+        filtered := filter(mapped, lt_50)
+        combined := plus(input, filtered)
+        result := distinct(combined)
+
+    circuit merge_two(base1: x, base2: y, result: r):
+        combined := plus(x, y, r)
+        result := distinct(combined)
+
+    src := source("data")
+    src :: stream(struct("v": i64))
+
+    fp_ct := fixpoint countdown(base: src, result: src)
+    fp_double := fixpoint double_lt_20(base: fp_ct.result, result: fp_ct.result)
+    fp_triple := fixpoint triple_lt_50(base: fp_ct.result, result: fp_ct.result)
+    fp_merge := fixpoint merge_two(base1: fp_double.result, base2: fp_triple.result, result: fp_double.result)
+
+    out_ct := fp_ct.result
+    out_double := fp_double.result
+    out_triple := fp_triple.result
+    out_merge := fp_merge.result
+
+  functions:
+    gt_zero:
+      call: "gt"
+      args:
+        - call: "struct:get"
+          args:
+            - arg: row
+          kwargs:
+            key:
+              type: string
+              value: "v"
+        - {type: "i64", value: "0"}
+    dec_fn:
+      call: "struct"
+      kwargs:
+        v:
+          call: "math:sub"
+          args:
+            - call: "struct:get"
+              args:
+                - arg: row
+              kwargs:
+                key:
+                  type: string
+                  value: "v"
+            - {type: "i64", value: "1"}
+    mult_two:
+      call: "struct"
+      kwargs:
+        v:
+          call: "math:mul"
+          args:
+            - call: "struct:get"
+              args:
+                - arg: row
+              kwargs:
+                key:
+                  type: string
+                  value: "v"
+            - {type: "i64", value: "2"}
+    mult_three:
+      call: "struct"
+      kwargs:
+        v:
+          call: "math:mul"
+          args:
+            - call: "struct:get"
+              args:
+                - arg: row
+              kwargs:
+                key:
+                  type: string
+                  value: "v"
+            - {type: "i64", value: "3"}
+    lt_20:
+      call: "lt"
+      args:
+        - call: "struct:get"
+          args:
+            - arg: row
+          kwargs:
+            key:
+              type: string
+              value: "v"
+        - {type: "i64", value: "20"}
+    lt_50:
+      call: "lt"
+      args:
+        - call: "struct:get"
+          args:
+            - arg: row
+          kwargs:
+            key:
+              type: string
+              value: "v"
+        - {type: "i64", value: "50"}
+
+  input:
+    - data:
+        - [1, {v: "5"}]
+    - data:
+        - [-1, {v: "5"}]
+
+  expected:
+    - out_ct:
+        - [1, {v: "0"}]
+        - [1, {v: "1"}]
+        - [1, {v: "2"}]
+        - [1, {v: "3"}]
+        - [1, {v: "4"}]
+        - [1, {v: "5"}]
+      out_double:
+        - [1, {v: "0"}]
+        - [1, {v: "1"}]
+        - [1, {v: "2"}]
+        - [1, {v: "3"}]
+        - [1, {v: "4"}]
+        - [1, {v: "5"}]
+        - [1, {v: "6"}]
+        - [1, {v: "8"}]
+        - [1, {v: "10"}]
+        - [1, {v: "12"}]
+        - [1, {v: "14"}]
+        - [1, {v: "16"}]
+        - [1, {v: "18"}]
+      out_triple:
+        - [1, {v: "0"}]
+        - [1, {v: "1"}]
+        - [1, {v: "2"}]
+        - [1, {v: "3"}]
+        - [1, {v: "4"}]
+        - [1, {v: "5"}]
+        - [1, {v: "6"}]
+        - [1, {v: "9"}]
+        - [1, {v: "12"}]
+        - [1, {v: "15"}]
+        - [1, {v: "18"}]
+        - [1, {v: "27"}]
+        - [1, {v: "36"}]
+      out_merge:
+        - [1, {v: "0"}]
+        - [1, {v: "1"}]
+        - [1, {v: "2"}]
+        - [1, {v: "3"}]
+        - [1, {v: "4"}]
+        - [1, {v: "5"}]
+        - [1, {v: "6"}]
+        - [1, {v: "8"}]
+        - [1, {v: "9"}]
+        - [1, {v: "10"}]
+        - [1, {v: "12"}]
+        - [1, {v: "14"}]
+        - [1, {v: "15"}]
+        - [1, {v: "16"}]
+        - [1, {v: "18"}]
+        - [1, {v: "27"}]
+        - [1, {v: "36"}]
+    - out_ct:
+        - [-1, {v: "0"}]
+        - [-1, {v: "1"}]
+        - [-1, {v: "2"}]
+        - [-1, {v: "3"}]
+        - [-1, {v: "4"}]
+        - [-1, {v: "5"}]
+      out_double:
+        - [-1, {v: "0"}]
+        - [-1, {v: "1"}]
+        - [-1, {v: "2"}]
+        - [-1, {v: "3"}]
+        - [-1, {v: "4"}]
+        - [-1, {v: "5"}]
+        - [-1, {v: "6"}]
+        - [-1, {v: "8"}]
+        - [-1, {v: "10"}]
+        - [-1, {v: "12"}]
+        - [-1, {v: "14"}]
+        - [-1, {v: "16"}]
+        - [-1, {v: "18"}]
+      out_triple:
+        - [-1, {v: "0"}]
+        - [-1, {v: "1"}]
+        - [-1, {v: "2"}]
+        - [-1, {v: "3"}]
+        - [-1, {v: "4"}]
+        - [-1, {v: "5"}]
+        - [-1, {v: "6"}]
+        - [-1, {v: "9"}]
+        - [-1, {v: "12"}]
+        - [-1, {v: "15"}]
+        - [-1, {v: "18"}]
+        - [-1, {v: "27"}]
+        - [-1, {v: "36"}]
+      out_merge:
+        - [-1, {v: "0"}]
+        - [-1, {v: "1"}]
+        - [-1, {v: "2"}]
+        - [-1, {v: "3"}]
+        - [-1, {v: "4"}]
+        - [-1, {v: "5"}]
+        - [-1, {v: "6"}]
+        - [-1, {v: "8"}]
+        - [-1, {v: "9"}]
+        - [-1, {v: "10"}]
+        - [-1, {v: "12"}]
+        - [-1, {v: "14"}]
+        - [-1, {v: "15"}]
+        - [-1, {v: "16"}]
+        - [-1, {v: "18"}]
+        - [-1, {v: "27"}]
+        - [-1, {v: "36"}]
+
+# Test 2: Diamond with partial retraction — only one branch retracts.
+# Topology:  src_A {v:5} → fp_ct_A → {0..5}
+#            src_B {v:3} → fp_ct_B → {0..3}
+#            fp_ct_A + fp_ct_B → fp_merge
+#
+# E0: src_A + src_B inserted, merge produces union {0..5}
+# E1: retract src_B only → merge retracts B's contribution
+#     fp_ct_A unchanged, fp_ct_B retracts via state_reset
+#     fp_merge CID becomes {0..5} (just A's values)
+- source: |
+    circuit countdown(base: input, result: r):
+        filtered := filter(r, gt_zero)
+        next := map(filtered, dec_fn)
+        combined := plus(input, next)
+        result := distinct(combined)
+
+    circuit merge_two(base1: x, base2: y, result: r):
+        combined := plus(x, y, r)
+        result := distinct(combined)
+
+    src_a := source("data_a")
+    src_a :: stream(struct("v": i64))
+    src_b := source("data_b")
+    src_b :: stream(struct("v": i64))
+
+    fp_ct_a := fixpoint countdown(base: src_a, result: src_a)
+    fp_ct_b := fixpoint countdown(base: src_b, result: src_b)
+    fp_merge := fixpoint merge_two(base1: fp_ct_a.result, base2: fp_ct_b.result, result: fp_ct_a.result)
+
+    out_a := fp_ct_a.result
+    out_b := fp_ct_b.result
+    out_merge := fp_merge.result
+
+  functions:
+    gt_zero:
+      call: "gt"
+      args:
+        - call: "struct:get"
+          args:
+            - arg: row
+          kwargs:
+            key:
+              type: string
+              value: "v"
+        - {type: "i64", value: "0"}
+    dec_fn:
+      call: "struct"
+      kwargs:
+        v:
+          call: "math:sub"
+          args:
+            - call: "struct:get"
+              args:
+                - arg: row
+              kwargs:
+                key:
+                  type: string
+                  value: "v"
+            - {type: "i64", value: "1"}
+
+  input:
+    - data_a:
+        - [1, {v: "5"}]
+      data_b:
+        - [1, {v: "3"}]
+    - data_b:
+        - [-1, {v: "3"}]
+
+  expected:
+    - out_a:
+        - [1, {v: "0"}]
+        - [1, {v: "1"}]
+        - [1, {v: "2"}]
+        - [1, {v: "3"}]
+        - [1, {v: "4"}]
+        - [1, {v: "5"}]
+      out_b:
+        - [1, {v: "0"}]
+        - [1, {v: "1"}]
+        - [1, {v: "2"}]
+        - [1, {v: "3"}]
+      out_merge:
+        - [1, {v: "0"}]
+        - [1, {v: "1"}]
+        - [1, {v: "2"}]
+        - [1, {v: "3"}]
+        - [1, {v: "4"}]
+        - [1, {v: "5"}]
+    - out_b:
+        - [-1, {v: "0"}]
+        - [-1, {v: "1"}]
+        - [-1, {v: "2"}]
+        - [-1, {v: "3"}]
+      out_merge:
+        - [-1, {v: "0"}]
+        - [-1, {v: "1"}]
+        - [-1, {v: "2"}]
+        - [-1, {v: "3"}]
+
+# Test 3: Pipeline — Countdown → Doubler → Halver.
+# Topology:  src → fp_ct → fp_double → fp_halve
+# Each stage transforms the data iteratively.
+#
+# fp_ct:      input {v:5} → countdown {0..5}
+# fp_double:  input {0..5} → double self-ref filtered <20 → {0..5, 6,8,10,12,14,16,18}
+# fp_halve:   input (double output) → halve self-ref filtered ≥1 → adds {3,4,5,7,9}? No.
+#             Halver from {0..5, 6,8,10,12,14,16,18}:
+#             Each value v → v, v/2, v/4, ... while ≥ 1.
+#             0→0, 1→1, 2→{2,1}, 3→{3,1}, 4→{4,2,1}, 5→{5,2,1},
+#             6→{6,3,1}, 8→{8,4,2,1}, 10→{10,5,2,1}, 12→{12,6,3,1},
+#             14→{14,7,3,1}, 16→{16,8,4,2,1}, 18→{18,9,4,2,1}
+#             New (not in base): {7, 9}
+#             Output: base + new = {0..6, 7,8,9,10,12,14,16,18}
+- source: |
+    circuit countdown(base: input, result: r):
+        filtered := filter(r, gt_zero)
+        next := map(filtered, dec_fn)
+        combined := plus(input, next)
+        result := distinct(combined)
+
+    circuit double_lt_20(base: input, result: r):
+        mapped := map(r, mult_two)
+        filtered := filter(mapped, lt_20)
+        combined := plus(input, filtered)
+        result := distinct(combined)
+
+    circuit halve_ge_1(base: input, result: r):
+        mapped := map(r, div_two)
+        filtered := filter(mapped, ge_1)
+        combined := plus(input, filtered)
+        result := distinct(combined)
+
+    src := source("data")
+    src :: stream(struct("v": i64))
+
+    fp_ct := fixpoint countdown(base: src, result: src)
+    fp_double := fixpoint double_lt_20(base: fp_ct.result, result: fp_ct.result)
+    fp_halve := fixpoint halve_ge_1(base: fp_double.result, result: fp_double.result)
+
+    out_ct := fp_ct.result
+    out_double := fp_double.result
+    out_halve := fp_halve.result
+
+  functions:
+    gt_zero:
+      call: "gt"
+      args:
+        - call: "struct:get"
+          args:
+            - arg: row
+          kwargs:
+            key:
+              type: string
+              value: "v"
+        - {type: "i64", value: "0"}
+    dec_fn:
+      call: "struct"
+      kwargs:
+        v:
+          call: "math:sub"
+          args:
+            - call: "struct:get"
+              args:
+                - arg: row
+              kwargs:
+                key:
+                  type: string
+                  value: "v"
+            - {type: "i64", value: "1"}
+    mult_two:
+      call: "struct"
+      kwargs:
+        v:
+          call: "math:mul"
+          args:
+            - call: "struct:get"
+              args:
+                - arg: row
+              kwargs:
+                key:
+                  type: string
+                  value: "v"
+            - {type: "i64", value: "2"}
+    lt_20:
+      call: "lt"
+      args:
+        - call: "struct:get"
+          args:
+            - arg: row
+          kwargs:
+            key:
+              type: string
+              value: "v"
+        - {type: "i64", value: "20"}
+    div_two:
+      call: "struct"
+      kwargs:
+        v:
+          call: "math:div"
+          args:
+            - call: "struct:get"
+              args:
+                - arg: row
+              kwargs:
+                key:
+                  type: string
+                  value: "v"
+            - {type: "i64", value: "2"}
+    ge_1:
+      call: "ge"
+      args:
+        - call: "struct:get"
+          args:
+            - arg: row
+          kwargs:
+            key:
+              type: string
+              value: "v"
+        - {type: "i64", value: "1"}
+
+  input:
+    - data:
+        - [1, {v: "5"}]
+    - data:
+        - [-1, {v: "5"}]
+
+  expected:
+    - out_ct:
+        - [1, {v: "0"}]
+        - [1, {v: "1"}]
+        - [1, {v: "2"}]
+        - [1, {v: "3"}]
+        - [1, {v: "4"}]
+        - [1, {v: "5"}]
+      out_double:
+        - [1, {v: "0"}]
+        - [1, {v: "1"}]
+        - [1, {v: "2"}]
+        - [1, {v: "3"}]
+        - [1, {v: "4"}]
+        - [1, {v: "5"}]
+        - [1, {v: "6"}]
+        - [1, {v: "8"}]
+        - [1, {v: "10"}]
+        - [1, {v: "12"}]
+        - [1, {v: "14"}]
+        - [1, {v: "16"}]
+        - [1, {v: "18"}]
+      out_halve:
+        - [1, {v: "0"}]
+        - [1, {v: "1"}]
+        - [1, {v: "2"}]
+        - [1, {v: "3"}]
+        - [1, {v: "4"}]
+        - [1, {v: "5"}]
+        - [1, {v: "6"}]
+        - [1, {v: "7"}]
+        - [1, {v: "8"}]
+        - [1, {v: "9"}]
+        - [1, {v: "10"}]
+        - [1, {v: "12"}]
+        - [1, {v: "14"}]
+        - [1, {v: "16"}]
+        - [1, {v: "18"}]
+    - out_ct:
+        - [-1, {v: "0"}]
+        - [-1, {v: "1"}]
+        - [-1, {v: "2"}]
+        - [-1, {v: "3"}]
+        - [-1, {v: "4"}]
+        - [-1, {v: "5"}]
+      out_double:
+        - [-1, {v: "0"}]
+        - [-1, {v: "1"}]
+        - [-1, {v: "2"}]
+        - [-1, {v: "3"}]
+        - [-1, {v: "4"}]
+        - [-1, {v: "5"}]
+        - [-1, {v: "6"}]
+        - [-1, {v: "8"}]
+        - [-1, {v: "10"}]
+        - [-1, {v: "12"}]
+        - [-1, {v: "14"}]
+        - [-1, {v: "16"}]
+        - [-1, {v: "18"}]
+      out_halve:
+        - [-1, {v: "0"}]
+        - [-1, {v: "1"}]
+        - [-1, {v: "2"}]
+        - [-1, {v: "3"}]
+        - [-1, {v: "4"}]
+        - [-1, {v: "5"}]
+        - [-1, {v: "6"}]
+        - [-1, {v: "7"}]
+        - [-1, {v: "8"}]
+        - [-1, {v: "9"}]
+        - [-1, {v: "10"}]
+        - [-1, {v: "12"}]
+        - [-1, {v: "14"}]
+        - [-1, {v: "16"}]
+        - [-1, {v: "18"}]
+
+# Test 4: Multi-fixpoint with diamond + partial retract, more epochs.
+# Topology:  src_A {v:5}, src_B {v:3} → countdown → merge
+# E0: both sources, merge: {0..5}
+# E1: add src_A {v:2} (no retract) → fp_ct_A: new values {0,1,2}
+#     (already in set, distinct suppresses → empty diff)
+# E2: retract src_B {v:3} → fp_ct_B retracts, merge partial retraction
+- source: |
+    circuit countdown(base: input, result: r):
+        filtered := filter(r, gt_zero)
+        next := map(filtered, dec_fn)
+        combined := plus(input, next)
+        result := distinct(combined)
+
+    circuit merge_two(base1: x, base2: y, result: r):
+        combined := plus(x, y, r)
+        result := distinct(combined)
+
+    src_a := source("data_a")
+    src_a :: stream(struct("v": i64))
+    src_b := source("data_b")
+    src_b :: stream(struct("v": i64))
+
+    fp_ct_a := fixpoint countdown(base: src_a, result: src_a)
+    fp_ct_b := fixpoint countdown(base: src_b, result: src_b)
+    fp_merge := fixpoint merge_two(base1: fp_ct_a.result, base2: fp_ct_b.result, result: fp_ct_a.result)
+
+    out_a := fp_ct_a.result
+    out_b := fp_ct_b.result
+    out_merge := fp_merge.result
+
+  functions:
+    gt_zero:
+      call: "gt"
+      args:
+        - call: "struct:get"
+          args:
+            - arg: row
+          kwargs:
+            key:
+              type: string
+              value: "v"
+        - {type: "i64", value: "0"}
+    dec_fn:
+      call: "struct"
+      kwargs:
+        v:
+          call: "math:sub"
+          args:
+            - call: "struct:get"
+              args:
+                - arg: row
+              kwargs:
+                key:
+                  type: string
+                  value: "v"
+            - {type: "i64", value: "1"}
+
+  input:
+    - data_a:
+        - [1, {v: "5"}]
+      data_b:
+        - [1, {v: "3"}]
+    - data_a:
+        - [1, {v: "2"}]
+    - data_b:
+        - [-1, {v: "3"}]
+
+  expected:
+    - out_a:
+        - [1, {v: "0"}]
+        - [1, {v: "1"}]
+        - [1, {v: "2"}]
+        - [1, {v: "3"}]
+        - [1, {v: "4"}]
+        - [1, {v: "5"}]
+      out_b:
+        - [1, {v: "0"}]
+        - [1, {v: "1"}]
+        - [1, {v: "2"}]
+        - [1, {v: "3"}]
+      out_merge:
+        - [1, {v: "0"}]
+        - [1, {v: "1"}]
+        - [1, {v: "2"}]
+        - [1, {v: "3"}]
+        - [1, {v: "4"}]
+        - [1, {v: "5"}]
+    - out_a: []
+    - out_b:
+        - [-1, {v: "0"}]
+        - [-1, {v: "1"}]
+        - [-1, {v: "2"}]
+        - [-1, {v: "3"}]
+      out_merge:
+        - [-1, {v: "0"}]
+        - [-1, {v: "1"}]
+        - [-1, {v: "2"}]
+        - [-1, {v: "3"}]

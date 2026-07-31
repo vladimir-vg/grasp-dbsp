@@ -355,26 +355,38 @@ create_fixpoint_inputs(Params, KwMap, FpHmac, LG, Line) ->
             KwBin = atom_to_binary(Kw, utf8),
             case maps:find(Kw, KwMap) of
                 {ok, {var, ExtName}} ->
-                    case maps:find(ExtName, LGAcc#lowered_graph.tag_map) of
-                        {ok, ExtId} ->
-                            FpInName = fixpoint_input_name(FpHmac, KwBin),
-                            {LG2, InpId} = add_node(fixpoint_input, [ExtId],
-                                                    [{string, KwBin}],
-                                                    [], undefined, LGAcc),
-                            LG3 = register_internal_name(LG2, FpInName, InpId),
-                            {LG3, AccById#{Internal => InpId}};
-                        error ->
-                            throw_lower_error(Line,
-                                io_lib:format(
-                                    "unresolved fixpoint argument ~s for ~s",
-                                    [ExtName, KwBin]))
-                    end;
+                    resolve_fixpoint_input(ExtName, KwBin, FpHmac, Internal,
+                                           LGAcc, AccById, Line);
+                {ok, {circuit_access, Var, Field}} ->
+                    ExtName = <<Var/binary, ".", Field/binary>>,
+                    resolve_fixpoint_input(ExtName, KwBin, FpHmac, Internal,
+                                           LGAcc, AccById, Line);
                 _ ->
                     {LGAcc, AccById}
             end
         end,
         {LG, #{}},
         maps:to_list(Params)).
+
+-spec resolve_fixpoint_input(binary(), binary(), fixpoint_hash(), binary(),
+                              #lowered_graph{}, #{binary() => lnode_id()},
+                              pos_integer()) ->
+    {#lowered_graph{}, #{binary() => lnode_id()}}.
+resolve_fixpoint_input(ExtName, KwBin, FpHmac, Internal, LGAcc, AccById, Line) ->
+    case maps:find(ExtName, LGAcc#lowered_graph.tag_map) of
+        {ok, ExtId} ->
+            FpInName = fixpoint_input_name(FpHmac, KwBin),
+            {LG2, InpId} = add_node(fixpoint_input, [ExtId],
+                                    [{string, KwBin}],
+                                    [], undefined, LGAcc),
+            LG3 = register_internal_name(LG2, FpInName, InpId),
+            {LG3, AccById#{Internal => InpId}};
+        error ->
+            throw_lower_error(Line,
+                io_lib:format(
+                    "unresolved fixpoint argument ~s for ~s",
+                    [ExtName, KwBin]))
+    end.
 
 -spec build_fixpoint_metadata(#{atom() => binary()}, [atom()],
                                #{binary() => lnode_id()},
