@@ -185,7 +185,8 @@ lower_nodes(NameTable, Order, CircuitMap, LG0, ExpansionStack) ->
             Info = maps:get(Name, NameTable),
             case Info#node_info.op of
                 fixpoint ->
-                    expand_fixpoint(Name, Info, CircuitMap, LG, NameTable);
+                    expand_fixpoint(Name, Info, CircuitMap, LG, NameTable,
+                                    ExpansionStack);
                 circuit_access ->
                     resolve_circuit_access(Name, Info, LG);
                 circuit_call ->
@@ -234,7 +235,7 @@ resolve_circuit_access(Name, Info, LG) ->
 %% Fixpoint expansion
 %%--------------------------------------------------------------------
 
-expand_fixpoint(Name, Info, CircuitMap, LG0, _NameTable) ->
+expand_fixpoint(Name, Info, CircuitMap, LG0, _NameTable, _ExpansionStack0) ->
     #node_info{args = Args, line = Line, name = FpName} = Info,
     [CircuitNameArg | KwArgs] = Args,
     CircuitName = case CircuitNameArg of
@@ -267,12 +268,15 @@ expand_fixpoint(Name, Info, CircuitMap, LG0, _NameTable) ->
                                        [CircuitName]));
                 false -> ok
             end,
+            ExpansionStack = [CircuitName | _ExpansionStack0],
             case SelfRefKws of
                 [] ->
-                    expand_trivial(FpName, BodyNodes, Params, KwMap, LG0, Line);
+                    expand_trivial(FpName, BodyNodes, Params, KwMap, CircuitMap,
+                                   ExpansionStack, LG0, Line);
                 _ ->
                     expand_selfref(FpName, Name, CircuitName, Params,
-                                   BodyNodes, SelfRefKws, KwMap, LG0, Line)
+                                   BodyNodes, SelfRefKws, KwMap, CircuitMap,
+                                   ExpansionStack, LG0, Line)
             end
     end.
 
@@ -280,7 +284,8 @@ expand_fixpoint(Name, Info, CircuitMap, LG0, _NameTable) ->
 %% Trivial fixpoint — inline macro expansion
 %%--------------------------------------------------------------------
 
-expand_trivial(FpName, BodyNodes, Params, KwMap, LG0, _Line) ->
+expand_trivial(FpName, BodyNodes, Params, KwMap, CircuitMap,
+               _ExpansionStack, LG0, _Line) ->
     Prefix = <<FpName/binary, ".">>,
     InternalToArg = maps:fold(
         fun(Kw, Internal, A) ->
@@ -291,12 +296,23 @@ expand_trivial(FpName, BodyNodes, Params, KwMap, LG0, _Line) ->
     lists:foldl(
         fun(#gdbsp_node_def{name = BodyName, op = BodyOp, args = BodyArgs},
             LG) ->
-            Tag = <<Prefix/binary, BodyName/binary>>,
-            SubstitutedArgs = substitute_params(BodyArgs, InternalToArg),
-            Inputs = resolve_inputs(SubstitutedArgs, LG#lowered_graph.tag_map),
-            {NewLG, _NodeId} = add_node(BodyOp, Inputs, SubstitutedArgs,
-                                        [BodyName, Tag], undefined, LG),
-            NewLG
+            case BodyOp of
+                circuit_call ->
+                    NewLG = expand_fp_body_circuit_call(BodyName, BodyArgs,
+                        InternalToArg, CircuitMap, _ExpansionStack,
+                        <<BodyName/binary, ".">>, _Line, LG),
+                    NewLG;
+                circuit_access ->
+                    resolve_fp_body_circuit_access(BodyName, BodyArgs,
+                        <<BodyName/binary, ".">>, LG);
+                _ ->
+                    Tag = <<Prefix/binary, BodyName/binary>>,
+                    SubstitutedArgs = substitute_params(BodyArgs, InternalToArg),
+                    Inputs = resolve_inputs(SubstitutedArgs, LG#lowered_graph.tag_map),
+                    {NewLG, _NodeId} = add_node(BodyOp, Inputs, SubstitutedArgs,
+                                                [BodyName, Tag], undefined, LG),
+                    NewLG
+            end
         end,
         LG0,
         BodyNodes).
@@ -306,7 +322,7 @@ expand_trivial(FpName, BodyNodes, Params, KwMap, LG0, _Line) ->
 %%--------------------------------------------------------------------
 
 expand_selfref(_FpName, NodeName, CircuitName, Params, BodyNodes,
-                SelfRefKws, KwMap, LG0, Line) ->
+                SelfRefKws, KwMap, CircuitMap, _ExpansionStack, LG0, Line) ->
     FpHmac = fixpoint_hash(CircuitName, KwMap),
 
     ok = validate_selfref_distinct(BodyNodes, SelfRefKws, CircuitName, Line),
@@ -328,10 +344,22 @@ expand_selfref(_FpName, NodeName, CircuitName, Params, BodyNodes,
     %% Create body nodes
     {LG2, BodyIds} = lists:foldl(
         fun(#gdbsp_node_def{name = BN, op = BOp, args = BArgs}, {LG, BIds}) ->
-            SubstitutedArgs = substitute_params(BArgs, InternalNameMap),
-            Inputs = resolve_inputs(SubstitutedArgs, LG#lowered_graph.tag_map),
-            {LG3, NodeId} = add_node(BOp, Inputs, SubstitutedArgs, [BN], undefined, LG),
-            {LG3, BIds#{BN => NodeId}}
+            case BOp of
+                circuit_call ->
+                    NewLG = expand_fp_body_circuit_call(
+                        BN, BArgs, InternalNameMap, CircuitMap, _ExpansionStack,
+                        <<BN/binary, ".">>, Line, LG),
+                    {NewLG, BIds};
+                circuit_access ->
+                    {NewLG, NodeId} = resolve_fp_body_circuit_access(
+                        BN, BArgs, <<BN/binary, ".">>, LG),
+                    {NewLG, BIds#{BN => NodeId}};
+                _ ->
+                    SubstitutedArgs = substitute_params(BArgs, InternalNameMap),
+                    Inputs = resolve_inputs(SubstitutedArgs, LG#lowered_graph.tag_map),
+                    {LG3, NodeId} = add_node(BOp, Inputs, SubstitutedArgs, [BN], undefined, LG),
+                    {LG3, BIds#{BN => NodeId}}
+            end
         end,
         {LG1, #{}},
         BodyNodes),
@@ -545,6 +573,51 @@ expand_body_nodes([#gdbsp_node_def{name = BodyName, op = BodyOp,
     end,
     expand_body_nodes(Rest, InternalToArg, Prefix, Stack,
                       CircuitMap, Line, LG1).
+
+%%--------------------------------------------------------------------
+%% Fixpoint body circuit_call / circuit_access expansion
+%%--------------------------------------------------------------------
+
+expand_fp_body_circuit_call(_BN, BArgs, SubMap, CircuitMap, Stack0,
+                            Prefix, Line, LG) ->
+    [{var, CircName} | KwArgs] = BArgs,
+    SubstKwVals = [{K, substitute_param_val(V, SubMap)} || {K, V} <- KwArgs],
+    case maps:find(CircName, CircuitMap) of
+        error ->
+            throw_lower_error(Line,
+                io_lib:format("unknown circuit: ~s", [CircName]));
+        {ok, Def} ->
+            KwMap = build_kw_map(SubstKwVals, Line),
+            ok = validate_circuit_args(Def#gdbsp_circuit_def.params, KwMap, CircName, Line),
+            InternalToArg = maps:fold(
+                fun(Kw, Internal, A) ->
+                    A#{Internal => maps:get(Kw, KwMap)}
+                end, #{}, Def#gdbsp_circuit_def.params),
+            Stack = [CircName | Stack0],
+            expand_body_nodes(Def#gdbsp_circuit_def.body,
+                              InternalToArg, Prefix, Stack,
+                              CircuitMap, Line, LG)
+    end.
+
+resolve_fp_body_circuit_access(BN, BArgs, Prefix, LG) ->
+    case BArgs of
+        [{var, Var}, {var, Field}] ->
+            AccessTag = <<Prefix/binary, Var/binary, ".", Field/binary>>,
+            case maps:find(AccessTag, LG#lowered_graph.tag_map) of
+                {ok, ResolvedId} ->
+                    Tag = <<Prefix/binary, BN/binary>>,
+                    {NewLG, NodeId} = add_node(plus, [ResolvedId],
+                                               [{var, AccessTag}],
+                                               [BN, Tag], undefined, LG),
+                    {NewLG, NodeId};
+                error ->
+                    throw_lower_error(-1,
+                        io_lib:format("unresolved circuit access: ~s.~s",
+                                       [Var, Field]))
+            end;
+        _ ->
+            throw_lower_error(-1, "invalid circuit_access in fixpoint body")
+    end.
 
 validate_circuit_args(Params, KwMap, CircuitName, Line) ->
     ParamKeys = maps:keys(Params),
@@ -793,6 +866,19 @@ substitute_params(Args, SubMap) ->
            (Other) -> Other
         end,
         Args).
+
+substitute_param_val({var, Name}, SubMap) ->
+    case maps:find(Name, SubMap) of
+        {ok, Replacement} -> Replacement;
+        error -> {var, Name}
+    end;
+substitute_param_val({circuit_access, Var, Field}, SubMap) ->
+    Tag = <<Var/binary, ".", Field/binary>>,
+    case maps:find(Tag, SubMap) of
+        {ok, Replacement} -> Replacement;
+        error -> {circuit_access, Var, Field}
+    end;
+substitute_param_val(Other, _SubMap) -> Other.
 
 %%====================================================================
 %% Error helpers

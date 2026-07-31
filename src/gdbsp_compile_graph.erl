@@ -276,7 +276,11 @@ make_operator_lowered(G, Op, Args, InputIds, TS, FnReg) ->
                 _ -> []
             end,
             _ = RSchema,
-            {{antijoin, SharedVars, LeftVal}, []}
+            {{antijoin, SharedVars, LeftVal}, []};
+        circuit_call ->
+            error({unlowered_circuit_call, Args});
+        circuit_access ->
+            error({unlowered_circuit_access, Args})
     end.
 
 %%====================================================================
