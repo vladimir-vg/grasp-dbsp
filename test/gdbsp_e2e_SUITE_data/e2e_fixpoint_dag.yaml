@@ -328,11 +328,7 @@
         - [-1, {v: "1"}]
         - [-1, {v: "2"}]
         - [-1, {v: "3"}]
-      out_merge:
-        - [-1, {v: "0"}]
-        - [-1, {v: "1"}]
-        - [-1, {v: "2"}]
-        - [-1, {v: "3"}]
+      out_merge: []
 
 # Test 3: Pipeline — Countdown → Doubler → Halver.
 # Topology:  src → fp_ct → fp_double → fp_halve
@@ -618,8 +614,4 @@
         - [-1, {v: "1"}]
         - [-1, {v: "2"}]
         - [-1, {v: "3"}]
-      out_merge:
-        - [-1, {v: "0"}]
-        - [-1, {v: "1"}]
-        - [-1, {v: "2"}]
-        - [-1, {v: "3"}]
+      out_merge: []

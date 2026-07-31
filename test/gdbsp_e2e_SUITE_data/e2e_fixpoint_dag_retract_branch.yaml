@@ -1,9 +1,13 @@
-# Minimal diamond: partial retraction — retract only one branch.
+# Minimal diamond: partial retraction — retract branches one at a time.
 # E0: src_a{v:1} + src_b{v:1} → both countdowns produce {0,1}
 #     merge sees {0,1} from all 3 inputs; distinct emits only first +1 per value.
 #     out_m = {0:+1, 1:+1}
 # E1: retract only src_a{v:1} → fp_a retracts, fp_b unchanged
-#     merge should retract one branch's contribution: out_m = {0:-1, 1:-1}
+#     merge still has {0,1} from fp_b alone — distinct output unchanged.
+#     out_m = {}
+# E2: retract src_b{v:1} → fp_b retracts, merge now has no inputs
+#     merge output drops to zero → retraction emitted.
+#     out_m = {0:-1, 1:-1}
 - source: |
     circuit countdown(base: input, result: r):
         filtered := filter(r, gt_zero)
@@ -60,11 +64,14 @@
         - [1, {v: "1"}]
     - data_a:
         - [-1, {v: "1"}]
+    - data_b:
+        - [-1, {v: "1"}]
 
   expected:
     - out_m:
         - [1, {v: "0"}]
         - [1, {v: "1"}]
+    - out_m: []
     - out_m:
         - [-1, {v: "0"}]
         - [-1, {v: "1"}]
