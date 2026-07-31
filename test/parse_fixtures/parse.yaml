@@ -370,13 +370,16 @@
     - {name: high_paid, op: filter, args: [{var: emp_src}, {var: salary_ge_150}], line: 5}
     - {name: payroll_agg, op: aggregate, args: [{var: high_paid}, {var: sum_sal}, {by: [dept, year]}, {value: sal}, {as: total}], line: 6}
 
-- description: "Unknown operator produces parse error"
+- description: "Unknown operator parsed as circuit call"
   input: |
     x := bad_op(y)
-  expected_errors:
-    - class: parse_error
+  expected:
+    - name: x
+      op: circuit_call
+      args:
+        - {var: bad_op}
+        - {var: y}
       line: 1
-      contains: "unknown operator"
 
 - description: "Unknown type produces parse error"
   input: |
