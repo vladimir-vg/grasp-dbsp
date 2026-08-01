@@ -177,6 +177,8 @@ collect_fixpoint_kwargs(Tokens, Acc) ->
 
 parse_fixpoint_kw_val(Tokens) ->
     case Tokens of
+        [{identifier, _, V}, {dot, _}, {identifier, _, F} | Rest] ->
+            {{circuit_access, V, F}, Rest};
         [{identifier, _, V} | Rest] -> {{var, V}, Rest};
         [{string, _, _} = T | Rest] -> {{string, token_val(T)}, Rest};
         _ -> throw({parse_error, token_line(hd(Tokens)),
@@ -202,6 +204,10 @@ collect_node_args(Tokens, Acc) ->
                     {KwVal, Rest2} = parse_kw_arg(Rest),
                     collect_node_args(Rest2,
                         [{binary_to_atom(KwName, utf8), KwVal} | Acc]);
+                [{identifier, _, VarName}, {'(', _} | Rest] ->
+                    {CallArgs, Rest2} = collect_inline_call_args(Rest, []),
+                    collect_node_args(Rest2,
+                        [{expr, {call, VarName, CallArgs}} | Acc]);
                 [{identifier, _, VarName} | Rest] ->
                     collect_node_args(Rest, [{var, VarName} | Acc]);
                 [{string, _, _} = T | Rest] ->
@@ -212,14 +218,38 @@ collect_node_args(Tokens, Acc) ->
             end
     end.
 
+collect_inline_call_args(Tokens, Acc) ->
+    case skip_newlines(Tokens) of
+        [{')', _} | Rest] -> {lists:reverse(Acc), Rest};
+        [] -> {lists:reverse(Acc), []};
+        Toks ->
+            case Toks of
+                [{',', _} | Rest] ->
+                    collect_inline_call_args(Rest, Acc);
+                [{identifier, _, VarName}, {dot, _}, {identifier, _, F} | Rest] ->
+                    collect_inline_call_args(Rest,
+                        [{circuit_access, VarName, F} | Acc]);
+                [{identifier, _, VarName} | Rest] ->
+                    collect_inline_call_args(Rest, [{var, VarName} | Acc]);
+                [{string, _, _} = T | Rest] ->
+                    collect_inline_call_args(Rest, [{string, token_val(T)} | Acc]);
+                _ ->
+                    throw({parse_error, token_line(hd(Toks)),
+                           <<"unexpected token in inline call args">>})
+            end
+    end.
+
 parse_kw_arg([{'[', _} | Rest]) ->
     {Items, Rest2} = collect_bracket_list(Rest, []),
     {Items, Rest2};
 parse_kw_arg(Tokens) ->
     case Tokens of
+        [{identifier, _, V}, {dot, _}, {identifier, _, F} | Rest] ->
+            {{circuit_access, V, F}, Rest};
         [{identifier, _, V} | Rest] -> {{var, V}, Rest};
         [{string, _, _} = T | Rest] -> {token_val(T), Rest};
-        _ -> throw({parse_error, token_line(hd(Tokens)),
+        _ ->
+            throw({parse_error, token_line(hd(Tokens)),
                     <<"expected value after ':' in node kwarg">>})
     end.
 

@@ -804,6 +804,7 @@ get_string_list_arg(Args, Pos) ->
                 nomatch -> [Bin];
                 _ -> parse_string_list(Bin)
             end;
+        L when is_list(L) -> L;
         _ -> error({bad_arg, Pos, string_list})
     end.
 
