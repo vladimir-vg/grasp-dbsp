@@ -34,12 +34,13 @@ compile_with_names(Program, Options) ->
     ExternalFnReg = maps:get(fn_registry, Options, #{}),
     Incr = maps:get(incrementalize, Options, false),
     try
-        InlineFnReg = compile_inline_fns(Program, ExternalFnReg),
+        {ok, StdlibMap} = load_stdlib(),
+        InlineFnReg = compile_inline_fns(Program, StdlibMap),
         FnReg = maps:merge(ExternalFnReg, InlineFnReg),
         TSMap = build_ts_map(Program#gdbsp_program.typespecs),
         case gdbsp_compile_lower:run(Program, #{}) of
             {ok, Lowered0} ->
-                case gdbsp_type_infer:infer_lowered(Lowered0, TSMap, FnReg) of
+                case gdbsp_type_infer:infer_lowered(Lowered0, TSMap, FnReg, StdlibMap) of
                     {ok, Lowered} ->
                         case gdbsp_compile_graph:build_from_lowered(Lowered, FnReg) of
                             {ok, Graph, NameToId} ->
@@ -70,10 +71,10 @@ build_ts_map(Typespecs) ->
            (_, Acc) -> Acc
         end, #{}, Typespecs).
 
-compile_inline_fns(#gdbsp_program{fn_defs = []}, _ExternalFnReg) ->
+compile_inline_fns(#gdbsp_program{fn_defs = []}, _StdlibMap) ->
     #{};
-compile_inline_fns(Program, _ExternalFnReg) ->
-    case gdbsp_compile_expr:check_all_fns(Program) of
+compile_inline_fns(Program, StdlibMap) ->
+    case gdbsp_compile_expr:check_all_fns(Program, StdlibMap) of
         {ok, InlineFnReg, _Warnings} ->
             InlineFnReg;
         {error, ErrorMap} ->

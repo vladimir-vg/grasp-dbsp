@@ -462,22 +462,19 @@ dispatch_call(<<"array">>, PosValues, _KwValues) ->
 dispatch_call(<<"struct">>, _PosValues, KwValues) ->
     Fields = maps:map(fun(_K, V) -> element(2, V) end, KwValues),
     {ok, {value, {struct, Fields, exact}, KwValues}};
+dispatch_call(<<"struct:get">>, PosValues, KwValues) ->
+    dispatch_call(<<"std.struct_get">>, PosValues, KwValues);
 dispatch_call(Name, PosValues, KwValues) ->
-    %% A runtime value that carries a {dynamic, T} tag is a dynamic value;
-    %% it must dispatch to the *_dynamic_dynamic overloads (which unwrap and
-    %% handle wrapped/mixed operands), not to a concrete-typed overload whose
-    %% impl only pattern-matches bare {value, T, V}. Collapse {dynamic, _} to
-    %% bare dynamic for resolution only; the original wrapped values are
-    %% passed to the implementation unchanged.
-    PosTypes = [resolve_type(type_of(V)) || V <- PosValues],
-    KwPairs = [{K, resolve_type(type_of(V))} || {K, V} <- maps:to_list(KwValues)],
-    case gdbsp_builtins:lookup_fn(Name, PosTypes, KwPairs) of
-        {ok, _RetType, {Mod, Fun, _Arity}} ->
+    PosTypes = [type_of(V) || V <- PosValues],
+    KwPairs = [{K, type_of(V)} || {K, V} <- maps:to_list(KwValues)],
+    Concrete = case gdbsp_builtins:concrete_fn(Name, PosTypes, maps:from_list(KwPairs)) of
+        {error, not_an_operator} -> Name;
+        CN -> CN
+    end,
+    case gdbsp_builtins:fn_impl(Concrete) of
+        {ok, {Mod, Fun, _Arity}} ->
             call_impl(Mod, Fun, PosValues, KwValues);
-        {ok, _RetType, undefined} ->
+        {error, unknown_impl} ->
             {error, {no_implementation, Name}};
         {error, _} = E -> E
     end.
-
-resolve_type({dynamic, _}) -> dynamic;
-resolve_type(T) -> T.

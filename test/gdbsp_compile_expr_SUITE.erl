@@ -29,9 +29,9 @@
          t24_check_all_matching/1, t25_check_all_missing_ts/1,
          t26_check_all_param_count/1, t27_check_all_kw_mismatch/1,
          t28_check_all_roundtrip/1,
-         t29_builtin_lookup_add/1, t30_builtin_lookup_all/1,
-         t31_builtin_qualified_lookup/1, t32_builtin_binop_name/1,
-         t33_builtin_operator_resolvable/1
+         t29_builtin_resolve_ops/1, t30_builtin_resolve_comparison/1,
+         t31_builtin_resolve_logic/1, t32_builtin_binop_name/1,
+         t33_builtin_resolve_concat/1
         ]).
 
 %%====================================================================
@@ -52,9 +52,9 @@ all() ->
      t24_check_all_matching, t25_check_all_missing_ts,
      t26_check_all_param_count, t27_check_all_kw_mismatch,
      t28_check_all_roundtrip,
-     t29_builtin_lookup_add, t30_builtin_lookup_all,
-     t31_builtin_qualified_lookup, t32_builtin_binop_name,
-     t33_builtin_operator_resolvable
+     t29_builtin_resolve_ops, t30_builtin_resolve_comparison,
+     t31_builtin_resolve_logic, t32_builtin_binop_name,
+     t33_builtin_resolve_concat
     ].
 
 %%====================================================================
@@ -106,20 +106,20 @@ t08_lower_binop_add(_Config) ->
          {var, 1, <<"x">>},
          {var, 1, <<"y">>}},
         #{<<"x">> => <<"x">>, <<"y">> => <<"y">>}),
-    {call, <<"add">>, [{arg, <<"x">>}, {arg, <<"y">>}], #{}} = Result.
+    {call, <<"+">>, [{arg, <<"x">>}, {arg, <<"y">>}], #{}} = Result.
 
 t09_lower_binop_operators(_Config) ->
     Ops = [
-        {'+',  <<"add">>},     {'-',  <<"sub">>},
-        {'*',  <<"mul">>},     {'/',  <<"div">>},
-        {'%',  <<"mod">>},     {'=',  <<"eq">>},
-        {'!=', <<"neq">>},     {'<',  <<"lt">>},
-        {'>',  <<"gt">>},      {'<=', <<"lte">>},
-        {'>=', <<"gte">>},     {'++', <<"concat">>},
-        {'<<', <<"bits_shl">>}, {'>>',  <<"bits_shr">>},
-        {'<<<',<<"bits_rotl">>},{'>>>',<<"bits_rotr">>},
-        {'&',  <<"bits_and">>},{'|',  <<"bits_or">>},
-        {'^',  <<"bits_xor">>}
+        {'+',  <<"+">>},   {'-',  <<"-">>},
+        {'*',  <<"*">>},   {'/',  <<"/">>},
+        {'%',  <<"%">>},   {'=',  <<"=">>},
+        {'!=', <<"!=">>},  {'<',  <<"<">>},
+        {'>',  <<">">>},   {'<=', <<"<=">>},
+        {'>=', <<">=">>},  {'++', <<"++">>},
+        {'<<', <<"<<">>},  {'>>',  <<">>">>},
+        {'<<<',<<"<<<">>}, {'>>>',<<">>>">>},
+        {'&',  <<"&">>},   {'|',  <<"|">>},
+        {'^',  <<"^">>}
     ],
     Bindings = #{<<"x">> => <<"x">>, <<"y">> => <<"y">>},
     lists:foreach(
@@ -131,8 +131,8 @@ t09_lower_binop_operators(_Config) ->
 
 t10_lower_unop(_Config) ->
     Uops = [
-        {'-',   <<"neg">>},
-        {'~',   <<"bits_not">>},
+        {'-',   <<"-">>},
+        {'~',   <<"~">>},
         {'not', <<"not">>}
     ],
     Bindings = #{<<"x">> => <<"x">>},
@@ -147,7 +147,7 @@ t11_lower_dot_access(_Config) ->
     Result = gdbsp_compile_expr:lower_expr(
         {dot_access, 1, {var, 1, <<"r">>}, <<"f">>},
         #{<<"r">> => <<"r">>}),
-    {call, <<"struct:get">>, [{arg, <<"r">>}], KwMap} = Result,
+    {call, <<"std.struct_get">>, [{arg, <<"r">>}], KwMap} = Result,
     {value, {string, <<"UTF-8">>}, <<"f">>} = maps:get(<<"key">>, KwMap),
     ok.
 
@@ -227,25 +227,28 @@ t20_check_ok_arg(_Config) ->
 
 t21_check_unbound_var(_Config) ->
     {error, Errors} = gdbsp_compile_expr:check_fn_body(
-        {arg, <<"x">>}, #{}, i64),
+        {arg, <<"x">>}, #{}, i64, #{}),
     true = lists:any(fun({unbound_var, <<"x">>}) -> true; (_) -> false end, Errors).
 
 t22_check_ok_call(_Config) ->
+    Stdlib = test_stdlib(),
     ok = gdbsp_compile_expr:check_fn_body(
-        {call, <<"add">>, [{arg, <<"x">>}, {arg, <<"y">>}], #{}},
-        #{<<"x">> => i64, <<"y">> => i64}, i64).
+        {call, <<"+">>, [{arg, <<"x">>}, {arg, <<"y">>}], #{}},
+        #{<<"x">> => i64, <<"y">> => i64}, i64, Stdlib).
 
 t23_check_call_mismatch(_Config) ->
+    Stdlib = test_stdlib(),
     {error, [{return_type_mismatch, _, _}]} =
         gdbsp_compile_expr:check_fn_body(
-            {call, <<"add">>, [{arg, <<"x">>}, {arg, <<"y">>}], #{}},
-            #{<<"x">> => i64, <<"y">> => i64}, string).
+            {call, <<"+">>, [{arg, <<"x">>}, {arg, <<"y">>}], #{}},
+            #{<<"x">> => i64, <<"y">> => i64}, string, Stdlib).
 
 %%====================================================================
 %% Phase 4c — Integration tests (check_all_fns/1)
 %%====================================================================
 
 t24_check_all_matching(_Config) ->
+    Stdlib = test_stdlib(),
     Prog = #gdbsp_program{
         nodes = [],
         typespecs = [
@@ -263,10 +266,11 @@ t24_check_all_matching(_Config) ->
                           line = 2}
         ]
     },
-    {ok, FnJsonMap, []} = gdbsp_compile_expr:check_all_fns(Prog),
+    {ok, FnJsonMap, []} = gdbsp_compile_expr:check_all_fns(Prog, Stdlib),
     true = maps:is_key(<<"square">>, FnJsonMap).
 
 t25_check_all_missing_ts(_Config) ->
+    Stdlib = test_stdlib(),
     Prog = #gdbsp_program{
         nodes = [],
         typespecs = [],
@@ -278,10 +282,11 @@ t25_check_all_missing_ts(_Config) ->
                           line = 1}
         ]
     },
-    {error, ErrorMap} = gdbsp_compile_expr:check_all_fns(Prog),
+    {error, ErrorMap} = gdbsp_compile_expr:check_all_fns(Prog, Stdlib),
     missing_typespec = maps:get(<<"f">>, ErrorMap).
 
 t26_check_all_param_count(_Config) ->
+    Stdlib = test_stdlib(),
     Prog = #gdbsp_program{
         nodes = [],
         typespecs = [
@@ -297,10 +302,11 @@ t26_check_all_param_count(_Config) ->
                           line = 2}
         ]
     },
-    {error, ErrorMap} = gdbsp_compile_expr:check_all_fns(Prog),
+    {error, ErrorMap} = gdbsp_compile_expr:check_all_fns(Prog, Stdlib),
     [{param_count_mismatch, _, _}] = maps:get(<<"f">>, ErrorMap).
 
 t27_check_all_kw_mismatch(_Config) ->
+    Stdlib = test_stdlib(),
     Prog = #gdbsp_program{
         nodes = [],
         typespecs = [
@@ -316,7 +322,7 @@ t27_check_all_kw_mismatch(_Config) ->
                           line = 2}
         ]
     },
-    {error, ErrorMap} = gdbsp_compile_expr:check_all_fns(Prog),
+    {error, ErrorMap} = gdbsp_compile_expr:check_all_fns(Prog, Stdlib),
     KwErrors = maps:get(<<"f">>, ErrorMap),
     true = lists:any(
         fun({extra_kw_params, _}) -> true;
@@ -326,6 +332,7 @@ t27_check_all_kw_mismatch(_Config) ->
         end, KwErrors).
 
 t28_check_all_roundtrip(_Config) ->
+    Stdlib = test_stdlib(),
     Prog = #gdbsp_program{
         nodes = [],
         typespecs = [
@@ -343,79 +350,46 @@ t28_check_all_roundtrip(_Config) ->
                           line = 2}
         ]
     },
-    {ok, FnJsonMap, []} = gdbsp_compile_expr:check_all_fns(Prog),
+    {ok, FnJsonMap, []} = gdbsp_compile_expr:check_all_fns(Prog, Stdlib),
     Json = maps:get(<<"square">>, FnJsonMap),
     {ok, Expr} = gdbsp_expr:json_to_expr(Json),
-    {call, <<"mul">>, [{arg, <<"x">>}, {arg, <<"x">>}], #{}} = Expr.
+    {call, <<"*">>, [{arg, <<"x">>}, {arg, <<"x">>}], #{}} = Expr.
 
 %%====================================================================
-%% Phase 5 — Builtins tests
+%% Phase 5 — Builtins tests (updated for new API)
 %%====================================================================
 
-t29_builtin_lookup_add(_Config) ->
-    {ok, i64, _} = gdbsp_builtins:lookup_fn(<<"add">>, [i64, i64], []).
+t29_builtin_resolve_ops(_Config) ->
+    Stdlib = test_stdlib(),
+    {ok, i64, _} = gdbsp_builtins:resolve_call(<<"+">>, [i64, i64], [], Stdlib),
+    {ok, i64, _} = gdbsp_builtins:resolve_call(<<"-">>, [i64, i64], [], Stdlib).
 
-t30_builtin_lookup_all(_Config) ->
-    ShortNames2 = [
-        <<"add">>, <<"sub">>, <<"mul">>, <<"div">>, <<"mod">>,
-        <<"eq">>, <<"neq">>, <<"lt">>, <<"gt">>,
-        <<"lte">>, <<"gte">>, <<"concat">>
-    ],
-    ShortNames1 = [
-        <<"neg">>
-    ],
-    BitwiseBinary = [<<"bits_and">>, <<"bits_or">>, <<"bits_xor">>],
-    BitwiseShift  = [<<"bits_shl">>, <<"bits_shr">>, <<"bits_rotl">>, <<"bits_rotr">>],
-    lists:foreach(
-        fun(Name) ->
-            case gdbsp_builtins:lookup_fn(Name, [i64, i64], []) of
-                {ok, _, _} -> ok;
-                {error, Reason} ->
-                    ct:fail("lookup failed for ~p: ~p", [Name, Reason])
-            end
-        end, ShortNames2),
-    lists:foreach(
-        fun(Name) ->
-            case gdbsp_builtins:lookup_fn(Name, [i64], []) of
-                {ok, _, _} -> ok;
-                {error, Reason} ->
-                    ct:fail("lookup failed for ~p: ~p", [Name, Reason])
-            end
-        end, ShortNames1),
-    {ok, _, _} = gdbsp_builtins:lookup_fn(<<"not">>, [{enum, [<<"false">>, <<"true">>]}], []),
-    {ok, _, _} = gdbsp_builtins:lookup_fn(<<"bits_not">>, [bits], []),
-    lists:foreach(
-        fun(Name) ->
-            case gdbsp_builtins:lookup_fn(Name, [bits, bits], []) of
-                {ok, _, _} -> ok;
-                {error, Reason} ->
-                    ct:fail("lookup failed for ~p: ~p", [Name, Reason])
-            end
-        end, BitwiseBinary),
-    lists:foreach(
-        fun(Name) ->
-            case gdbsp_builtins:lookup_fn(Name, [bits, integer], []) of
-                {ok, _, _} -> ok;
-                {error, Reason} ->
-                    ct:fail("lookup failed for ~p: ~p", [Name, Reason])
-            end
-        end, BitwiseShift).
+t30_builtin_resolve_comparison(_Config) ->
+    Stdlib = test_stdlib(),
+    {ok, ?BOOL, _} = gdbsp_builtins:resolve_call(<<"=">>, [i64, i64], [], Stdlib),
+    {ok, ?BOOL, _} = gdbsp_builtins:resolve_call(<<"!=">>, [string, string], [], Stdlib),
+    {ok, ?BOOL, _} = gdbsp_builtins:resolve_call(<<"<">>, [i64, i64], [], Stdlib).
 
-t31_builtin_qualified_lookup(_Config) ->
-    {ok, i64, _} = gdbsp_builtins:lookup_fn(<<"math:add">>, [i64, i64], []).
+t31_builtin_resolve_logic(_Config) ->
+    Stdlib = test_stdlib(),
+    BoolT = {enum, [<<"false">>, <<"true">>]},
+    {ok, BoolT, _} = gdbsp_builtins:resolve_call(<<"not">>, [BoolT], [], Stdlib),
+    {ok, BoolT, _} = gdbsp_builtins:resolve_call(<<"and">>, [BoolT, BoolT], [], Stdlib).
 
 t32_builtin_binop_name(_Config) ->
-    <<"add">> = gdbsp_builtins:binop_fn_name('+').
+    <<"+">> = gdbsp_builtins:binop_fn_name('+').
 
-t33_builtin_operator_resolvable(_Config) ->
-    {ok, _, _} = gdbsp_builtins:lookup_fn(<<"add">>, [i64, i64], []),
-    {ok, _, _} = gdbsp_builtins:lookup_fn(<<"sub">>, [i64, i64], []),
-    {ok, _, _} = gdbsp_builtins:lookup_fn(<<"eq">>, [i64, i64], []),
-    {ok, _, _} = gdbsp_builtins:lookup_fn(<<"neq">>, [i64, i64], []),
-    {ok, _, _} = gdbsp_builtins:lookup_fn(<<"lt">>, [i64, i64], []),
-    {ok, _, _} = gdbsp_builtins:lookup_fn(<<"concat">>, [string, string], []),
-    {ok, _, _} = gdbsp_builtins:lookup_fn(<<"bits_and">>, [bits, bits], []),
-    {ok, _, _} = gdbsp_builtins:lookup_fn(<<"bits_shl">>, [bits, integer], []),
-    {ok, _, _} = gdbsp_builtins:lookup_fn(<<"not">>, [{enum, [<<"false">>, <<"true">>]}], []),
-    {ok, _, _} = gdbsp_builtins:lookup_fn(<<"neg">>, [i64], []),
-    {ok, _, _} = gdbsp_builtins:lookup_fn(<<"bits_not">>, [bits], []).
+t33_builtin_resolve_concat(_Config) ->
+    Stdlib = test_stdlib(),
+    {ok, {string, <<"UTF-8">>}, _} =
+        gdbsp_builtins:resolve_call(<<"++">>, [{string, <<"UTF-8">>}, {string, <<"UTF-8">>}], [], Stdlib),
+    {ok, bytes, _} = gdbsp_builtins:resolve_call(<<"++">>, [bytes, bytes], [], Stdlib),
+    ok.
+
+%%====================================================================
+%% Helpers
+%%====================================================================
+
+test_stdlib() ->
+    {ok, M} = gdbsp_compile:load_stdlib(),
+    M.

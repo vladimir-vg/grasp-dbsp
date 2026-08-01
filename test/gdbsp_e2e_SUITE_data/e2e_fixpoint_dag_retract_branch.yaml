@@ -32,9 +32,9 @@
 
   functions:
     gt_zero:
-      call: "gt"
+      call: ">"
       args:
-        - call: "struct:get"
+        - call: "std.struct_get"
           args:
             - arg: row
           kwargs:
@@ -46,9 +46,9 @@
       call: "struct"
       kwargs:
         v:
-          call: "math:sub"
+          call: "-"
           args:
-            - call: "struct:get"
+            - call: "std.struct_get"
               args:
                 - arg: row
               kwargs:

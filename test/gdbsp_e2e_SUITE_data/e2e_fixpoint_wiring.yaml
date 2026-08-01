@@ -69,11 +69,11 @@
 
   functions:
     is_even:
-      call: "eq"
+      call: "="
       args:
-        - call: "math:mod"
+        - call: "%"
           args:
-            - call: "struct:get"
+            - call: "std.struct_get"
               args:
                 - arg: row
               kwargs:

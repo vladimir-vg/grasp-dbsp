@@ -147,8 +147,9 @@ run_one_fixture(Fixture, GroupName, Config) ->
 
 run_positive(Prog, Functions, ExpectedRaw, GroupName, Config) ->
     TSMap = build_ts_map(Prog#gdbsp_program.typespecs),
+    {ok, StdlibMap} = gdbsp_compile:load_stdlib(),
     Lowered0 = lower_program(Prog),
-    {ok, Lowered} = gdbsp_type_infer:infer_lowered(Lowered0, TSMap, Functions),
+    {ok, Lowered} = gdbsp_type_infer:infer_lowered(Lowered0, TSMap, Functions, StdlibMap),
 
     %% Generate lowered graph DOT
     write_dot_file("type_infer", GroupName, "lowered",
@@ -175,8 +176,9 @@ run_positive(Prog, Functions, ExpectedRaw, GroupName, Config) ->
 
 run_negative(Prog, Functions, ExpectedErrorsRaw) ->
     TSMap = build_ts_map(Prog#gdbsp_program.typespecs),
+    {ok, StdlibMap} = gdbsp_compile:load_stdlib(),
     Lowered0 = lower_program(Prog),
-    case gdbsp_type_infer:infer_lowered(Lowered0, TSMap, Functions) of
+    case gdbsp_type_infer:infer_lowered(Lowered0, TSMap, Functions, StdlibMap) of
         {ok, _Lowered} ->
             ct:fail("expected error but infer succeeded");
         {error, Reason} when is_map(Reason) ->

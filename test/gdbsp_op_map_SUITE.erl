@@ -132,7 +132,7 @@ maps_rows(_Config) ->
     ok = cleanup([Op, Up, Down]).
 
 expr_init(_Config) ->
-    CanonicalExpr = {call, <<"math:add">>, [{call, <<"struct:get">>, [{arg, <<"row">>}], #{<<"key">> => {value, string, <<"x">>}}}, {value, i64, 1}], #{}},
+    CanonicalExpr = {call, <<"+">>, [{call, <<"std.struct_get">>, [{arg, <<"row">>}], #{<<"key">> => {value, string, <<"x">>}}}, {value, i64, 1}], #{}},
     RowType = {struct, #{<<"x">> => i64}, exact},
     TypedRow = gdbsp_value:map_to_struct(#{<<"x">> => 5}, RowType),
     Expected = gdbsp_value:struct_extend(TypedRow, <<"y">>, {value, i64, 6}),

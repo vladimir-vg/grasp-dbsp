@@ -8,16 +8,16 @@
         x: i64
         y: i64
 
-- description: "filter inherits input type (struct:get on arg)"
+- description: "filter inherits input type (std.struct_get on arg)"
   source: |
     src := source("data")
     src :: stream(struct("x": i64, "y": i64))
     out := filter(src, my_fn)
   functions:
     my_fn:
-      call: gte
+      call: ">="
       args:
-        - call: "struct:get"
+        - call: "std.struct_get"
           args:
             - arg: row
           kwargs:
@@ -108,7 +108,7 @@
           string:
             encoding: "UTF-8"
 
-- description: "map with struct constructor (struct:get fields from arg)"
+- description: "map with struct constructor (std.struct_get fields from arg)"
   source: |
     src := source("data")
     src :: stream(struct("id": i64, "a": i64, "b": i64))
@@ -118,7 +118,7 @@
       call: struct
       kwargs:
         x:
-          call: "struct:get"
+          call: "std.struct_get"
           args:
             - arg: row
           kwargs:
@@ -126,7 +126,7 @@
               type: string
               value: "a"
         y:
-          call: "struct:get"
+          call: "std.struct_get"
           args:
             - arg: row
           kwargs:
@@ -144,14 +144,14 @@
         x: i64
         y: i64
 
-- description: "map with struct:get infers exact field type"
+- description: "map with std.struct_get infers exact field type"
   source: |
     src := source("data")
     src :: stream(struct("x": i64, "y": string("UTF-8")))
     out := map(src, pick_x)
   functions:
     pick_x:
-      call: "struct:get"
+      call: "std.struct_get"
       args:
         - arg: row
       kwargs:
@@ -249,9 +249,9 @@
     out := distinct(f)
   functions:
     my_fn:
-      call: gte
+      call: ">="
       args:
-        - call: "struct:get"
+        - call: "std.struct_get"
           args:
             - arg: row
           kwargs:
@@ -335,7 +335,7 @@
       call: struct
       kwargs:
         x:
-          call: "struct:get"
+          call: "std.struct_get"
           args:
             - arg: row
           kwargs:
@@ -361,16 +361,16 @@
         k: i64
         a: i64
 
-- description: "map with gte call infers boolean return (struct:get from arg)"
+- description: "map with gte call infers boolean return (std.struct_get from arg)"
   source: |
     src := source("data")
     src :: stream(struct("x": i64))
     out := map(src, is_pos)
   functions:
     is_pos:
-      call: gte
+      call: ">="
       args:
-        - call: "struct:get"
+        - call: "std.struct_get"
           args:
             - arg: row
           kwargs:
@@ -382,16 +382,16 @@
   expected:
     out: boolean
 
-- description: "map with string:upper call infers string return (struct:get from arg)"
+- description: "map with string:upper call infers string return (std.struct_get from arg)"
   source: |
     src := source("data")
     src :: stream(struct("name": string("UTF-8")))
     out := map(src, up)
   functions:
     up:
-      call: "string:upper"
+      call: "std.string_upper"
       args:
-        - call: "struct:get"
+        - call: "std.struct_get"
           args:
             - arg: row
           kwargs:
@@ -399,7 +399,9 @@
               type: string
               value: "name"
   expected:
-    out: string
+    out:
+      string:
+        encoding: "UTF-8"
 
 - description: "source without type annotation fails"
   source: |
@@ -539,19 +541,19 @@
         id: i64
         name: string
 
-- description: "struct:get with non-constant key degrades to dynamic"
+- description: "std.struct_get with non-constant key degrades to dynamic"
   source: |
     src := source("data")
     src :: stream(struct("key": string("UTF-8"), "a": i64, "b": i64))
     out := map(src, get_by_key)
   functions:
     get_by_key:
-      call: "struct:get"
+      call: "std.struct_get"
       args:
         - arg: row
       kwargs:
         key:
-          call: "struct:get"
+          call: "std.struct_get"
           args:
             - arg: row
           kwargs:

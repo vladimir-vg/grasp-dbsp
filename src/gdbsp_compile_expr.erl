@@ -9,7 +9,7 @@
 -module(gdbsp_compile_expr).
 
 -export([lower_expr/2, lower_fn_body/2]).
--export([check_fn_body/3, check_all_fns/1]).
+-export([check_fn_body/4, check_all_fns/2]).
 
 -include("gdbsp_parse.hrl").
 -include("gdbsp_expr.hrl").
@@ -57,7 +57,7 @@ lower_expr({unop, _Line, Op, E}, Bindings) ->
     {call, FnName, [E1], #{}};
 lower_expr({dot_access, _Line, Obj, Field}, Bindings) ->
     O = lower_expr(Obj, Bindings),
-    {call, <<"struct:get">>, [O], #{<<"key">> => {value, {string, <<"UTF-8">>}, Field}}};
+    {call, <<"std.struct_get">>, [O], #{<<"key">> => {value, {string, <<"UTF-8">>}, Field}}};
 lower_expr({array_literal, _Line, Elems}, Bindings) ->
     Lowered = [lower_expr_elem(El, Bindings) || El <- Elems],
     {call, <<"array">>, Lowered, #{}};
@@ -146,10 +146,11 @@ build_fn_bindings([{kw, Key, Var} | Rest], KwMap, Line) ->
 %% Type Checking
 %%====================================================================
 
--spec check_fn_body(expr(), #{binary() => gdbsp_column_type()}, gdbsp_column_type()) ->
+-spec check_fn_body(expr(), #{binary() => gdbsp_column_type()}, gdbsp_column_type(),
+                    gdbsp_builtins:stdlib_map()) ->
     ok | {error, [term()]}.
-check_fn_body(BodyExpr, TypeEnv, DeclaredRetType) ->
-    case infer_expr_type(BodyExpr, TypeEnv, []) of
+check_fn_body(BodyExpr, TypeEnv, DeclaredRetType, StdlibMap) ->
+    case infer_expr_type(BodyExpr, TypeEnv, [], StdlibMap) of
         {InferredType, []} ->
             InferredCanon = gdbsp_type:canonical_text(InferredType),
             DeclaredCanon = gdbsp_type:canonical_text(DeclaredRetType),
@@ -162,42 +163,65 @@ check_fn_body(BodyExpr, TypeEnv, DeclaredRetType) ->
             {error, Errors}
     end.
 
--spec infer_expr_type(expr(), #{binary() => gdbsp_column_type()}, [term()]) ->
+-spec infer_expr_type(expr(), #{binary() => gdbsp_column_type()}, [term()],
+                      gdbsp_builtins:stdlib_map()) ->
     {gdbsp_column_type() | undefined, [term()]}.
-infer_expr_type({value, T, _V}, _Env, Errors) ->
+infer_expr_type({value, T, _V}, _Env, Errors, _StdlibMap) ->
     {T, Errors};
-infer_expr_type({arg, Name}, Env, Errors) ->
+infer_expr_type({arg, Name}, Env, Errors, _StdlibMap) ->
     case Env of
         #{Name := T} -> {T, Errors};
         _ -> {dynamic, [{unbound_var, Name} | Errors]}
     end;
-infer_expr_type({call, Name, PosArgs, KwArgs}, Env, Errors) ->
-    {PosTypes, PosErrors} = infer_arg_types(PosArgs, Env, Errors),
-    {KwPairs, KwErrors} = infer_kw_types(KwArgs, Env, PosErrors),
+infer_expr_type({call, <<"std.struct_get">>, PosArgs, KwArgs}, Env, Errors, _StdlibMap) ->
+    {PosTypes, PosErrors} = infer_arg_types(PosArgs, Env, Errors, _StdlibMap),
+    {KwPairs, KwErrors} = infer_kw_types(KwArgs, Env, PosErrors, _StdlibMap),
     AllErrors = merge_pos_kw_errors(PosErrors, KwErrors),
-    case gdbsp_builtins:lookup_fn(Name, PosTypes, KwPairs) of
-        {ok, RetType, _Impl} ->
+    case KwPairs of
+        [{<<"key">>, {string, _}} | _] ->
+            KeyStr = case maps:get(<<"key">>, KwArgs) of
+                {value, {string, _}, S} -> S;
+                _ -> undefined
+            end,
+            case PosTypes of
+                [{struct, Fields, _} | _] when KeyStr =/= undefined ->
+                    case maps:find(KeyStr, Fields) of
+                        {ok, FieldType} -> {FieldType, AllErrors};
+                        error -> {dynamic, [{missing_field, KeyStr} | AllErrors]}
+                    end;
+                _ ->
+                    {dynamic, [{non_struct_target, <<"std.struct_get">>} | AllErrors]}
+            end;
+        _ ->
+            {dynamic, [{non_literal_struct_key} | AllErrors]}
+    end;
+infer_expr_type({call, Name, PosArgs, KwArgs}, Env, Errors, StdlibMap) ->
+    {PosTypes, PosErrors} = infer_arg_types(PosArgs, Env, Errors, StdlibMap),
+    {KwPairs, KwErrors} = infer_kw_types(KwArgs, Env, PosErrors, StdlibMap),
+    AllErrors = merge_pos_kw_errors(PosErrors, KwErrors),
+    case gdbsp_builtins:resolve_call(Name, PosTypes, KwPairs, StdlibMap) of
+        {ok, RetType, _ConcreteName} ->
             {RetType, AllErrors};
         {error, Reason} ->
             {dynamic, [{fn_lookup_error, Name, Reason} | AllErrors]}
     end;
-infer_expr_type({get, _Obj, _Keys}, _Env, Errors) ->
+infer_expr_type({get, _Obj, _Keys}, _Env, Errors, _StdlibMap) ->
     {dynamic, Errors};
-infer_expr_type({slice, _Obj, _Start, _Stop, _Step}, _Env, Errors) ->
+infer_expr_type({slice, _Obj, _Start, _Stop, _Step}, _Env, Errors, _StdlibMap) ->
     {dynamic, Errors};
-infer_expr_type({agg, _Name, _PosArgs, _KwArgs}, _Env, Errors) ->
+infer_expr_type({agg, _Name, _PosArgs, _KwArgs}, _Env, Errors, _StdlibMap) ->
     {dynamic, [aggregates_not_allowed_in_fn_body | Errors]}.
 
-infer_arg_types([], _Env, Errors) ->
+infer_arg_types([], _Env, Errors, _StdlibMap) ->
     {[], Errors};
-infer_arg_types([Arg | Rest], Env, Errors) ->
-    {T, Errors1} = infer_expr_type(Arg, Env, Errors),
-    {Ts, Errors2} = infer_arg_types(Rest, Env, Errors1),
+infer_arg_types([Arg | Rest], Env, Errors, StdlibMap) ->
+    {T, Errors1} = infer_expr_type(Arg, Env, Errors, StdlibMap),
+    {Ts, Errors2} = infer_arg_types(Rest, Env, Errors1, StdlibMap),
     {[T | Ts], Errors2}.
 
-infer_kw_types(KwMap, Env, Errors) when is_map(KwMap) ->
+infer_kw_types(KwMap, Env, Errors, StdlibMap) when is_map(KwMap) ->
     maps:fold(fun(K, V, {Pairs, E}) ->
-        {T, E1} = infer_expr_type(V, Env, E),
+        {T, E1} = infer_expr_type(V, Env, E, StdlibMap),
         {[{K, T} | Pairs], E1}
     end, {[], Errors}, KwMap).
 
@@ -211,29 +235,29 @@ merge_pos_kw_errors(PosErrors, KwErrors) ->
 %% Check All Functions
 %%====================================================================
 
--spec check_all_fns(#gdbsp_program{}) ->
+-spec check_all_fns(#gdbsp_program{}, gdbsp_builtins:stdlib_map()) ->
     {ok, #{binary() => jsx:json_term()}, [term()]} | {error, #{binary() => term()}}.
-check_all_fns(#gdbsp_program{fn_defs = FnDefs, typespecs = TSs}) ->
-    check_all_fns(FnDefs, TSs, #{}, [], []).
+check_all_fns(#gdbsp_program{fn_defs = FnDefs, typespecs = TSs}, StdlibMap) ->
+    check_all_fns(FnDefs, TSs, StdlibMap, #{}, [], []).
 
-check_all_fns([], _TSs, FnJsonMap, _Warnings, Errors) ->
+check_all_fns([], _TSs, _StdlibMap, FnJsonMap, _Warnings, Errors) ->
     case Errors of
         [] -> {ok, FnJsonMap, []};
         _ -> {error, maps:from_list(Errors)}
     end;
-check_all_fns([FnDef | Rest], TSs, FnJsonMap, Warnings, Errors) ->
+check_all_fns([FnDef | Rest], TSs, StdlibMap, FnJsonMap, Warnings, Errors) ->
     Name = FnDef#gdbsp_fn_def.name,
     case find_fn_typespec(Name, TSs) of
         {ok, TS} ->
-            case check_single_fn(FnDef, TS) of
+            case check_single_fn(FnDef, TS, StdlibMap) of
                 {ok, Json} ->
-                    check_all_fns(Rest, TSs, FnJsonMap#{Name => Json}, Warnings, Errors);
+                    check_all_fns(Rest, TSs, StdlibMap, FnJsonMap#{Name => Json}, Warnings, Errors);
                 {error, FnErrors} ->
-                    check_all_fns(Rest, TSs, FnJsonMap, Warnings,
+                    check_all_fns(Rest, TSs, StdlibMap, FnJsonMap, Warnings,
                                   [{Name, FnErrors} | Errors])
             end;
         {error, Reason} ->
-            check_all_fns(Rest, TSs, FnJsonMap, Warnings,
+            check_all_fns(Rest, TSs, StdlibMap, FnJsonMap, Warnings,
                           [{Name, Reason} | Errors])
     end.
 
@@ -246,13 +270,14 @@ find_fn_typespec(Name, TSs) ->
         [TS | _] -> {ok, TS}
     end.
 
-check_single_fn(FnDef, #gdbsp_typespec{spec = {function, PosTypes, KwMap, RetType}}) ->
+check_single_fn(FnDef, #gdbsp_typespec{spec = {function, PosTypes, KwMap, RetType}},
+                StdlibMap) ->
     Params = FnDef#gdbsp_fn_def.params,
     case validate_params(Params, PosTypes, KwMap) of
         ok ->
             Body = lower_fn_body(FnDef, #gdbsp_typespec{spec = {function, PosTypes, KwMap, RetType}}),
             TypeEnv = build_type_env(Params, PosTypes, KwMap),
-            case check_fn_body(Body, TypeEnv, RetType) of
+            case check_fn_body(Body, TypeEnv, RetType, StdlibMap) of
                 ok ->
                     Json = gdbsp_expr:expr_to_json(Body),
                     {ok, Json};

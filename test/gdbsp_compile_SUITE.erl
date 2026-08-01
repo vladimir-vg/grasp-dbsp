@@ -53,7 +53,7 @@ simple_filter(_Config) ->
         <<"salary_ge_150">> =>
             #{<<"call">> => <<"gte">>,
               <<"args">> => [
-                  #{<<"call">> => <<"struct:get">>,
+                  #{<<"call">> => <<"std.struct_get">>,
                     <<"args">> => [#{<<"arg">> => <<"row">>}],
                     <<"kwargs">> => #{<<"key">> => #{<<"type">> => <<"string">>,
                                                       <<"value">> => <<"sal">>}}},
@@ -81,11 +81,11 @@ simple_map(_Config) ->
         <<"passthrough">> =>
             #{<<"call">> => <<"struct">>,
               <<"kwargs">> =>
-                  #{<<"x">> => #{<<"call">> => <<"struct:get">>,
+                  #{<<"x">> => #{<<"call">> => <<"std.struct_get">>,
                                  <<"args">> => [#{<<"arg">> => <<"row">>}],
                                  <<"kwargs">> => #{<<"key">> => #{<<"type">> => <<"string">>,
                                                                    <<"value">> => <<"a">>}}},
-                    <<"y">> => #{<<"call">> => <<"struct:get">>,
+                    <<"y">> => #{<<"call">> => <<"std.struct_get">>,
                                  <<"args">> => [#{<<"arg">> => <<"row">>}],
                                  <<"kwargs">> => #{<<"key">> => #{<<"type">> => <<"string">>,
                                                                    <<"value">> => <<"b">>}}}}}
@@ -164,7 +164,7 @@ incrementalize_filter(_Config) ->
         <<"f">> =>
             #{<<"call">> => <<"gte">>,
               <<"args">> => [
-                  #{<<"call">> => <<"struct:get">>,
+                  #{<<"call">> => <<"std.struct_get">>,
                     <<"args">> => [#{<<"arg">> => <<"row">>}],
                     <<"kwargs">> => #{<<"key">> => #{<<"type">> => <<"string">>,
                                                       <<"value">> => <<"sal">>}}},
@@ -204,11 +204,11 @@ cycle_error(_Config) ->
         "a := map(b, g)\n"
     ),
     FnReg = #{
-        <<"f">> => #{<<"call">> => <<"struct:get">>,
+        <<"f">> => #{<<"call">> => <<"std.struct_get">>,
                       <<"args">> => [#{<<"arg">> => <<"row">>}],
                       <<"kwargs">> => #{<<"key">> => #{<<"type">> => <<"string">>,
                                                         <<"value">> => <<"x">>}}},
-        <<"g">> => #{<<"call">> => <<"struct:get">>,
+        <<"g">> => #{<<"call">> => <<"std.struct_get">>,
                       <<"args">> => [#{<<"arg">> => <<"row">>}],
                       <<"kwargs">> => #{<<"key">> => #{<<"type">> => <<"string">>,
                                                         <<"value">> => <<"x">>}}}
@@ -321,9 +321,9 @@ inline_fn_overrides_external(_Config) ->
 typespec_only_external_fn(_Config) ->
     FnReg = #{
         <<"inc">> =>
-            #{<<"call">> => <<"add">>,
+            #{<<"call">> => <<"+">>,
               <<"args">> => [
-                  #{<<"call">> => <<"struct:get">>,
+                  #{<<"call">> => <<"std.struct_get">>,
                     <<"args">> => [#{<<"arg">> => <<"row">>}],
                     <<"kwargs">> => #{<<"key">> => #{<<"type">> => <<"string">>,
                                                       <<"value">> => <<"x">>}}},
@@ -340,7 +340,7 @@ typespec_only_external_fn(_Config) ->
                                               incrementalize => false}),
     Nodes = maps:to_list(G#circuit_graph.nodes),
     MapNode = hd([N || {_, N} <- Nodes, element(1, N#circuit_node.op) =:= map]),
-    {map, #{expr := {call, <<"add">>, _, _}}} = MapNode#circuit_node.op,
+    {map, #{expr := {call, <<"+">>, _, _}}} = MapNode#circuit_node.op,
     ok.
 
 typespec_only_no_external(_Config) ->

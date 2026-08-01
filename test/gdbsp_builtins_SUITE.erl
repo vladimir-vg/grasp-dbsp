@@ -58,25 +58,23 @@ all() ->
     ].
 
 %%====================================================================
-%% B1. Operator → Method Mapping (6 tests)
-%% NOTE: Currently returns method names (add, sub, etc.).
-%% Phase C will change these to operator chars (+, -, etc.).
+%% B1. Operator → Operator Char Mapping (6 tests)
 %%====================================================================
 
 t01_binop_plus(_Config) ->
-    <<"add">> = gdbsp_builtins:binop_fn_name('+').
+    <<"+">> = gdbsp_builtins:binop_fn_name('+').
 
 t02_binop_minus(_Config) ->
-    <<"sub">> = gdbsp_builtins:binop_fn_name('-').
+    <<"-">> = gdbsp_builtins:binop_fn_name('-').
 
 t03_binop_mul(_Config) ->
-    <<"mul">> = gdbsp_builtins:binop_fn_name('*').
+    <<"*">> = gdbsp_builtins:binop_fn_name('*').
 
 t04_binop_eq(_Config) ->
-    <<"eq">> = gdbsp_builtins:binop_fn_name('=').
+    <<"=">> = gdbsp_builtins:binop_fn_name('=').
 
 t05_binop_concat(_Config) ->
-    <<"concat">> = gdbsp_builtins:binop_fn_name('++').
+    <<"++">> = gdbsp_builtins:binop_fn_name('++').
 
 t06_unop_not(_Config) ->
     <<"not">> = gdbsp_builtins:unop_fn_name('not').

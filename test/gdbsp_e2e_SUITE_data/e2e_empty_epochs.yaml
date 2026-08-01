@@ -6,9 +6,9 @@
 
   functions:
     nonzero_val:
-      call: "neq"
+      call: "!="
       args:
-        - call: "struct:get"
+        - call: "std.struct_get"
           args:
             - arg: row
           kwargs:
@@ -54,9 +54,9 @@
 
   functions:
     gt_0:
-      call: "gte"
+      call: ">="
       args:
-        - call: "struct:get"
+        - call: "std.struct_get"
           args:
             - arg: row
           kwargs:

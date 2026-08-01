@@ -41,15 +41,17 @@ struct_constructor(_TypeArg, _RawValues) ->
 %% struct:get(struct, key: string) -> dynamic
 %%====================================================================
 
+-define(IS_STRING_TYPE(KT), (KT =:= string orelse KT =:= {string, <<"UTF-8">>})).
+
 -spec struct_get(value(), value()) -> value().
 struct_get({value, {struct, _Fields, _Rest}, TypedValues}, {value, KeyType, Key})
-        when KeyType =:= string ->
+        when ?IS_STRING_TYPE(KeyType) ->
     case is_map(TypedValues) andalso maps:find(Key, TypedValues) of
         {ok, Val} -> Val;
         error -> erlang:throw(drop_row)
     end;
 struct_get({value, _, M}, {value, KeyType, Key})
-        when is_map(M), KeyType =:= string ->
+         when is_map(M), ?IS_STRING_TYPE(KeyType) ->
     case maps:find(Key, M) of
         {ok, {value, FieldType, RawVal}} -> {value, {dynamic, FieldType}, RawVal};
         error -> erlang:throw(drop_row)
@@ -64,7 +66,7 @@ struct_get(_, _) ->
 -spec struct_set(value(), value(), value()) -> value().
 struct_set({value, {struct, Fields, Rest}, TypedValues},
            {value, KeyType, Key},
-           {value, NewType, _} = NewVal) when KeyType =:= string ->
+           {value, NewType, _} = NewVal) when ?IS_STRING_TYPE(KeyType) ->
     case is_map(Fields) andalso is_map(TypedValues) andalso maps:is_key(Key, Fields) of
         false ->
             erlang:throw(drop_row);

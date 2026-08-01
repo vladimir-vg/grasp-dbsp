@@ -117,7 +117,7 @@ mk_barrier_delta(Epoch, Tag, Deltas, From) ->
 -define(STR_ROW_TYPE, {struct, #{<<"x">> => string}, exact}).
 
 eq_field(Col, Val) ->
-    {call, <<"eq">>, [{call, <<"struct:get">>, [{arg, <<"row">>}], #{<<"key">> => {value, string, Col}}}, {value, string, Val}], #{}}.
+    {call, <<"=">>, [{call, <<"std.struct_get">>, [{arg, <<"row">>}], #{<<"key">> => {value, string, Col}}}, {value, string, Val}], #{}}.
 
 always_true() -> {value, {enum, [<<"false">>, <<"true">>]}, true}.
 always_false() -> {value, {enum, [<<"false">>, <<"true">>]}, false}.
@@ -139,7 +139,7 @@ keeps_matching(_Config) ->
     ok = cleanup([Op, Up, Down]).
 
 expr_init(_Config) ->
-    CanonicalExpr = {call, <<"gt">>, [{call, <<"struct:get">>, [{arg, <<"row">>}], #{<<"key">> => {value, string, <<"x">>}}}, {value, i64, 5}], #{}},
+    CanonicalExpr = {call, <<">">>, [{call, <<"std.struct_get">>, [{arg, <<"row">>}], #{<<"key">> => {value, string, <<"x">>}}}, {value, i64, 5}], #{}},
     RowType = {struct, #{<<"x">> => i64}, exact},
     TypedRow10 = gdbsp_value:map_to_struct(#{<<"x">> => 10}, RowType),
     TypedRow3 = gdbsp_value:map_to_struct(#{<<"x">> => 3}, RowType),

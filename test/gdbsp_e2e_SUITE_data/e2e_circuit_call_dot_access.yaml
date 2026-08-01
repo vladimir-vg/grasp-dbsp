@@ -16,7 +16,7 @@
       call: "struct"
       kwargs:
         v:
-          call: "struct:get"
+          call: "std.struct_get"
           args:
             - arg: row
           kwargs:

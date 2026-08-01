@@ -48,9 +48,9 @@
 
   functions:
     gt_zero:
-      call: "gt"
+      call: ">"
       args:
-        - call: "struct:get"
+        - call: "std.struct_get"
           args:
             - arg: row
           kwargs:
@@ -62,9 +62,9 @@
       call: "struct"
       kwargs:
         v:
-          call: "math:sub"
+          call: "-"
           args:
-            - call: "struct:get"
+            - call: "std.struct_get"
               args:
                 - arg: row
               kwargs:
@@ -76,9 +76,9 @@
       call: "struct"
       kwargs:
         v:
-          call: "math:mul"
+          call: "*"
           args:
-            - call: "struct:get"
+            - call: "std.struct_get"
               args:
                 - arg: row
               kwargs:
@@ -90,9 +90,9 @@
       call: "struct"
       kwargs:
         v:
-          call: "math:mul"
+          call: "*"
           args:
-            - call: "struct:get"
+            - call: "std.struct_get"
               args:
                 - arg: row
               kwargs:
@@ -101,9 +101,9 @@
                   value: "v"
             - {type: "i64", value: "3"}
     lt_20:
-      call: "lt"
+      call: "<"
       args:
-        - call: "struct:get"
+        - call: "std.struct_get"
           args:
             - arg: row
           kwargs:
@@ -112,9 +112,9 @@
               value: "v"
         - {type: "i64", value: "20"}
     lt_50:
-      call: "lt"
+      call: "<"
       args:
-        - call: "struct:get"
+        - call: "std.struct_get"
           args:
             - arg: row
           kwargs:
@@ -270,9 +270,9 @@
 
   functions:
     gt_zero:
-      call: "gt"
+      call: ">"
       args:
-        - call: "struct:get"
+        - call: "std.struct_get"
           args:
             - arg: row
           kwargs:
@@ -284,9 +284,9 @@
       call: "struct"
       kwargs:
         v:
-          call: "math:sub"
+          call: "-"
           args:
-            - call: "struct:get"
+            - call: "std.struct_get"
               args:
                 - arg: row
               kwargs:
@@ -376,9 +376,9 @@
 
   functions:
     gt_zero:
-      call: "gt"
+      call: ">"
       args:
-        - call: "struct:get"
+        - call: "std.struct_get"
           args:
             - arg: row
           kwargs:
@@ -390,9 +390,9 @@
       call: "struct"
       kwargs:
         v:
-          call: "math:sub"
+          call: "-"
           args:
-            - call: "struct:get"
+            - call: "std.struct_get"
               args:
                 - arg: row
               kwargs:
@@ -404,9 +404,9 @@
       call: "struct"
       kwargs:
         v:
-          call: "math:mul"
+          call: "*"
           args:
-            - call: "struct:get"
+            - call: "std.struct_get"
               args:
                 - arg: row
               kwargs:
@@ -415,9 +415,9 @@
                   value: "v"
             - {type: "i64", value: "2"}
     lt_20:
-      call: "lt"
+      call: "<"
       args:
-        - call: "struct:get"
+        - call: "std.struct_get"
           args:
             - arg: row
           kwargs:
@@ -429,9 +429,9 @@
       call: "struct"
       kwargs:
         v:
-          call: "math:div"
+          call: "/"
           args:
-            - call: "struct:get"
+            - call: "std.struct_get"
               args:
                 - arg: row
               kwargs:
@@ -442,7 +442,7 @@
     ge_1:
       call: "ge"
       args:
-        - call: "struct:get"
+        - call: "std.struct_get"
           args:
             - arg: row
           kwargs:
@@ -553,9 +553,9 @@
 
   functions:
     gt_zero:
-      call: "gt"
+      call: ">"
       args:
-        - call: "struct:get"
+        - call: "std.struct_get"
           args:
             - arg: row
           kwargs:
@@ -567,9 +567,9 @@
       call: "struct"
       kwargs:
         v:
-          call: "math:sub"
+          call: "-"
           args:
-            - call: "struct:get"
+            - call: "std.struct_get"
               args:
                 - arg: row
               kwargs:

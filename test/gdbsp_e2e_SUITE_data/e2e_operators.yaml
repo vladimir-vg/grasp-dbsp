@@ -21,7 +21,7 @@
       call: "struct"
       kwargs:
         x:
-          call: "struct:get"
+          call: "std.struct_get"
           args:
             - arg: row
           kwargs:
@@ -29,7 +29,7 @@
               type: string
               value: "a"
         y:
-          call: "struct:get"
+          call: "std.struct_get"
           args:
             - arg: row
           kwargs:
@@ -56,9 +56,9 @@
 
   functions:
     salary_ge_50k:
-      call: "gte"
+      call: ">="
       args:
-        - call: "struct:get"
+        - call: "std.struct_get"
           args:
             - arg: row
           kwargs:
@@ -105,7 +105,7 @@
 
   functions:
     unnest_vals:
-      call: "struct:get"
+      call: "std.struct_get"
       args:
         - arg: row
       kwargs:
@@ -256,9 +256,9 @@
 
   functions:
     ge_10:
-      call: "gte"
+      call: ">="
       args:
-        - call: "struct:get"
+        - call: "std.struct_get"
           args:
             - arg: row
           kwargs:
@@ -267,9 +267,9 @@
               value: "x"
         - {type: "i64", value: "10"}
     lt_100_on_y:
-      call: "lt"
+      call: "<"
       args:
-        - call: "struct:get"
+        - call: "std.struct_get"
           args:
             - arg: row
           kwargs:
