@@ -926,18 +926,267 @@ lookup_in_stdlib_or_inline(Name, StdlibMap, InlineFnDefs) ->
 
 ## 8. Implementation Phases
 
-| Phase | Description                          | Risk  | Tests changed |
-|-------|--------------------------------------|-------|---------------|
-| **A** | Create `priv/stdlib.gdbsp`, wire loading in `gdbsp_compile.erl` | Low | New loading tests |
-| **B** | Rewrite `gdbsp_builtins.erl` — remove `fn_overloads`, add 3 tables + `unify_types` | Medium | New `gdbsp_builtins_SUITE` |
-| **C** | Modify lowering (`gdbsp_compile_expr.erl`) — use operator chars, `std.struct_get` special case, new resolution in `infer_expr_type` | Medium | Update `gdbsp_compile_expr_SUITE` |
-| **D** | Modify `gdbsp_type_infer.erl` — switch to new resolution, remove old `lookup_fn`/`match_overloads` calls | Medium | Update `gdbsp_type_infer_SUITE` |
-| **E** | Parser: support `"+"` tokens in typespec name position, canonicalize aliases | Low | Update parse.yaml |
-| **F** | Update remaining tests, full regression | Low | All other suites |
+| Phase | Description                          | Risk  | Tests | TDD § |
+|-------|--------------------------------------|-------|-------|-------|
+| **A** | Create `priv/stdlib.gdbsp`, wire loading in `gdbsp_compile.erl` | Low | `gdbsp_compile_SUITE` (+6) | [§9.2](#92-phase-a--stdlib-loading-low-risk) |
+| **B** | Rewrite `gdbsp_builtins.erl` — remove `fn_overloads`, add 3 tables + `unify_types` | Medium | `gdbsp_builtins_SUITE` (new, +38) | [§9.3](#93-phase-b--rewrite-gdbsp_builtinserl-medium-risk) |
+| **C** | Modify lowering (`gdbsp_compile_expr.erl`) — use operator chars, `std.struct_get` special case, new resolution in `infer_expr_type` | Medium | `gdbsp_compile_expr_SUITE` (+13 new, 7 updated) | [§9.4](#94-phase-c--modify-gdbsp_compile_exprerl-medium-risk) |
+| **D** | Modify `gdbsp_type_infer.erl` — switch to new resolution, remove old `lookup_fn`/`match_overloads` calls | Medium | `type_infer.yaml` (+9) | [§9.5](#95-phase-d--modify-gdbsp_type_infererl-medium-risk) |
+| **E** | Parser: support `"+"` tokens in typespec name position, canonicalize aliases | Low | `parse.yaml` (+10) | [§9.6](#96-phase-e--parser-changes-low-risk) |
+| **F** | Update remaining tests, full regression | Low | All other suites (regression) | [§9.7](#97-phase-f--full-regression-low-risk) |
 
 ---
 
-## 9. References
+## 9. TDD Plan
+
+Implementation follows a test-driven approach across all six phases.
+Each phase: write tests → see them fail → implement → see them pass.
+
+### 9.1 Test File Map
+
+| File | Action | Pattern |
+|------|--------|---------|
+| `test/gdbsp_builtins_SUITE.erl` | **CREATE** | Inline flat-list (like `compile_expr_SUITE`) |
+| `test/gdbsp_compile_expr_SUITE.erl` | **MODIFY** | Inline flat-list |
+| `test/gdbsp_compile_SUITE.erl` | **MODIFY** | Inline flat-list |
+| `test/gdbsp_type_infer_SUITE_data/type_infer.yaml` | **MODIFY** | YAML fixture-driven |
+| `test/parse_fixtures/parse.yaml` | **MODIFY** | YAML fixture-driven |
+
+All phases use existing conventions already in the codebase.
+
+### 9.2 Phase A — stdlib Loading (Low Risk)
+
+**Goal:** Prove `priv/stdlib.gdbsp` parses correctly and yields a typed
+stdlib map with expected entries.
+
+**Test module:** Add to `test/gdbsp_compile_SUITE.erl`
+(inline flat-list, 6 new test functions).
+
+| # | Test case (write first) | Implementation | Assertion |
+|---|---|---|---|
+| A1 | Parse `priv/stdlib.gdbsp` | File exists at `priv/stdlib.gdbsp`, loaded via `gdbsp_parse:parse_string/2` | Returns `{ok, #gdbsp_program{}}` |
+| A2 | stdlib map has arithmetic entries | Build TS map from parsed program | `maps:is_key(<<"std.add_i64">>, Stdlib)` |
+| A3 | `std.add_i64` typespec is correct | Inspect the `#gdbsp_typespec{}` | `spec = {function, [i64, i64], #{}, i64}` |
+| A4 | `agg:sum` has multiple overloads | Inspect TS list for `agg:sum` | ≥2 entries (i64, numeric variants) |
+| A5 | Loading failure on missing file | File path wrong | Graceful error, not crash |
+| A6 | Operator-type-variable entries exist | Check for `<<"+">>` in stdlib | `spec = {function, [{type_var, _}, {type_var, _}], #{}, {type_var, _}}` |
+
+Run: `rebar3 ct --suite=test/gdbsp_compile_SUITE`
+
+### 9.3 Phase B — Rewrite `gdbsp_builtins.erl` (Medium Risk)
+
+**Goal:** Three hardcoded tables + type-variable unification work
+correctly in isolation, before any callers change.
+
+**Test module:** CREATE `test/gdbsp_builtins_SUITE.erl`
+(inline flat-list, 38 test functions).
+
+#### B1. Operator → Method Mapping (6 tests)
+
+| # | Test | Assertion |
+|---|---|---|
+| B1a | `binop_fn_name('+')` | `<<"+">>` |
+| B1b | `binop_fn_name('-')` | `<<"-">>` |
+| B1c | `binop_fn_name('*')` | `<<"*">>` |
+| B1d | `binop_fn_name('=')` | `<<"=">>` |
+| B1e | `binop_fn_name('++')` | `<<"++">>` |
+| B1f | `unop_fn_name('not')` | `<<"not">>` |
+
+#### B2. Operator Validity (12 tests)
+
+| # | Test | Assertion |
+|---|---|---|
+| B2a | `operand_types(<<"+">>)` | contains `i64`, `numeric`, `f64`, `interval`; does NOT contain `string` |
+| B2b | `operand_types(<<"*">>)` | contains `i64`, `numeric`, `f64`; does NOT contain `interval` |
+| B2c | `operand_types(<<"%">>)` | contains `i64`, `integer`; does NOT contain `f64` |
+| B2d | `operand_types(<<"=">>)` | returns `all_except` marker |
+| B2e | `operand_types(<<"not">>)` | returns `[{enum, [<<"false">>, <<"true">>]}]` |
+| B2f | `operand_types(<<"++">>)` | contains `string`, `bytes`, `bits`, `array` |
+| B2g | `operand_types(<<"<<">>)` | contains `bits` only |
+| B2h | `operand_types(<<"&">>)` | contains `bits` only |
+| B2i | `operand_types(<<"and">>)` | contains `boolean` only |
+| B2j | `operand_types(<<"~">>)` | contains `bits` only |
+| B2k | `is_valid_operand(<<"+">>, i64)` | `true` |
+| B2l | `is_valid_operand(<<"+">>, string)` | `false` |
+
+#### B3. Concrete Function Name Resolution (14 tests)
+
+| # | Test | Assertion |
+|---|---|---|
+| B3a | `concrete_fn(<<"+">>, [i64, i64], #{})` | `<<"std.add_i64">>` |
+| B3b | `concrete_fn(<<"+">>, [numeric, numeric], #{})` | `<<"std.add_numeric">>` |
+| B3c | `concrete_fn(<<"-">>, [i32, i32], #{})` | `<<"std.sub_i32">>` |
+| B3d | `concrete_fn(<<"*">>, [f64, f64], #{})` | `<<"std.mul_f64">>` |
+| B3e | `concrete_fn(<<"=">>, [string, string], #{})` | `<<"std.eq_string">>` |
+| B3f | `concrete_fn(<<"!=">>, [bits, bits], #{})` | `<<"std.neq_bits">>` |
+| B3g | `concrete_fn(<<"<">>, [date, date], #{})` | `<<"std.lt_date">>` |
+| B3h | `concrete_fn(<<">">>, [i64, i64], #{})` | `<<"std.gt_i64">>` |
+| B3i | `concrete_fn(<<"not">>, [{enum, [<<"false">>, <<"true">>]}], #{})` | `<<"std.not">>` |
+| B3j | `concrete_fn(<<"++">>, [string, string], #{})` | `<<"std.concat_string">>` |
+| B3k | `concrete_fn(<<"++">>, [{array, i64, varsize}, {array, i64, varsize}], #{})` | `<<"std.concat_array">>` |
+| B3l | `concrete_fn(<<"+">>, [string, string], #{})` | `{error, not_an_operator}` |
+| B3m | `concrete_fn(<<"|">>, [bits, bits], #{})` | `<<"std.bits_or">>` |
+| B3n | `concrete_fn(<<"<<">>, [bits, integer], #{})` | `<<"std.bits_shl">>` |
+
+#### B4. Type-Variable Unification (5 tests)
+
+| # | Test | Assertion |
+|---|---|---|
+| B4a | `unify_types([{type_var,<<"T">>}, {type_var,<<"T">>}], [i64, i64], #{})` | `{ok, #{{type_var,<<"T">>} => i64}}` |
+| B4b | `unify_types([{type_var,<<"T">>}, {type_var,<<"T">>}], [i64, f64], #{})` | `{error, {type_var_conflict, <<"T">>}}` |
+| B4c | `unify_types([{type_var,<<"T">>}], [i64], #{})` | `{ok, #{{type_var,<<"T">>} => i64}}` |
+| B4d | unify `[{map, {type_var,<<"K">>}, {type_var,<<"V">>}]` with `[{map, string, i64}]` | `{ok, #{K=>string, V=>i64}}` |
+| B4e | unify `{type_var,<<"T">>}` with `{struct, #{<<"x">> => i64}, exact}` | `{ok, #{T=>{struct,...}}}` |
+
+#### B5. Implementation Lookup (3 tests)
+
+| # | Test | Assertion |
+|---|---|---|
+| B5a | `fn_impl(<<"std.add_i64">>)` | `{ok, {gdbsp_math, math_add_i64_i64, 2}}` |
+| B5b | `fn_impl(<<"std.not">>)` | `{ok, {gdbsp_std, std_not_boolean, 1}}` |
+| B5c | `fn_impl(<<"nonexistent">>)` | `{error, unknown_impl}` |
+
+Run: `rebar3 ct --suite=test/gdbsp_builtins_SUITE`
+
+### 9.4 Phase C — Modify `gdbsp_compile_expr.erl` (Medium Risk)
+
+**Goal:** Lowering uses operator chars. `infer_expr_type` resolves
+operators to concrete stdlib names. `std.struct_get` is special-cased.
+User-defined functions are validated against stdlib.
+
+**Test module:** MODIFY `test/gdbsp_compile_expr_SUITE.erl`.
+Existing 33 tests get updated; ~13 new tests added.
+
+#### C1. Lowering Changes (update 7 existing tests)
+
+| # | Update existing test | New expected value |
+|---|---|---|
+| C1a | `t08_lower_binop_add` | `{call, <<"+">>, ...}` (not `{call, <<"add">>, ...}`) |
+| C1b | `t09_lower_binop_operators` | All 19 binops use operator chars (`+`, `-`, `=`, etc.) |
+| C1c | `t10_lower_unop` | `{call, <<"-">>, ...}`, `{call, <<"~">>, ...}`, `{call, <<"not">>, ...}` |
+| C1d | `t11_lower_dot_access` | Still `<<"struct:get">>` (not an operator) |
+| C1e | `t14_lower_call` | Direct calls like `<<"sqrt">>` unchanged |
+| C1f | `t15_lower_call_kw` | Direct calls unchanged |
+| C1g | All other lowering tests | Unchanged (only binop/unop affected) |
+
+#### C2. struct:get Special Case (4 new tests)
+
+| # | Test | Assertion |
+|---|---|---|
+| C2a | `check_fn_body` with `std.struct_get`, literal key `"x"`, struct has `x: i64` | Returns `i64` |
+| C2b | `check_fn_body` with `std.struct_get`, literal key `"z"`, struct has `x: i64, y: string` | `{error, [{missing_field, <<"z">>}]}` |
+| C2c | `check_fn_body` with `std.struct_get`, non-literal key (another arg) | `{error, [{non_literal_struct_key}]}` |
+| C2d | `infer_expr_type` for `{call, <<"struct:get">>, ...}` with literal key | Resolves to `<<"std.struct_get">>` and infers field type |
+
+#### C3. Operator Resolution in Type Checker (5 new tests)
+
+| # | Test | Assertion |
+|---|---|---|
+| C3a | `infer_expr_type({call, <<"+">>, [int42, int42]}, Env, _)` | Infers as `integer` (from `std.add_integer`) |
+| C3b | `infer_expr_type({call, <<"+">>, [i64arg, i64arg]}, Env, _)` | Infers as `i64` (from `std.add_i64`) |
+| C3c | `infer_expr_type({call, <<"+">>, [i64arg, f64arg]}, Env, _)` | Type mismatch — T conflict across operands |
+| C3d | `infer_expr_type({call, <<"not">>, [boolarg]}, Env, _)` | Infers as `boolean` (from `std.not`) |
+| C3e | `infer_expr_type({call, <<"=">>, [stringarg, stringarg]}, Env, _)` | Infers as `boolean` (from `std.eq_string`) |
+
+#### C4. Unknown Function Error (2 new tests)
+
+| # | Test | Assertion |
+|---|---|---|
+| C4a | `check_fn_body` with call to `<<"nonexistent">>` not in stdlib, not inline | `{error, [{unknown_function, <<"nonexistent">>}]}` |
+| C4b | `check_fn_body` with call to user-defined inline function (in Bindings) | Type from inline definition, no error |
+
+#### C5. Integration: check_all_fns with stdlib (2 new tests)
+
+| # | Test | Assertion |
+|---|---|---|
+| C5a | `check_all_fns` with inline fn that calls `+` | Succeeds, FnJsonMap has operator expanded to concrete stdlib name |
+| C5b | `check_all_fns` with inline fn that calls unknown function | `{error, #{fn_name => ...}}` |
+
+Run: `rebar3 ct --suite=test/gdbsp_compile_expr_SUITE`
+
+### 9.5 Phase D — Modify `gdbsp_type_infer.erl` (Medium Risk)
+
+**Goal:** `infer_lowered/3` uses the new resolution. Operators in
+map/filter function bodies resolve correctly. All existing type_infer
+tests pass unchanged.
+
+**Test module:** MODIFY `test/gdbsp_type_infer_SUITE_data/type_infer.yaml`.
+Add 9 new YAML entries.
+
+| # | YAML test case | What it proves |
+|---|---|---|
+| D1 | Simple map with inline `+` in GDBSP source | Map output type matches `std.add_i64` return type |
+| D2 | Filter with `=` comparison in GDBSP source | Filter passes type check, output schema = input schema |
+| D3 | Map with `struct:get` → `std.struct_get` | Return type = field type from struct |
+| D4 | Map using `not` operator | Return type = `boolean` |
+| D5 | Aggregate using `agg:sum` (i64 variant) | Aggregate output type = `i64` |
+| D6 | `plus` operator with same-type inputs | All inputs unify successfully |
+| D7 | `join` with key equality | Schema merged correctly |
+| D8 | Map with unknown function → error | `{error, {unknown_function, ...}}` or `{error, missing_function}` |
+| D9 | Neg node with i64 input → i64 output | `neg` type inference unchanged |
+
+Existing type_infer.yaml entries should continue passing without
+modification (stdlib covers the same functions the old `fn_overloads` did).
+
+Run: `rebar3 ct --suite=test/gdbsp_type_infer_SUITE`
+
+### 9.6 Phase E — Parser Changes (Low Risk)
+
+**Goal:** Parser handles operator-named typespecs `"+" :: function((T,T)→T)`,
+type variables (`T`, `S`, `V`), and canonicalizes aliases
+(`string`→`string("UTF-8")`, `boolean`→`enum("false","true")`).
+
+**Test module:** MODIFY `test/parse_fixtures/parse.yaml`.
+Add 10 new YAML entries.
+
+| # | YAML test case | What it proves |
+|---|---|---|
+| E1 | `"+" :: function((i64, i64) -> i64)` | Parse operator-character typespec name |
+| E2 | `"+" :: function((T, T) -> T)` | Parse type-variable typespec |
+| E3 | `"=" :: function((T, T) -> boolean)` | Type-var typespec with concrete return type |
+| E4 | Typespec using `string` alias → canonicalized to `string("UTF-8")` | Alias canonicalization |
+| E5 | Typespec using `boolean` alias → canonicalized to `enum("false","true")` | Alias canonicalization |
+| E6 | `std.struct_get :: function((S, key: string) -> V)` | Keyword param with type var value |
+| E7 | `"not" :: function((boolean) -> boolean)` | Operator name + alias in same typespec |
+| E8 | `std.concat_array :: function((array(T), array(T)) -> array(T))` | Type var in container |
+| E9 | `std.map_merge :: function((map(K, V), map(K, V)) -> map(K, V))` | Multiple type vars in same typespec |
+| E10 | Invalid typespec: `+` without quotes in name position | Parse error |
+
+Run: `rebar3 ct --suite=test/gdbsp_parse_SUITE`
+
+### 9.7 Phase F — Full Regression (Low Risk)
+
+**Goal:** All existing tests pass after the rewrite. No regressions.
+
+| # | Suite | Action |
+|---|---|---|
+| F1 | `gdbsp_compile_SUITE` | Run — 16+ tests pass. Update any that use old operator method names. |
+| F2 | `gdbsp_compile_lower_SUITE` | Run — 28 tests pass unchanged (lowering passes through fn names). |
+| F3 | All `gdbsp_op_*_SUITE` (10 suites) | Run — operator suites test graph behavior, not type resolution. Pass unchanged. |
+| F4 | `gdbsp_e2e_SUITE` | Run — e2e uses external FnReg. Update if JSON references old namespaced names. |
+| F5 | `gdbsp_rec_*_SUITE` (3 suites) | Run — pass unchanged. |
+| F6 | `gdbsp_graphviz_SUITE`, `gdbsp_deploy_SUITE` | Run — pass unchanged. |
+| F7 | `gdbsp_parse_SUITE` | Run — passes with new YAML entries from Phase E. |
+| F8 | `gdbsp_lexer_SUITE` | Run — 9 tests pass unchanged. |
+| F9 | `gdbsp_compile_expr_SUITE` | Run — 33+13=46 tests pass. |
+| F10 | `gdbsp_builtins_SUITE` | Run — 38 tests pass. |
+| F11 | `rebar3 ct` full suite | All ~424+ tests pass. |
+
+### 9.8 Test Count Summary
+
+| Phase | Module | New | Modified | Total delta |
+|-------|--------|-----|----------|-------------|
+| A | `gdbsp_compile_SUITE` | +6 | 0 | +6 |
+| B | **`gdbsp_builtins_SUITE`** (new) | +38 | 0 | +38 |
+| C | `gdbsp_compile_expr_SUITE` | +13 | +7 (existing updated) | +20 |
+| D | `type_infer.yaml` | +9 | 0 | +9 |
+| E | `parse.yaml` | +10 | 0 | +10 |
+| F | Various (regression only) | 0 | minor | — |
+| **Total** | | **+76** | **+7** | **~83 test entries** |
+
+---
+
+## 10. References
 
 - [syntax.md](../syntax.md) §5 — Function definition and typespec grammar
 - [stdlib.md](../stdlib.md) — Current stdlib documentation (will be updated post-implementation)
