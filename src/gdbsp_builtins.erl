@@ -8,15 +8,14 @@
 -module(gdbsp_builtins).
 
 -export([binop_fn_name/1, unop_fn_name/1]).
--export([lookup_agg/2, resolve_call/4]).
+-export([resolve_call/4]).
 -export([operand_types/1, is_valid_operand/2, concrete_fn/3]).
--export([unify_types/3, fn_impl/1]).
+-export([unify_types/3, fn_impl/1, agg_impl/1]).
 
 -include("gdbsp_type.hrl").
 -include("gdbsp_parse.hrl").
 
 -type impl_ref() :: {module(), atom(), non_neg_integer()} | undefined | special_implementation.
--type agg_ref() :: {impl_ref(), impl_ref(), impl_ref()}.
 
 %%====================================================================
 %% Name resolution
@@ -131,27 +130,12 @@ match_stdlib_ts([#gdbsp_typespec{spec = {function, Pos, Kw, Ret}} | Rest],
     case match_pos(Pos, PosTypes) andalso match_kw(Kw, KwPairs) of
         true -> {ok, Ret};
         false -> match_stdlib_ts(Rest, PosTypes, KwPairs)
-    end.
-
-%%====================================================================
-%% Aggregate lookup (keep for eval runtime)
-%%====================================================================
-
--spec lookup_agg(binary(), [gdbsp_column_type()]) ->
-    {ok, gdbsp_column_type(), agg_ref()} | {error, term()}.
-lookup_agg(Name, ArgTypes) ->
-    case agg_overloads(Name) of
-        {ok, Overloads} ->
-            match_agg_overloads(Overloads, ArgTypes, []);
-        {error, _} = E -> E
-    end.
-
-match_agg_overloads([], _PosTypes, _KwPairs) ->
-    {error, no_matching_overload};
-match_agg_overloads([{aggregate, Pos, Kw, Ret, Impl} | Rest], PosTypes, KwPairs) ->
+    end;
+match_stdlib_ts([#gdbsp_typespec{spec = {aggregate_function, Pos, Kw, Ret}} | Rest],
+                PosTypes, KwPairs) ->
     case match_pos(Pos, PosTypes) andalso match_kw(Kw, KwPairs) of
-        true -> {ok, Ret, Impl};
-        false -> match_agg_overloads(Rest, PosTypes, KwPairs)
+        true -> {ok, Ret};
+        false -> match_stdlib_ts(Rest, PosTypes, KwPairs)
     end.
 
 %%====================================================================
@@ -202,77 +186,6 @@ closure_params_exact_match(AP, BP) ->
     {BPos, BNamed} = lists:partition(fun({Name, _}) -> Name =:= undefined end, BP),
     APos =:= BPos andalso lists:sort(ANamed) =:= lists:sort(BNamed).
 
-%%====================================================================
-%% Aggregate overloads
-%%====================================================================
-
-agg_ref(count, _Type) ->
-    {{gdbsp_agg, agg_count_init, 3},
-     {gdbsp_agg, agg_count_feed, 2},
-     {gdbsp_agg, agg_count_result, 1}};
-agg_ref(Op, {optional, T}) ->
-    agg_ref(Op, list_to_atom("optional_" ++ atom_to_list(T)));
-agg_ref(Op, Type) when is_atom(Type) ->
-    {{gdbsp_agg, list_to_atom("agg_" ++ atom_to_list(Op) ++ "_"
-                                    ++ atom_to_list(Type) ++ "_init"), 3},
-     {gdbsp_agg, list_to_atom("agg_" ++ atom_to_list(Op) ++ "_"
-                                    ++ atom_to_list(Type) ++ "_feed"), 2},
-     {gdbsp_agg, list_to_atom("agg_" ++ atom_to_list(Op) ++ "_"
-                                    ++ atom_to_list(Type) ++ "_result"), 1}}.
-
-agg_overloads(<<"agg:sum">>) -> {ok, [
-    {aggregate, [integer], #{}, integer, agg_ref(sum, integer)},
-    {aggregate, [f64], #{}, f64, agg_ref(sum, f64)},
-    {aggregate, [numeric], #{}, numeric, agg_ref(sum, numeric)},
-    {aggregate, [{optional, integer}], #{}, {optional, integer},
-     agg_ref(sum, {optional, integer})},
-    {aggregate, [{optional, f64}], #{}, {optional, f64},
-     agg_ref(sum, {optional, f64})},
-    {aggregate, [{optional, numeric}], #{}, {optional, numeric},
-     agg_ref(sum, {optional, numeric})}
-]};
-agg_overloads(<<"agg:count">>) -> {ok, [
-    {aggregate, [], #{}, integer, agg_ref(count, none)}
-]};
-agg_overloads(<<"agg:max">>) -> {ok, [
-    {aggregate, [integer], #{}, integer, agg_ref(max, integer)},
-    {aggregate, [f64], #{}, f64, agg_ref(max, f64)},
-    {aggregate, [numeric], #{}, numeric, agg_ref(max, numeric)},
-    {aggregate, [{optional, integer}], #{}, {optional, integer},
-     agg_ref(max, {optional, integer})},
-    {aggregate, [{optional, f64}], #{}, {optional, f64},
-     agg_ref(max, {optional, f64})},
-    {aggregate, [{optional, numeric}], #{}, {optional, numeric},
-     agg_ref(max, {optional, numeric})}
-]};
-agg_overloads(<<"agg:min">>) -> {ok, [
-    {aggregate, [integer], #{}, integer, agg_ref(min, integer)},
-    {aggregate, [f64], #{}, f64, agg_ref(min, f64)},
-    {aggregate, [numeric], #{}, numeric, agg_ref(min, numeric)},
-    {aggregate, [{optional, integer}], #{}, {optional, integer},
-     agg_ref(min, {optional, integer})},
-    {aggregate, [{optional, f64}], #{}, {optional, f64},
-     agg_ref(min, {optional, f64})},
-    {aggregate, [{optional, numeric}], #{}, {optional, numeric},
-     agg_ref(min, {optional, numeric})}
-]};
-agg_overloads(<<"agg:avg">>) -> {ok, [
-    {aggregate, [integer], #{}, f64, agg_ref(avg, integer)},
-    {aggregate, [f64], #{}, f64, agg_ref(avg, f64)},
-    {aggregate, [numeric], #{}, numeric, agg_ref(avg, numeric)},
-    {aggregate, [{optional, integer}], #{}, {optional, f64},
-     agg_ref(avg, {optional, integer})},
-    {aggregate, [{optional, f64}], #{}, {optional, f64},
-     agg_ref(avg, {optional, f64})},
-    {aggregate, [{optional, numeric}], #{}, {optional, numeric},
-     agg_ref(avg, {optional, numeric})}
-]};
-agg_overloads(<<"agg:xor">>) -> {ok, [
-    {aggregate, [bytes], #{}, bytes, agg_ref('xor', bytes)},
-    {aggregate, [{optional, bytes}], #{}, {optional, bytes},
-     agg_ref('xor', {optional, bytes})}
-]};
-agg_overloads(_) -> {error, not_found}.
 
 %%====================================================================
 %% Operator tables
@@ -620,3 +533,36 @@ fn_impl(<<"std.abs_f64">>)   -> {ok, {gdbsp_math, math_abs_f64, 1}};
 fn_impl(<<"std.struct_get">>) -> {ok, {gdbsp_struct, struct_get, 2}};
 
 fn_impl(_) -> {error, unknown_impl}.
+
+%%====================================================================
+%% Aggregate implementation lookup
+%%====================================================================
+
+-spec agg_impl(binary()) ->
+    {ok, {{module(), atom(), arity()},
+          {module(), atom(), arity()},
+          {module(), atom(), arity()}}} | {error, term()}.
+agg_impl(<<"std.agg_sum_i64">>)      -> {ok, mfa_triple(gdbsp_agg, agg_op_sum)};
+agg_impl(<<"std.agg_sum_numeric">>)  -> {ok, mfa_triple(gdbsp_agg, agg_op_sum)};
+agg_impl(<<"std.agg_sum_f64">>)      -> {ok, mfa_triple(gdbsp_agg, agg_op_sum)};
+agg_impl(<<"std.agg_count">>)         -> {ok, mfa_triple(gdbsp_agg, agg_op_count)};
+agg_impl(<<"std.agg_avg_i64">>)      -> {ok, mfa_triple(gdbsp_agg, agg_op_sum)};
+agg_impl(<<"std.agg_avg_numeric">>)  -> {ok, mfa_triple(gdbsp_agg, agg_op_sum)};
+agg_impl(<<"std.agg_avg_f64">>)      -> {ok, mfa_triple(gdbsp_agg, agg_op_sum)};
+agg_impl(<<"std.agg_min_i64">>)      -> {ok, mfa_triple(gdbsp_agg, agg_op_min)};
+agg_impl(<<"std.agg_min_numeric">>)  -> {ok, mfa_triple(gdbsp_agg, agg_op_min)};
+agg_impl(<<"std.agg_min_f64">>)      -> {ok, mfa_triple(gdbsp_agg, agg_op_min)};
+agg_impl(<<"std.agg_max_i64">>)      -> {ok, mfa_triple(gdbsp_agg, agg_op_max)};
+agg_impl(<<"std.agg_max_numeric">>)  -> {ok, mfa_triple(gdbsp_agg, agg_op_max)};
+agg_impl(<<"std.agg_max_f64">>)      -> {ok, mfa_triple(gdbsp_agg, agg_op_max)};
+agg_impl(<<"std.agg_xor_bytes">>)    -> {ok, mfa_triple(gdbsp_agg, agg_op_xor)};
+agg_impl(_) -> {error, not_found}.
+
+mfa_triple(Mod, Prefix) ->
+    {{Mod, suffix_fn(Prefix, <<"_init">>), 2},
+     {Mod, suffix_fn(Prefix, <<"_update">>), 3},
+     {Mod, suffix_fn(Prefix, <<"_result">>), 1}}.
+
+suffix_fn(Prefix, Suffix) ->
+    erlang:binary_to_atom(
+        <<(atom_to_binary(Prefix, utf8))/binary, Suffix/binary>>, utf8).

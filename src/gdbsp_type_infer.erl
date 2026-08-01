@@ -175,29 +175,17 @@ struct_fields(_) -> #{}.
 %% Aggregate return type
 %%====================================================================
 
-infer_agg_return_type(FnRef, ValType, FnReg) ->
+infer_agg_return_type(FnRef, _ValType, FnReg, StdlibMap) ->
     AggName = case maps:find(FnRef, FnReg) of
         {ok, #{<<"aggregate">> := Name}} when is_binary(Name) -> Name;
         _ -> FnRef
     end,
-    infer_agg_return_type_1(AggName, ValType).
-
-infer_agg_return_type_1(<<"agg:sum">>, ValType) -> agg_sum_type(ValType);
-infer_agg_return_type_1(<<"agg:count">>, _ValType) -> i64;
-infer_agg_return_type_1(<<"agg:avg">>, _ValType) -> f64;
-infer_agg_return_type_1(<<"agg:min">>, ValType) -> ValType;
-infer_agg_return_type_1(<<"agg:max">>, ValType) -> ValType;
-infer_agg_return_type_1(<<"agg:first">>, ValType) -> ValType;
-infer_agg_return_type_1(<<"agg:last">>, ValType) -> ValType;
-infer_agg_return_type_1(_Other, ValType) -> ValType.
-
-agg_sum_type(T) when T =:= i8;  T =:= i16; T =:= i32; T =:= i64;
-                    T =:= u8;  T =:= u16; T =:= u32; T =:= u64;
-                    T =:= integer -> i64;
-agg_sum_type(f32) -> f64;
-agg_sum_type(f64) -> f64;
-agg_sum_type(numeric) -> numeric;
-agg_sum_type(_) -> dynamic.
+    case maps:find(AggName, StdlibMap) of
+        {ok, [#gdbsp_typespec{spec = {aggregate_function, _Pos, _Kw, Ret}} | _]} ->
+            Ret;
+        _ ->
+            dynamic
+    end.
 
 %%====================================================================
 %% Field helpers
@@ -362,7 +350,7 @@ infer_lnode_type(join, Args, InputIds, _Tags, TypeAcc, _TSMap, _FnReg, _StdlibMa
     check_join_key_types(OnFields, LType, RType),
     merge_join_type(LType, RType, OnFields);
 
-infer_lnode_type(aggregate, Args, InputIds, _Tags, TypeAcc, _TSMap, FnReg, _StdlibMap) ->
+infer_lnode_type(aggregate, Args, InputIds, _Tags, TypeAcc, _TSMap, FnReg, StdlibMap) ->
     InputType = lowered_input_type(InputIds, TypeAcc),
     FnRef = get_var_arg(Args, 2),
     _ = case maps:find(FnRef, FnReg) of
@@ -376,7 +364,7 @@ infer_lnode_type(aggregate, Args, InputIds, _Tags, TypeAcc, _TSMap, FnReg, _Stdl
     {value, ValField} = get_kw_arg(Args, value, <<>>),
     {as, AsField} = get_kw_arg(Args, 'as', <<>>),
     ValType = field_type(ValField, InputType),
-    AggRetType = infer_agg_return_type(FnRef, ValType, FnReg),
+    AggRetType = infer_agg_return_type(FnRef, ValType, FnReg, StdlibMap),
     ByPairs = [{F, field_type(F, InputType)} || F <- ByFields],
     AllFields = ByPairs ++ [{AsField, AggRetType}],
     {struct, maps:from_list(AllFields), exact};

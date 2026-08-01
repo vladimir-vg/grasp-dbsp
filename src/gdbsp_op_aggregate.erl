@@ -34,35 +34,30 @@
 -export_type([op_state/0, op_action/0]).
 
 -spec init(map()) -> {op_state(), [term()], [term()]}.
-init(#{function := AggBin} = Args) when is_binary(AggBin) ->
-    AggAtom = agg_binary_to_atom(AggBin),
+init(#{function := <<"std.agg_xor_bytes">>} = Args) ->
     Value = maps:get(value_mod, Args, gdbsp_value),
-    {Init, Update, Result} = agg_init_update(AggAtom, Value),
-    init(#{init_fn => Init, update_fn => Update, result_fn => Result});
+    init(#{
+        init_fn => fun(V, _W) -> {byte_size(V), V} end,
+        update_fn => fun
+            ({poisoned, _} = Acc, _V, _W) -> Acc;
+            ({Len, Acc}, V, _W) when byte_size(V) =:= Len ->
+                {Len, try Value:bytewise_xor(Acc, V)
+                      catch error:undef -> Acc bxor V end};
+            (_, _, _) -> {poisoned, none}
+        end,
+        result_fn => fun({poisoned, _}) -> drop; ({_, Acc}) -> Acc end
+    });
+init(#{function := AggBin} = _Args) when is_binary(AggBin) ->
+    {ok, {{M, IF, _}, {M, UF, _}, {M, RF, _}}} = gdbsp_builtins:agg_impl(AggBin),
+    init(#{
+        init_fn => fun(V, W) -> M:IF(V, W) end,
+        update_fn => fun(A, V, W) -> M:UF(A, V, W) end,
+        result_fn => fun(V) -> M:RF(V) end
+    });
 init(#{init_fn := InitFn, update_fn := UpdateFn, result_fn := ResultFn}) ->
     {#{init_fn => InitFn, update_fn => UpdateFn, result_fn => ResultFn,
        seen => #{}, results => #{}, buffer => [], downstream_label => default},
-     [default], [default]}.
-
-%% Aggregate init/update/result dispatch — delegates to gdbsp_operator_spec
-%% for common aggregates; xor keeps its own Value:bytewise_xor integration.
--spec agg_init_update(atom(), module()) ->
-    {fun((term(), integer()) -> term()),
-     fun((term(), term(), integer()) -> term()),
-     fun((term()) -> term() | drop)}.
-agg_init_update('xor', Value) ->
-    {fun(V, _W) -> {byte_size(V), V} end,
-     fun({poisoned, _} = Acc, _V, _W) -> Acc;
-         ({Len, Acc}, V, _W) when byte_size(V) =:= Len ->
-             {Len, try Value:bytewise_xor(Acc, V)
-                   catch error:undef -> Acc bxor V end};
-         (_, _, _) -> {poisoned, none}
-     end,
-     fun({poisoned, _}) -> drop;
-         ({_, Acc}) -> Acc
-     end};
-agg_init_update(Agg, _Value) ->
-    gdbsp_operator_spec:agg_init_update(Agg).
+      [default], [default]}.
 
 
 -spec handle_delta(op_state(), term(), {delta, map(), [term()]}) ->
@@ -180,8 +175,3 @@ compute_agg_delta(_Key, OldAgg, NewAgg, Acc) when OldAgg =:= NewAgg ->
 compute_agg_delta(_Key, OldAgg, NewAgg, Acc) ->
     %% Key changed
     [{1, {_Key, NewAgg}}, {-1, {_Key, OldAgg}} | Acc].
-
-agg_binary_to_atom(<<"agg:", Name/binary>>) ->
-    binary_to_existing_atom(Name, utf8);
-agg_binary_to_atom(Name) when is_binary(Name) ->
-    binary_to_existing_atom(Name, utf8).

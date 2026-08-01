@@ -72,10 +72,6 @@ do_eval({call, <<"storage:blob">>, _, _}, {row, _Row}) ->
     {error, blob_resolution_not_allowed_in_row_eval};
 do_eval({call, Name, PosArgs, KwArgs}, Ctx) ->
     eval_call(Name, PosArgs, KwArgs, Ctx);
-do_eval({agg, Name, PosArgs, KwArgs}, {row, _Row} = Ctx) ->
-    eval_agg(Name, PosArgs, KwArgs, Ctx);
-do_eval({agg, _, _, _}, {blob, _}) ->
-    {error, aggregates_not_supported_in_blob_eval};
 do_eval({get, Obj, Keys}, Ctx) ->
     case do_eval(Obj, Ctx) of
         {ok, ObjVal} -> eval_get(ObjVal, Keys, Ctx);
@@ -125,46 +121,6 @@ kw_pos_args(PosValues, KwValues, Mod, Fun) ->
     case length(AllArgs) >= Arity of
         true -> lists:sublist(AllArgs, Arity);
         false -> AllArgs
-    end.
-
-%%====================================================================
-%% eval_agg
-%%====================================================================
-
-eval_agg(Name, PosArgs, KwArgs, Ctx) ->
-    case eval_args(PosArgs, KwArgs, Ctx) of
-        {ok, PosValues, KwValues} ->
-            dispatch_agg(Name, PosValues, KwValues);
-        drop_row -> drop_row;
-        {error, _} = E -> E
-    end.
-
-dispatch_agg(Name, PosValues, KwValues) ->
-    PosTypes = [type_of(V) || V <- PosValues],
-    case gdbsp_builtins:lookup_agg(Name, PosTypes) of
-        {ok, _RetType, {InitRef, FeedRef, ResultRef}} ->
-            eval_agg_protocol(Name, PosValues, KwValues, InitRef, FeedRef, ResultRef);
-        {error, _} = E -> E
-    end.
-
-eval_agg_protocol(Name, PosValues, KwValues, InitRef, FeedRef, ResultRef) ->
-    try
-        {Mod, Fun, _} = InitRef,
-        ExprRow = agg_build_row(PosValues, KwValues),
-        State = apply(Mod, Fun, [PosValues, KwValues, no_options]),
-        State1 = apply(element(1, FeedRef), element(2, FeedRef), [State, ExprRow]),
-        Result = apply(element(1, ResultRef), element(2, ResultRef), [State1]),
-        {ok, Result}
-    catch
-        throw:drop_row -> drop_row;
-        _:Reason -> {error, {agg_failed, Name, Reason}}
-    end.
-
-agg_build_row(PosValues, KwValues) ->
-    KWMap = maps:fold(fun(K, V, Acc) -> Acc#{K => V} end, #{}, KwValues),
-    case PosValues of
-        [V | _] -> KWMap#{<<"value">> => V};
-        [] -> KWMap#{<<"value">> => {value, absent, absent}}
     end.
 
 %%====================================================================

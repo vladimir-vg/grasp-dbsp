@@ -32,7 +32,6 @@
 -export([barrier_collect/5]).
 -export([maybe_emit/3]).
 -export([is_linear/1, needs_full_input/1, produces_full_output/1]).
--export([agg_init_update/1]).
 
 %%--------------------------------------------------------------------
 %% Operator registry
@@ -145,41 +144,3 @@ produces_full_output({distinct})        -> true;
 produces_full_output({aggregate, _})    -> true;
 produces_full_output({antijoin, _, _})  -> true;
 produces_full_output(_)                 -> false.
-
-%%====================================================================
-%% Aggregate init/update — used by runtime aggregate operator
-%%====================================================================
-
--spec agg_init_update(atom()) ->
-    {fun((term(), integer()) -> term()),
-     fun((term(), term(), integer()) -> term()),
-     fun((term()) -> term() | drop)}.
-agg_init_update(sum) ->
-    {fun(V, W) -> V * W end, fun(Acc, V, W) -> Acc + V * W end,
-     fun(V) -> V end};
-agg_init_update(avg) ->
-    {fun(V, W) -> V * W end, fun(Acc, V, W) -> Acc + V * W end,
-     fun(V) -> V end};
-agg_init_update(count) ->
-    {fun(_V, W) -> W end, fun(Acc, _V, W) -> Acc + W end,
-     fun(V) -> V end};
-agg_init_update(min) ->
-    {fun(V, _W) -> V end, fun(Acc, V, _W) -> erlang:min(Acc, V) end,
-     fun(V) -> V end};
-agg_init_update(max) ->
-    {fun(V, _W) -> V end, fun(Acc, V, _W) -> erlang:max(Acc, V) end,
-     fun(V) -> V end};
-agg_init_update('xor') ->
-    {fun(V, _W) -> {byte_size(V), V} end,
-     fun({poisoned, _} = Acc, _V, _W) -> Acc;
-        ({Len, Acc}, V, _W) when byte_size(V) =:= Len ->
-            {Len, try Acc bxor V
-                  catch error:badarg -> error(xor_type_mismatch) end};
-        (_, _, _) -> {poisoned, none}
-     end,
-     fun({poisoned, _}) -> drop;
-        ({_, Acc}) -> Acc
-     end};
-agg_init_update(_) ->
-    {fun(V, W) -> V * W end, fun(Acc, V, W) -> Acc + V * W end,
-     fun(V) -> V end}.

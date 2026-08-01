@@ -126,7 +126,7 @@ join(_Config) ->
 aggregate(_Config) ->
     FnReg = #{
         <<"sum_sal">> =>
-            #{<<"aggregate">> => <<"agg:sum">>}
+            #{<<"aggregate">> => <<"std.agg_sum_i64">>}
     },
     {ok, Prog} = parse_prog(
         "emp_src := source(\"emp\")\n"
@@ -380,18 +380,19 @@ stdlib_typespec_correct(_Config) ->
 
 stdlib_agg_overloads(_Config) ->
     {ok, StdlibMap} = gdbsp_compile:load_stdlib(),
-    TSList = maps:get(<<"agg:sum">>, StdlibMap),
-    true = (length(TSList) >= 2),
-    %% Verify i64 variant
+    %% With per-type naming, each specialization is a separate entry.
+    TSListI64 = maps:get(<<"std.agg_sum_i64">>, StdlibMap),
+    true = (length(TSListI64) >= 1),
     true = lists:any(
         fun(#gdbsp_typespec{spec = {aggregate_function, [i64], #{}, i64}}) -> true;
            (_) -> false
-        end, TSList),
-    %% Verify numeric variant
+        end, TSListI64),
+    TSListNumeric = maps:get(<<"std.agg_sum_numeric">>, StdlibMap),
+    true = (length(TSListNumeric) >= 1),
     true = lists:any(
         fun(#gdbsp_typespec{spec = {aggregate_function, [numeric], #{}, numeric}}) -> true;
            (_) -> false
-        end, TSList).
+        end, TSListNumeric).
 
 stdlib_missing_file(_Config) ->
     %% Test that loading a non-existent path returns error

@@ -67,7 +67,7 @@
 
   functions:
     sum_sal:
-      aggregate: "agg:sum"
+      aggregate: "std.agg_sum_i64"
 
   input:
     - data:

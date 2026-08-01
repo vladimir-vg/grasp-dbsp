@@ -5,7 +5,7 @@
 
   functions:
     sum_sal:
-      aggregate: "agg:sum"
+      aggregate: "std.agg_sum_i64"
 
   input:
     - data:
@@ -25,7 +25,7 @@
 
   functions:
     avg_score:
-      aggregate: "agg:avg"
+      aggregate: "std.agg_avg_f64"
 
   input:
     - data:
@@ -45,7 +45,7 @@
 
   functions:
     sum_sal:
-      aggregate: "agg:sum"
+      aggregate: "std.agg_sum_i64"
 
   input:
     - data:
@@ -69,7 +69,7 @@
 
   functions:
     sum_sal:
-      aggregate: "agg:sum"
+      aggregate: "std.agg_sum_i64"
 
   input:
     - data:

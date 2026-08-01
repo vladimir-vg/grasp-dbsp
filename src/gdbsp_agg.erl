@@ -66,6 +66,13 @@
 -export([agg_avg_optional_numeric_init/3, agg_avg_optional_numeric_feed/2,
          agg_avg_optional_numeric_result/1]).
 
+%% ── Operator-level functions ─────────────────────────────────────────
+-export([agg_op_sum_init/2, agg_op_sum_update/3, agg_op_sum_result/1]).
+-export([agg_op_count_init/2, agg_op_count_update/3, agg_op_count_result/1]).
+-export([agg_op_min_init/2, agg_op_min_update/3, agg_op_min_result/1]).
+-export([agg_op_max_init/2, agg_op_max_update/3, agg_op_max_result/1]).
+-export([agg_op_xor_init/2, agg_op_xor_update/3, agg_op_xor_result/1]).
+
 %%====================================================================
 %% xor: bytes
 %%====================================================================
@@ -569,3 +576,45 @@ agg_avg_optional_numeric_result(#{cnt := 0}) ->
 agg_avg_optional_numeric_result(#{sum := S, cnt := C}) ->
     {value, {optional, numeric}, decimal:divide(S, {C, 0},
         #{precision => 10, rounding => round_half_up})}.
+
+%%====================================================================
+%% Operator-level aggregate functions (weight-aware)
+%%
+%% Used by gdbsp_op_aggregate.erl. These operate on (Value, Weight)
+%% pairs for incremental circuit execution. Init: V,W → Acc.
+%% Update: Acc,V,W → Acc'. Result: Acc → Value | drop.
+%%====================================================================
+
+%% ── sum ───────────────────────────────────────────────────────────────
+
+agg_op_sum_init(V, W) -> V * W.
+agg_op_sum_update(A, V, W) -> A + V * W.
+agg_op_sum_result(V) -> V.
+
+%% ── count ─────────────────────────────────────────────────────────────
+
+agg_op_count_init(_V, W) -> W.
+agg_op_count_update(A, _V, W) -> A + W.
+agg_op_count_result(V) -> V.
+
+%% ── min ───────────────────────────────────────────────────────────────
+
+agg_op_min_init(V, _W) -> V.
+agg_op_min_update(A, V, _W) -> erlang:min(A, V).
+agg_op_min_result(V) -> V.
+
+%% ── max ───────────────────────────────────────────────────────────────
+
+agg_op_max_init(V, _W) -> V.
+agg_op_max_update(A, V, _W) -> erlang:max(A, V).
+agg_op_max_result(V) -> V.
+
+%% ── xor (bytes) ───────────────────────────────────────────────────────
+
+agg_op_xor_init(V, _W) -> {byte_size(V), V}.
+agg_op_xor_update({poisoned, _} = A, _V, _W) -> A;
+agg_op_xor_update({Len, A}, V, _W) when byte_size(V) =:= Len ->
+    {Len, bytewise_xor(A, V)};
+agg_op_xor_update(_, _, _) -> {poisoned, none}.
+agg_op_xor_result({poisoned, _}) -> drop;
+agg_op_xor_result({_, A}) -> A.

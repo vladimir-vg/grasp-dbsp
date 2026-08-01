@@ -210,7 +210,7 @@
     agg := aggregate(src, sum_sal, by: ["dept"], value: "sal", as: "total")
   functions:
     sum_sal:
-      aggregate: "agg:sum"
+      aggregate: "std.agg_sum_i64"
   expected:
     src:
       struct:
@@ -228,7 +228,7 @@
     agg := aggregate(src, cnt, by: ["dept"], value: "x", as: "cnt")
   functions:
     cnt:
-      aggregate: "agg:count"
+      aggregate: "std.agg_count"
   expected:
     src:
       struct:
