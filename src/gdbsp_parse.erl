@@ -28,11 +28,12 @@ parse_string(Bin, _Opts) ->
     case gdbsp_lexer:string(Bin) of
         {ok, Tokens} ->
             try
-                {Nodes, TSs, Circuits} = parse_declarations(Tokens, [], [], []),
+                {Nodes, TSs, Circuits, FnDefs} = parse_declarations(Tokens, [], [], [], []),
                 Prog = #gdbsp_program{
                     nodes     = lists:reverse(Nodes),
                     typespecs = lists:reverse(TSs),
-                    circuits  = lists:reverse(Circuits)
+                    circuits  = lists:reverse(Circuits),
+                    fn_defs   = lists:reverse(FnDefs)
                 },
                 {ok, Prog}
             catch
@@ -47,22 +48,28 @@ parse_string(Bin, _Opts) ->
 %% Top-level — collect declarations
 %%====================================================================
 
-parse_declarations([], Nodes, TSs, Circuits) ->
-    {Nodes, TSs, Circuits};
-parse_declarations([{newline, _} | Rest], Nodes, TSs, Circuits) ->
-    parse_declarations(Rest, Nodes, TSs, Circuits);
-parse_declarations([{indent, _} | Rest], Nodes, TSs, Circuits) ->
-    parse_declarations(Rest, Nodes, TSs, Circuits);
-parse_declarations([{identifier, _L, <<"circuit">>} | Rest], Nodes, TSs, Circuits) ->
+parse_declarations([], Nodes, TSs, Circuits, FnDefs) ->
+    {Nodes, TSs, Circuits, FnDefs};
+parse_declarations([{newline, _} | Rest], Nodes, TSs, Circuits, FnDefs) ->
+    parse_declarations(Rest, Nodes, TSs, Circuits, FnDefs);
+parse_declarations([{indent, _} | Rest], Nodes, TSs, Circuits, FnDefs) ->
+    parse_declarations(Rest, Nodes, TSs, Circuits, FnDefs);
+parse_declarations([{identifier, _L, <<"circuit">>} | Rest], Nodes, TSs, Circuits, FnDefs) ->
     {Def, Rest2} = parse_circuit_def(Rest),
-    parse_declarations(Rest2, Nodes, TSs, [Def | Circuits]);
-parse_declarations([{identifier, Line, Name}, {walrus, _} | Rest], Nodes, TSs, Circuits) ->
-    {Node, Rest2} = parse_node_def(Name, Line, Rest),
-    parse_declarations(Rest2, [Node | Nodes], TSs, Circuits);
-parse_declarations([{identifier, _, Name}, {double_colon, _} | Rest], Nodes, TSs, Circuits) ->
+    parse_declarations(Rest2, Nodes, TSs, [Def | Circuits], FnDefs);
+parse_declarations([{identifier, Line, Name}, {walrus, _} | Rest], Nodes, TSs, Circuits, FnDefs) ->
+    case Rest of
+        [{identifier, _, <<"function">>}, {'(', _} | _] ->
+            {Fn, Rest2} = parse_fn_def(Name, Line, Rest),
+            parse_declarations(Rest2, Nodes, TSs, Circuits, [Fn | FnDefs]);
+        _ ->
+            {Node, Rest2} = parse_node_def(Name, Line, Rest),
+            parse_declarations(Rest2, [Node | Nodes], TSs, Circuits, FnDefs)
+    end;
+parse_declarations([{identifier, _, Name}, {double_colon, _} | Rest], Nodes, TSs, Circuits, FnDefs) ->
     {TS, Rest2} = parse_typespec(Name, Rest),
-    parse_declarations(Rest2, Nodes, [TS | TSs], Circuits);
-parse_declarations([T | _], _Nodes, _TSs, _Circuits) ->
+    parse_declarations(Rest2, Nodes, [TS | TSs], Circuits, FnDefs);
+parse_declarations([T | _], _Nodes, _TSs, _Circuits, _FnDefs) ->
     throw({parse_error, token_line(T), <<"unrecognized declaration">>}).
 
 %%====================================================================
@@ -188,6 +195,9 @@ collect_node_args(Tokens, Acc) ->
             case Toks of
                 [{',', _} | Rest] ->
                     collect_node_args(Rest, Acc);
+                [{'[', _} | Rest] ->
+                    {Items, Rest2} = collect_bracket_list(Rest, []),
+                    collect_node_args(Rest2, [Items | Acc]);
                 [{identifier, _, KwName}, {':', _} | Rest] ->
                     {KwVal, Rest2} = parse_kw_arg(Rest),
                     collect_node_args(Rest2,
@@ -505,6 +515,296 @@ parse_circuit_body(Tokens, Acc) ->
         _ ->
             {lists:reverse(Acc), Tokens}
     end.
+
+%%====================================================================
+%% Function definitions
+%%====================================================================
+
+parse_fn_def(Name, Line, [{identifier, _, <<"function">>}, {'(', _}, {'(', _} | ParamTokens]) ->
+    {Params, Rest2} = parse_fn_params(ParamTokens, []),
+    {arrow, _} = expect(Rest2, arrow),
+    {Body, Rest3} = parse_expr(tl(Rest2)),
+    {')', _} = expect(Rest3, ')'),
+    Fn = #gdbsp_fn_def{
+        name = Name, params = lists:reverse(Params), body = Body, line = Line
+    },
+    {Fn, skip_to_decl(tl(Rest3))}.
+
+parse_fn_params([{')', _} | Rest], Acc) ->
+    {Acc, Rest};
+parse_fn_params([{arrow, _} | _], Acc) ->
+    {Acc, []};
+parse_fn_params([{identifier, _, N}, {':', _} | Rest], Acc) ->
+    case Rest of
+        [{identifier, _, V} | Rest2] when V =/= <<"function">> ->
+            parse_fn_params(Rest2, [{kw, N, V} | Acc]);
+        [{',', _} | Rest2] ->
+            parse_fn_params(Rest2, [{kw, N, N} | Acc]);
+        _ ->
+            parse_fn_params(Rest, [{kw, N, N} | Acc])
+    end;
+parse_fn_params([{identifier, _, N}, {',', _} | Rest], Acc) ->
+    parse_fn_params(Rest, [{pos, N} | Acc]);
+parse_fn_params([{identifier, _, N} | Rest], Acc) ->
+    parse_fn_params(Rest, [{pos, N} | Acc]);
+parse_fn_params([{',', _} | Rest], Acc) ->
+    parse_fn_params(Rest, Acc);
+parse_fn_params(Tokens, _Acc) ->
+    throw({parse_error, token_line(hd(Tokens)),
+           <<"invalid parameter in function definition">>}).
+
+%%====================================================================
+%% Expressions — precedence climbing
+%%====================================================================
+
+parse_expr(Tokens) -> parse_or(Tokens).
+
+%% ── Boolean: or ─────────────────────────────────────────────────────
+
+parse_or(Tokens) ->
+    {LHS, Rest} = parse_and(Tokens),
+    parse_or_rest(LHS, Rest).
+
+parse_or_rest(LHS, [{or_keyword, _} | Rest]) ->
+    {RHS, Rest2} = parse_and(Rest),
+    parse_or_rest({binop, 0, 'or', LHS, RHS}, Rest2);
+parse_or_rest(LHS, Rest) -> {LHS, Rest}.
+
+%% ── Boolean: and ────────────────────────────────────────────────────
+
+parse_and(Tokens) ->
+    {LHS, Rest} = parse_cmp(Tokens),
+    parse_and_rest(LHS, Rest).
+
+parse_and_rest(LHS, [{and_keyword, _} | Rest]) ->
+    {RHS, Rest2} = parse_cmp(Rest),
+    parse_and_rest({binop, 0, 'and', LHS, RHS}, Rest2);
+parse_and_rest(LHS, Rest) -> {LHS, Rest}.
+
+%% ── Comparison (no chaining) ────────────────────────────────────────
+
+parse_cmp(Tokens) ->
+    {LHS, Rest} = parse_grouped_binary(Tokens),
+    case Rest of
+        [{Op, _} | Rest2] when Op =:= '='; Op =:= '!='; Op =:= '>';
+                                Op =:= '<'; Op =:= '>='; Op =:= '<=' ->
+            {RHS, Rest3} = parse_grouped_binary(Rest2),
+            {{binop, 0, Op, LHS, RHS}, Rest3};
+        _ -> {LHS, Rest}
+    end.
+
+%% ── Grouped binary (two-phase dispatch) ──────────────────────────────
+
+parse_grouped_binary(Tokens) ->
+    {LHS, Rest} = parse_prefix(Tokens),
+    parse_grouped_binary_rest(LHS, Rest).
+
+parse_grouped_binary_rest(LHS, [{'++', _} | Rest]) ->
+    {RHS, Rest2} = parse_prefix(Rest),
+    parse_concat_rest({binop, 0, '++', LHS, RHS}, Rest2);
+parse_grouped_binary_rest(LHS, [{Op, _} | _] = Tokens)
+    when Op =:= '|'; Op =:= '^'; Op =:= '&' ->
+    parse_bitwise_rest(LHS, Tokens);
+parse_grouped_binary_rest(LHS, [{Op, _} | Rest])
+    when Op =:= '<<'; Op =:= '>>'; Op =:= '<<<'; Op =:= '>>>' ->
+    {RHS, Rest2} = parse_prefix(Rest),
+    {{binop, 0, Op, LHS, RHS}, Rest2};
+parse_grouped_binary_rest(LHS, [{Op, _} | Rest]) when Op =:= '+'; Op =:= '-' ->
+    {RHS, Rest2} = parse_mul(Rest),
+    parse_add_rest({binop, 0, Op, LHS, RHS}, Rest2);
+parse_grouped_binary_rest(LHS, [{Op, _} | Rest]) when Op =:= '*'; Op =:= '/'; Op =:= '%' ->
+    {RHS, Rest2} = parse_prefix(Rest),
+    parse_mul_rest({binop, 0, Op, LHS, RHS}, Rest2);
+parse_grouped_binary_rest(LHS, Rest) -> {LHS, Rest}.
+
+%% ── Concatenation ───────────────────────────────────────────────────
+
+parse_concat_rest(LHS, [{'++', _} | Rest]) ->
+    {RHS, Rest2} = parse_prefix(Rest),
+    parse_concat_rest({binop, 0, '++', LHS, RHS}, Rest2);
+parse_concat_rest(_LHS, [{Op, _} | _] = Rest)
+    when Op =:= '|'; Op =:= '^'; Op =:= '&';
+         Op =:= '<<'; Op =:= '>>'; Op =:= '<<<'; Op =:= '>>>';
+         Op =:= '+'; Op =:= '-'; Op =:= '*'; Op =:= '/'; Op =:= '%' ->
+    throw({parse_error, token_line(hd(Rest)),
+           iolist_to_binary(["cannot mix '++' with ", atom_to_list(Op)])});
+parse_concat_rest(LHS, Rest) -> {LHS, Rest}.
+
+%% ── Bitwise — same group, different ops error ───────────────────────
+
+parse_bitwise_rest(LHS, [{Op, _} | Rest])
+    when Op =:= '|'; Op =:= '^'; Op =:= '&' ->
+    {RHS, Rest2} = parse_prefix(Rest),
+    parse_bitwise_rest({binop, 0, Op, LHS, RHS}, Rest2);
+parse_bitwise_rest(LHS, Rest) -> {LHS, Rest}.
+
+%% ── Arithmetic: +, - ────────────────────────────────────────────────
+
+parse_add_rest(LHS, [{Op, _} | Rest]) when Op =:= '+'; Op =:= '-' ->
+    {RHS, Rest2} = parse_mul(Rest),
+    parse_add_rest({binop, 0, Op, LHS, RHS}, Rest2);
+parse_add_rest(LHS, Rest) -> {LHS, Rest}.
+
+%% ── Arithmetic: *, /, % ─────────────────────────────────────────────
+
+parse_mul(Tokens) ->
+    {LHS, Rest} = parse_prefix(Tokens),
+    parse_mul_rest(LHS, Rest).
+
+parse_mul_rest(LHS, [{Op, _} | Rest]) when Op =:= '*'; Op =:= '/'; Op =:= '%' ->
+    {RHS, Rest2} = parse_prefix(Rest),
+    parse_mul_rest({binop, 0, Op, LHS, RHS}, Rest2);
+parse_mul_rest(LHS, Rest) -> {LHS, Rest}.
+
+%% ── Prefix / unary ──────────────────────────────────────────────────
+
+parse_prefix([{not_keyword, _} | Rest]) ->
+    {E, Rest2} = parse_prefix(Rest),
+    {{unop, 0, not_op, E}, Rest2};
+parse_prefix([{'-', _} | Rest]) ->
+    {E, Rest2} = parse_prefix(Rest),
+    {{unop, 0, '-', E}, Rest2};
+parse_prefix([{'~', _} | Rest]) ->
+    {E, Rest2} = parse_prefix(Rest),
+    {{unop, 0, '~', E}, Rest2};
+parse_prefix(Tokens) -> parse_atomic(Tokens).
+
+%% ── Atomic expressions ──────────────────────────────────────────────
+
+parse_atomic(Tokens) ->
+    {E, R} = parse_atomic_core(Tokens),
+    {E2, R2} = parse_subscript(E, R),
+    parse_dot_chain(E2, R2).
+
+parse_dot_chain(E, [{dot, _}, {identifier, _, Field} | Rest]) ->
+    parse_dot_chain({dot_access, 0, E, Field}, Rest);
+parse_dot_chain(E, Rest) -> {E, Rest}.
+
+parse_atomic_core([{identifier, L, Name}, {'(', _} | Rest]) ->
+    {Args, Rest2} = parse_fn_call_args(Rest, []),
+    {')', _} = expect(Rest2, ')'),
+    {{call, L, Name, lists:reverse(Args)}, tl(Rest2)};
+parse_atomic_core([{identifier, L, <<"true">>} | Rest]) ->
+    {{symbol, L, <<"true">>}, Rest};
+parse_atomic_core([{identifier, L, <<"false">>} | Rest]) ->
+    {{symbol, L, <<"false">>}, Rest};
+parse_atomic_core([{identifier, L, <<"null">>} | Rest]) ->
+    {{symbol, L, <<"null">>}, Rest};
+parse_atomic_core([{identifier, L, <<"absent">>} | Rest]) ->
+    {{const, L, absent, absent, undefined, undefined}, Rest};
+parse_atomic_core([{identifier, L, Name} | Rest]) ->
+    {{var, L, Name}, Rest};
+parse_atomic_core([{integer_literal, L, Val} | Rest]) ->
+    {{const, L, Val, integer, undefined, undefined}, Rest};
+parse_atomic_core([{decimal_literal, L, Val} | Rest]) ->
+    {{const, L, Val, decimal, undefined, undefined}, Rest};
+parse_atomic_core([{float_literal, L, Val} | Rest]) ->
+    {{const, L, Val, float, undefined, undefined}, Rest};
+parse_atomic_core([{bits_literal, L, Val} | Rest]) ->
+    {{const, L, Val, bits, undefined, undefined}, Rest};
+parse_atomic_core([{string, L, Val} | Rest]) ->
+    {{const, L, Val, string, undefined, undefined}, Rest};
+parse_atomic_core([{'(', _} | Rest]) ->
+    {Expr, Rest2} = parse_expr(Rest),
+    {')', _} = expect(Rest2, ')'),
+    {Expr, tl(Rest2)};
+parse_atomic_core([{'{', _} | Rest]) -> parse_dict(Rest);
+parse_atomic_core([{'[', _} | Rest]) -> parse_array(Rest);
+parse_atomic_core(Tokens) ->
+    throw({parse_error, token_line(hd(Tokens)),
+           <<"expected expression">>}).
+
+%% ── Function call arguments (mixed pos / kw) ────────────────────────
+
+parse_fn_call_args([{')', _} | _] = Tokens, Acc) ->
+    {Acc, Tokens};
+parse_fn_call_args(Tokens, Acc) ->
+    case Tokens of
+        [{',', _} | Rest] ->
+            parse_fn_call_args(Rest, Acc);
+        [{identifier, _, Key}, {':', _} | Rest] ->
+            {Val, Rest2} = parse_expr(Rest),
+            parse_fn_call_args(Rest2, [{kv, Key, Val} | Acc]);
+        _ ->
+            {Val, Rest2} = parse_expr(Tokens),
+            parse_fn_call_args(Rest2, [Val | Acc])
+    end.
+
+%% ── Subscript ───────────────────────────────────────────────────────
+
+parse_subscript(E, [{'[', _} | Rest]) ->
+    {Spec, Rest2} = parse_subscript_args(Rest),
+    {']', _} = expect(Rest2, ']'),
+    parse_subscript({subscript, 0, E, Spec}, tl(Rest2));
+parse_subscript(E, Rest) -> {E, Rest}.
+
+parse_subscript_args(Tokens) ->
+    case parse_expr(Tokens) of
+        {Expr, [{':', _} | Rest]} ->
+            parse_slice_rest(Expr, Rest);
+        {Expr, Rest} ->
+            {{index, Expr}, Rest}
+    end.
+
+parse_slice_rest(Start, Tokens) ->
+    case Tokens of
+        [{':', _} | Rest] ->
+            {{slice, Start, undefined, undefined}, Rest};
+        [{']', _} | _] ->
+            {{slice, Start, undefined, undefined}, Tokens};
+        _ ->
+            {Stop, Rest} = parse_expr(Tokens),
+            case Rest of
+                [{':', _} | Rest2] ->
+                    {Step, Rest3} = parse_expr(Rest2),
+                    {{slice, Start, Stop, Step}, Rest3};
+                _ ->
+                    {{slice, Start, Stop, undefined}, Rest}
+            end
+    end.
+
+%% ── Dict literal ────────────────────────────────────────────────────
+
+parse_dict(Tokens) ->
+    {KwArgs, Rest, RestVar} = parse_dict_entries(Tokens, []),
+    case Rest of
+        [{'}', _} | Rest2] ->
+            {{dict_literal, 0, lists:reverse(KwArgs), RestVar}, skip_newlines(Rest2)};
+        _ ->
+            {{dict_literal, 0, lists:reverse(KwArgs), RestVar}, skip_newlines(Rest)}
+    end.
+
+parse_dict_entries([{'}', _} | _] = Tokens, Acc) -> {Acc, Tokens, undefined};
+parse_dict_entries([{double_star, _}, {identifier, _, Var} | Rest], Acc) ->
+    {Acc, Rest, {var, 0, Var}};
+parse_dict_entries([{double_star, _}, {'}', _} | _] = Tokens, Acc) ->
+    {Acc, Tokens, undefined};
+parse_dict_entries([{identifier, _, Key}, {':', _} | Rest], Acc) ->
+    {Val, Rest2} = parse_expr(Rest),
+    parse_dict_entries(Rest2, [{kv, Key, Val} | Acc]);
+parse_dict_entries([{string, _, Key}, {':', _} | Rest], Acc) ->
+    {Val, Rest2} = parse_expr(Rest),
+    parse_dict_entries(Rest2, [{kv, Key, Val} | Acc]);
+parse_dict_entries([{',', _} | Rest], Acc) ->
+    parse_dict_entries(Rest, Acc);
+parse_dict_entries(Tokens, _Acc) ->
+    throw({parse_error, token_line(hd(Tokens)),
+           <<"expected key: value in dict literal">>}).
+
+%% ── Array literal ───────────────────────────────────────────────────
+
+parse_array(Tokens) ->
+    parse_array_elems(skip_newlines(Tokens), []).
+
+parse_array_elems([{']', _} | Rest], Acc) ->
+    {{array_literal, 0, lists:reverse(Acc)}, skip_newlines(Rest)};
+parse_array_elems([{'*', _}, {identifier, L, Var} | Rest], Acc) ->
+    parse_array_elems(Rest, [{rest, L, Var} | Acc]);
+parse_array_elems([{',', _} | Rest], Acc) ->
+    parse_array_elems(Rest, Acc);
+parse_array_elems(Tokens, Acc) ->
+    {Expr, Rest} = parse_expr(Tokens),
+    parse_array_elems(Rest, [Expr | Acc]).
 
 %%====================================================================
 %% Helpers

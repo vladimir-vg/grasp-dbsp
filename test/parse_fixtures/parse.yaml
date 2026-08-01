@@ -426,3 +426,343 @@
         - {base: {var: src}}
         - {result: {var: src}}
       line: 1
+
+- description: "Function definition with positional params"
+  input: |
+    add := function((x, y) -> x + y)
+    add :: function((i64, i64) -> i64)
+  expected:
+    - name: add
+      kind: fn_def
+      params:
+        - {pos: x}
+        - {pos: y}
+      body:
+        binop: '+'
+        lhs: {var: x}
+        rhs: {var: y}
+      line: 1
+    - name: add
+      kind: function
+      params: [i64, i64]
+      return: i64
+      line: 2
+
+- description: "Function definition with keyword params"
+  input: |
+    f := function((x, d:, e: evar) -> d + e)
+  expected:
+    - name: f
+      kind: fn_def
+      params:
+        - {pos: x}
+        - {kw: d, val: d}
+        - {kw: e, val: evar}
+      body:
+        binop: '+'
+        lhs: {var: d}
+        rhs: {var: e}
+      line: 1
+
+- description: "Integer literal in function body"
+  input: |
+    c := function(() -> 42)
+  expected:
+    - name: c
+      kind: fn_def
+      params: []
+      body:
+        const: 42
+        tag: integer
+      line: 1
+
+- description: "String, true, false, null in function body"
+  input: |
+    f := function(() -> "hello")
+    t := function(() -> true)
+    fl := function(() -> false)
+    n := function(() -> null)
+  expected:
+    - name: f
+      kind: fn_def
+      params: []
+      body:
+        const: "hello"
+        tag: string
+      line: 1
+    - name: t
+      kind: fn_def
+      params: []
+      body:
+        symbol: true
+      line: 2
+    - name: fl
+      kind: fn_def
+      params: []
+      body:
+        symbol: false
+      line: 3
+    - name: n
+      kind: fn_def
+      params: []
+      body:
+        symbol: null
+      line: 4
+
+- description: "Binary ops in function body"
+  input: |
+    add := function((x, y) -> x + y)
+    sub := function((x, y) -> x - y * z)
+  expected:
+    - name: add
+      kind: fn_def
+      params:
+        - {pos: x}
+        - {pos: y}
+      body:
+        binop: '+'
+        lhs: {var: x}
+        rhs: {var: y}
+      line: 1
+    - name: sub
+      kind: fn_def
+      params:
+        - {pos: x}
+        - {pos: y}
+      body:
+        binop: '-'
+        lhs: {var: x}
+        rhs:
+          binop: '*'
+          lhs: {var: y}
+          rhs: {var: z}
+      line: 2
+
+- description: "Precedence: and/or, comparison"
+  input: |
+    f := function((x, y, a, b) -> x > y and a < b)
+  expected:
+    - name: f
+      kind: fn_def
+      params:
+        - {pos: x}
+        - {pos: y}
+        - {pos: a}
+        - {pos: b}
+      body:
+        binop: 'and'
+        lhs:
+          binop: '>'
+          lhs: {var: x}
+          rhs: {var: y}
+        rhs:
+          binop: '<'
+          lhs: {var: a}
+          rhs: {var: b}
+      line: 1
+
+- description: "Function call in expression"
+  input: |
+    f := function((x) -> sqrt(x))
+    g := function((r, col) -> struct:get(r, key: col))
+  expected:
+    - name: f
+      kind: fn_def
+      params:
+        - {pos: x}
+      body:
+        call: sqrt
+        args:
+          - {var: x}
+      line: 1
+    - name: g
+      kind: fn_def
+      params:
+        - {pos: r}
+        - {pos: col}
+      body:
+        call: 'struct:get'
+        args:
+          - {var: r}
+          - {kv: key, val: {var: col}}
+      line: 2
+
+- description: "Map and dict literal in function body"
+  input: |
+    f := function(() -> {a: 1, b: x})
+  expected:
+    - name: f
+      kind: fn_def
+      params: []
+      body:
+        dict_literal:
+          kw:
+            - {kv: a, val: {const: 1, tag: integer}}
+            - {kv: b, val: {var: x}}
+      line: 1
+
+- description: "Array literal in function body"
+  input: |
+    f := function((x) -> [1, 2, 3])
+    g := function((x) -> [x, *rest])
+  expected:
+    - name: f
+      kind: fn_def
+      params:
+        - {pos: x}
+      body:
+        array_literal:
+          - {const: 1, tag: integer}
+          - {const: 2, tag: integer}
+          - {const: 3, tag: integer}
+      line: 1
+    - name: g
+      kind: fn_def
+      params:
+        - {pos: x}
+      body:
+        array_literal:
+          - {var: x}
+          - {rest: rest}
+      line: 2
+
+- description: "Dot access in function body"
+  input: |
+    f := function((row) -> row.field)
+  expected:
+    - name: f
+      kind: fn_def
+      params:
+        - {pos: row}
+      body:
+        dot_access:
+          obj: {var: row}
+          field: field
+      line: 1
+
+- description: "Subscript and slice in function body"
+  input: |
+    f := function((arr) -> arr[0])
+    g := function((s) -> s[0:5])
+  expected:
+    - name: f
+      kind: fn_def
+      params:
+        - {pos: arr}
+      body:
+        subscript:
+          obj: {var: arr}
+          index: {const: 0, tag: integer}
+      line: 1
+    - name: g
+      kind: fn_def
+      params:
+        - {pos: s}
+      body:
+        subscript:
+          obj: {var: s}
+          slice: true
+          start: {const: 0, tag: integer}
+          stop: {const: 5, tag: integer}
+      line: 2
+
+- description: "Unary not, negation, bitwise not"
+  input: |
+    f := function((x) -> not x)
+    g := function((x) -> -x)
+    h := function((x) -> ~x)
+  expected:
+    - name: f
+      kind: fn_def
+      params:
+        - {pos: x}
+      body:
+        unop: not_op
+        expr: {var: x}
+      line: 1
+    - name: g
+      kind: fn_def
+      params:
+        - {pos: x}
+      body:
+        unop: '-'
+        expr: {var: x}
+      line: 2
+    - name: h
+      kind: fn_def
+      params:
+        - {pos: x}
+      body:
+        unop: '~'
+        expr: {var: x}
+      line: 3
+
+- description: "Function def without matching typespec (parse succeeds)"
+  input: |
+    add := function((x, y) -> x + y)
+  expected:
+    - name: add
+      kind: fn_def
+      params:
+        - {pos: x}
+        - {pos: y}
+      body:
+        binop: '+'
+        lhs: {var: x}
+        rhs: {var: y}
+      line: 1
+
+- description: "Bitwise and bit-shift operators"
+  input: |
+    f := function((a, b) -> a | b)
+    g := function((a, b) -> a & b)
+    h := function((a, b) -> a << 3)
+  expected:
+    - name: f
+      kind: fn_def
+      params:
+        - {pos: a}
+        - {pos: b}
+      body:
+        binop: '|'
+        lhs: {var: a}
+        rhs: {var: b}
+      line: 1
+    - name: g
+      kind: fn_def
+      params:
+        - {pos: a}
+        - {pos: b}
+      body:
+        binop: '&'
+        lhs: {var: a}
+        rhs: {var: b}
+      line: 2
+    - name: h
+      kind: fn_def
+      params:
+        - {pos: a}
+        - {pos: b}
+      body:
+        binop: '<<'
+        lhs: {var: a}
+        rhs: {const: 3, tag: integer}
+      line: 3
+
+- description: "Paren expressions and nested function calls"
+  input: |
+    f := function((x, y) -> (x + y) * z)
+  expected:
+    - name: f
+      kind: fn_def
+      params:
+        - {pos: x}
+        - {pos: y}
+      body:
+        binop: '*'
+        lhs:
+          binop: '+'
+          lhs: {var: x}
+          rhs: {var: y}
+        rhs: {var: z}
+      line: 1

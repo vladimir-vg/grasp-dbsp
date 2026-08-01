@@ -170,14 +170,15 @@ check_negative_errors(Line, Msg, [Error | Rest]) ->
 %% Program → ordered statement list
 %%====================================================================
 
-program_to_stmts(#gdbsp_program{nodes = Nodes, typespecs = TSs}) ->
+program_to_stmts(#gdbsp_program{nodes = Nodes, typespecs = TSs, fn_defs = FnDefs}) ->
     NStmts = [#{name => b2a(N#gdbsp_node_def.name),
                 op   => N#gdbsp_node_def.op,
                 args => norm_args(N#gdbsp_node_def.args),
                 line => N#gdbsp_node_def.line} || N <- Nodes],
     TStmts = [typespec_to_stmt(T) || T <- TSs],
+    FStmts = [fn_def_to_stmt(F) || F <- FnDefs],
     lists:sort(fun(A, B) -> maps:get(line, A) =< maps:get(line, B) end,
-               NStmts ++ TStmts).
+               NStmts ++ TStmts ++ FStmts).
 
 b2a(B) -> binary_to_atom(B, utf8).
 
@@ -188,6 +189,7 @@ norm_args([{Key, Val} | Rest]) ->
 norm_args([]) -> [].
 
 norm_arg_val({var, B}) when is_binary(B) -> #{var => binary_to_atom(B, utf8)};
+norm_arg_val({string, B}) when is_binary(B) -> binary_to_atom(B, utf8);
 norm_arg_val(B) when is_binary(B) -> binary_to_atom(B, utf8);
 norm_arg_val(V) -> V.
 
@@ -295,14 +297,27 @@ normalize_expected_item([{K, _} | _] = PropList)
                 undefined ->
                     case proplists:get_value(type, PL) of
                         undefined ->
-                            maps:from_list([
-                                {name, to_type_val(Name)},
-                                {kind, to_atom(proplists:get_value(kind, PL))},
-                                {params, normalize_expected(
-                                    proplists:get_value(params, PL))},
-                                {'return', normalize_expected(
-                                    proplists:get_value('return', PL))},
-                                {line, Line}]);
+                            Kind = proplists:get_value(kind, PL),
+                            case to_atom(Kind) of
+                                fn_def ->
+                                    maps:from_list([
+                                        {name, to_type_val(Name)},
+                                        {kind, fn_def},
+                                        {params, normalize_expected(
+                                            proplists:get_value(params, PL))},
+                                        {body, normalize_expected(
+                                            proplists:get_value(body, PL))},
+                                        {line, Line}]);
+                                _ ->
+                                    maps:from_list([
+                                        {name, to_type_val(Name)},
+                                        {kind, to_atom(Kind)},
+                                        {params, normalize_expected(
+                                            proplists:get_value(params, PL))},
+                                        {'return', normalize_expected(
+                                            proplists:get_value('return', PL))},
+                                        {line, Line}])
+                            end;
                         TypeVal ->
                             maps:from_list([
                                 {name, to_type_val(Name)},
@@ -329,6 +344,67 @@ to_type_val(A) when is_atom(A) -> A;
 to_type_val(B) when is_binary(B) -> binary_to_atom(B, utf8);
 to_type_val(S) when is_list(S) -> list_to_atom(S);
 to_type_val(N) when is_integer(N) -> N.
+
+%%--------------------------------------------------------------------
+%% FnDef normalization
+%%--------------------------------------------------------------------
+
+fn_def_to_stmt(#gdbsp_fn_def{name = N, params = Params, body = Body, line = L}) ->
+    #{name   => b2a(N),
+      kind   => fn_def,
+      params => norm_fn_params(Params),
+      body   => norm_expr(Body),
+      line   => L}.
+
+norm_fn_params(Params) ->
+    [case P of
+         {pos, PN} -> #{pos => b2a(PN)};
+         {kw, K, V} -> #{kw => b2a(K), val => b2a(V)}
+     end || P <- Params].
+
+norm_expr({var, _L, Name}) ->
+    #{var => b2a(Name)};
+norm_expr({const, _L, Val, Tag, _Src, _Type}) ->
+    #{const => norm_const_val(Val), tag => Tag};
+norm_expr({symbol, _L, Name}) ->
+    #{symbol => b2a(Name)};
+norm_expr({binop, _L, Op, LHS, RHS}) ->
+    #{binop => Op, lhs => norm_expr(LHS), rhs => norm_expr(RHS)};
+norm_expr({unop, _L, Op, E}) ->
+    #{unop => Op, expr => norm_expr(E)};
+norm_expr({call, _L, Name, Args}) ->
+    #{call => b2a(Name), args => [norm_call_arg(A) || A <- Args]};
+norm_expr({agg, _L, Name, Args}) ->
+    #{agg => b2a(Name), args => [norm_call_arg(A) || A <- Args]};
+norm_expr({dict_literal, _L, KwArgs, Rest}) ->
+    Entries = #{kw => [norm_call_arg(A) || A <- KwArgs]},
+    case Rest of
+        undefined -> #{dict_literal => Entries};
+        _ -> #{dict_literal => maps:merge(Entries, #{rest => norm_expr(Rest)})}
+    end;
+norm_expr({array_literal, _L, Elems}) ->
+    #{array_literal => [norm_array_elem(E) || E <- Elems]};
+norm_expr({subscript, _L, Obj, {index, K}}) ->
+    #{subscript => #{obj => norm_expr(Obj), index => norm_expr(K)}};
+norm_expr({subscript, _L, Obj, {slice, S, E, St}}) ->
+    Slice = #{obj => norm_expr(Obj)},
+    Slice2 = case S of undefined -> Slice; _ -> Slice#{start => norm_expr(S)} end,
+    Slice3 = case E of undefined -> Slice2; _ -> Slice2#{stop => norm_expr(E)} end,
+    case St of undefined -> #{subscript => maps:put(slice, true, Slice3)};
+              _ -> #{subscript => maps:put(slice, true, Slice3#{step => norm_expr(St)})} end;
+norm_expr({dot_access, _L, Obj, Field}) ->
+    #{dot_access => #{obj => norm_expr(Obj), field => b2a(Field)}}.
+
+norm_call_arg({kv, K, V}) -> #{kv => b2a(K), val => norm_expr(V)};
+norm_call_arg(E) -> norm_expr(E).
+
+norm_array_elem({rest, _L, Var}) -> #{rest => b2a(Var)};
+norm_array_elem(E) -> norm_expr(E).
+
+norm_const_val(Val) when is_float(Val) -> Val;
+norm_const_val(Val) when is_integer(Val) -> Val;
+norm_const_val(Val) when is_binary(Val) -> binary_to_atom(Val, utf8);
+norm_const_val(Val) -> Val.
 
 %%--------------------------------------------------------------------
 %% Deep comparison helper
