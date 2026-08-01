@@ -51,11 +51,13 @@ parse_declarations([], Nodes, TSs, Circuits) ->
     {Nodes, TSs, Circuits};
 parse_declarations([{newline, _} | Rest], Nodes, TSs, Circuits) ->
     parse_declarations(Rest, Nodes, TSs, Circuits);
+parse_declarations([{indent, _} | Rest], Nodes, TSs, Circuits) ->
+    parse_declarations(Rest, Nodes, TSs, Circuits);
 parse_declarations([{identifier, _L, <<"circuit">>} | Rest], Nodes, TSs, Circuits) ->
     {Def, Rest2} = parse_circuit_def(Rest),
     parse_declarations(Rest2, Nodes, TSs, [Def | Circuits]);
-parse_declarations([{identifier, _, Name}, {walrus, _} | Rest], Nodes, TSs, Circuits) ->
-    {Node, Rest2} = parse_node_def(Name, Rest),
+parse_declarations([{identifier, Line, Name}, {walrus, _} | Rest], Nodes, TSs, Circuits) ->
+    {Node, Rest2} = parse_node_def(Name, Line, Rest),
     parse_declarations(Rest2, [Node | Nodes], TSs, Circuits);
 parse_declarations([{identifier, _, Name}, {double_colon, _} | Rest], Nodes, TSs, Circuits) ->
     {TS, Rest2} = parse_typespec(Name, Rest),
@@ -67,22 +69,22 @@ parse_declarations([T | _], _Nodes, _TSs, _Circuits) ->
 %% Node definitions
 %%====================================================================
 
-parse_node_def(Name, Tokens) ->
+parse_node_def(Name, Line, Tokens) ->
     case Tokens of
         [{identifier, _, VarName}, {dot, _} | Rest] ->
-            parse_circuit_access_node(Name, VarName, Rest);
+            parse_circuit_access_node(Name, Line, VarName, Rest);
         [{identifier, _, OpName}, {'(', _} | Rest] ->
-            parse_node_def_with_op(Name, OpName, Rest);
+            parse_node_def_with_op(Name, Line, OpName, Rest);
         [{identifier, _, VarName} | Rest] ->
             Node = #gdbsp_node_def{
                 name = Name, op = plus, args = [{var, VarName}],
-                line = token_line(hd([{identifier, 0, Name}]))
+                line = Line
             },
             {Node, skip_to_decl(Rest)};
         [{string, _, _} = T | Rest] ->
             Node = #gdbsp_node_def{
                 name = Name, op = plus, args = [{string, token_val(T)}],
-                line = token_line(hd([{identifier, 0, Name}]))
+                line = Line
             },
             {Node, skip_to_decl(Rest)};
         _ ->
@@ -90,30 +92,30 @@ parse_node_def(Name, Tokens) ->
                    <<"expected '(' or argument after :=">>})
     end.
 
-parse_circuit_access_node(Name, Var, [{identifier, _, Field} | Rest]) ->
+parse_circuit_access_node(Name, Line, Var, [{identifier, _, Field} | Rest]) ->
     Node = #gdbsp_node_def{
         name = Name, op = circuit_access,
         args = [{var, Var}, {var, Field}],
-        line = token_line(hd([{identifier, 0, Name}]))
+        line = Line
     },
     {Node, skip_to_decl(Rest)};
-parse_circuit_access_node(Name, _Var, Tokens) ->
+parse_circuit_access_node(_Name, _Line, _Var, Tokens) ->
     throw({parse_error, token_line(hd(Tokens)),
            <<"invalid circuit access">>}).
 
-parse_node_def_with_op(Name, OpName, Tokens) ->
+parse_node_def_with_op(Name, Line, OpName, Tokens) ->
     OpAtom = case known_op(OpName) of
         true  -> binary_to_atom(OpName, utf8);
         false -> circuit_call
     end,
     case OpAtom of
         fixpoint ->
-            parse_fixpoint_node(Name, Tokens);
+            parse_fixpoint_node(Name, Line, Tokens);
         _ ->
-            parse_regular_node(Name, OpAtom, OpName, Tokens)
+            parse_regular_node(Name, Line, OpAtom, OpName, Tokens)
     end.
 
-parse_regular_node(Name, OpAtom, OpName, Tokens) ->
+parse_regular_node(Name, Line, OpAtom, OpName, Tokens) ->
     {Args, Rest} = collect_node_args(Tokens, []),
     FinalArgs = case OpAtom of
         circuit_call -> [{var, OpName} | Args];
@@ -121,7 +123,7 @@ parse_regular_node(Name, OpAtom, OpName, Tokens) ->
     end,
     Node = #gdbsp_node_def{
         name = Name, op = OpAtom, args = FinalArgs,
-        line = token_line(hd([{identifier, 0, Name}]))
+        line = Line
     },
     {Node, Rest}.
 
@@ -129,11 +131,11 @@ parse_regular_node(Name, OpAtom, OpName, Tokens) ->
 %% Fixpoint
 %%--------------------------------------------------------------------
 
-parse_fixpoint_node(Name, Tokens) ->
+parse_fixpoint_node(Name, Line, Tokens) ->
     {Args, Rest} = collect_fixpoint_args(Tokens, []),
     Node = #gdbsp_node_def{
         name = Name, op = fixpoint, args = Args,
-        line = token_line(hd([{identifier, 0, Name}]))
+        line = Line
     },
     {Node, Rest}.
 
@@ -143,7 +145,7 @@ collect_fixpoint_args(Tokens, Acc) ->
         [] -> throw({parse_error, 0, <<"unexpected end of fixpoint args">>});
         Toks ->
             case Toks of
-                [{identifier, _, CName} | Rest] when Acc =:= [] ->
+                [{identifier, _, CName}, {'(', _} | Rest] when Acc =:= [] ->
                     collect_fixpoint_kwargs(Rest, [{var, CName} | Acc]);
                 [{identifier, _, Kw}, {':', _} | Rest] when Acc =/= [] ->
                     {Val, Rest2} = parse_fixpoint_kw_val(Rest),
@@ -157,7 +159,10 @@ collect_fixpoint_args(Tokens, Acc) ->
 
 collect_fixpoint_kwargs(Tokens, Acc) ->
     case skip_newlines(Tokens) of
-        [{')', _} | Rest] -> {lists:reverse(Acc), skip_to_decl(Rest)};
+        [{')', _} | Rest] ->
+            Rest2 = skip_newlines(Rest),
+            {')', _} = expect(Rest2, ')'),
+            {lists:reverse(Acc), skip_to_decl(tl(Rest2))};
         [] -> throw({parse_error, 0, <<"unexpected end of fixpoint args">>});
         [{',', _} | Rest] -> collect_fixpoint_args(Rest, Acc);
         Toks -> collect_fixpoint_args(Toks, Acc)
@@ -199,11 +204,11 @@ collect_node_args(Tokens, Acc) ->
 
 parse_kw_arg([{'[', _} | Rest]) ->
     {Items, Rest2} = collect_bracket_list(Rest, []),
-    {[list_to_binary(I) || I <- Items], Rest2};
+    {Items, Rest2};
 parse_kw_arg(Tokens) ->
     case Tokens of
         [{identifier, _, V} | Rest] -> {{var, V}, Rest};
-        [{string, _, _} = T | Rest] -> {{string, token_val(T)}, Rest};
+        [{string, _, _} = T | Rest] -> {token_val(T), Rest};
         _ -> throw({parse_error, token_line(hd(Tokens)),
                     <<"expected value after ':' in node kwarg">>})
     end.
@@ -212,10 +217,10 @@ collect_bracket_list(Tokens, Acc) ->
     case Tokens of
         [{']', _} | Rest] -> {lists:reverse(Acc), Rest};
         [{',', _} | Rest] -> collect_bracket_list(Rest, Acc);
-        [{string, _, _} = T | Rest] ->
-            collect_bracket_list(Rest, [token_val(T) | Acc]);
+        [{string, _, V} | Rest] ->
+            collect_bracket_list(Rest, [V | Acc]);
         [{identifier, _, V} | Rest] ->
-            collect_bracket_list(Rest, [binary_to_list(V) | Acc]);
+            collect_bracket_list(Rest, [V | Acc]);
         _ -> throw({parse_error, token_line(hd(Tokens)),
                     <<"expected ']' or value in bracket list">>})
     end.
@@ -246,7 +251,7 @@ parse_fn_typespec(Name, Kind, Tokens) ->
     case Tokens of
         [{'(', _} | Rest] ->
             {PosTypes, KwMap, Rest2} = parse_fn_type_params(Rest, [], []),
-            {arrow, _} = expect(Rest2, '->'),
+            {arrow, _} = expect(Rest2, arrow),
             {RetType, Rest3} = parse_type(tl(Rest2)),
             {')', _} = expect(Rest3, ')'),
             Spec = #gdbsp_typespec{
@@ -329,7 +334,7 @@ parse_type(Tokens) ->
 
 parse_enum_values(Tokens, Acc) ->
     case Tokens of
-        [{')', _} | Rest] -> {lists:reverse(Acc), tl(Rest)};
+        [{')', _} | Rest] -> {lists:reverse(Acc), Rest};
         [{',', _} | Rest] -> parse_enum_values(Rest, Acc);
         [{string, _, V} | Rest] -> parse_enum_values(Rest, [V | Acc]);
         _ -> throw({parse_error, token_line(hd(Tokens)),
@@ -342,7 +347,7 @@ parse_struct_type(Tokens) ->
 
 parse_struct_fields(Tokens, Acc) ->
     case skip_newlines(Tokens) of
-        [{')', _} | Rest] -> {Acc, tl(Rest)};
+        [{')', _} | Rest] -> {Acc, Rest};
         [] -> {Acc, []};
         [{',', _} | Rest] -> parse_struct_fields(Rest, Acc);
         [{string, _, _}, {':', _} | _] ->
@@ -361,7 +366,7 @@ parse_array_type(Tokens) ->
     {ElemType, Rest} = parse_type(Tokens),
     case skip_newlines(Rest) of
         [{')', _} | Rest2] ->
-            {{array, ElemType, varsize}, tl(Rest2)};
+            {{array, ElemType, varsize}, Rest2};
         [{',', _} | Rest2] ->
             case Rest2 of
                 [{integer_literal, _, Dim} | Rest3] ->
@@ -382,7 +387,7 @@ parse_array_type(Tokens) ->
 
 parse_array_dims(Tokens, Acc) ->
     case skip_newlines(Tokens) of
-        [{')', _} | Rest] -> {lists:reverse(Acc), tl(Rest)};
+        [{')', _} | Rest] -> {lists:reverse(Acc), Rest};
         [{',', _} | Rest] ->
             case skip_newlines(Rest) of
                 [{integer_literal, _, Dim} | Rest2] ->
@@ -409,7 +414,7 @@ parse_closure_type(Kind, Tokens) ->
     case Tokens of
         [{'(', _} | Rest] ->
             {PosTypes, KwMap, Rest2} = parse_fn_type_params(Rest, [], []),
-            {arrow, _} = expect(Rest2, '->'),
+            {arrow, _} = expect(Rest2, arrow),
             {RetType, Rest3} = parse_type(tl(Rest2)),
             {')', _} = expect(Rest3, ')'),
             Params = [{undefined, T} || T <- PosTypes] ++ KwMap,
@@ -490,8 +495,8 @@ parse_circuit_body(Tokens, Acc) ->
     case Tokens of
         [{body_line, _} | Rest] ->
             case Rest of
-                [{identifier, _, BName}, {walrus, _} | Rest2] ->
-                    {Node, Rest3} = parse_node_def(BName, Rest2),
+                [{identifier, BLine, BName}, {walrus, _} | Rest2] ->
+                    {Node, Rest3} = parse_node_def(BName, BLine, Rest2),
                     parse_circuit_body(Rest3, [Node | Acc]);
                 _ ->
                     throw({parse_error, token_line(hd(Rest)),
