@@ -96,8 +96,8 @@ lower_expr_elem({rest, _Line, _Var}, _Bindings) ->
 lower_expr_elem(E, Bindings) ->
     lower_expr(E, Bindings).
 
-lower_call_arg({kv, _Key, Value}, Bindings) ->
-    {kv, lower_expr(Value, Bindings)};
+lower_call_arg({kv, Key, Value}, Bindings) ->
+    {kv, Key, lower_expr(Value, Bindings)};
 lower_call_arg(Arg, Bindings) ->
     lower_expr(Arg, Bindings).
 

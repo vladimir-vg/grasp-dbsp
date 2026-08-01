@@ -13,7 +13,9 @@
 -export([simple_filter/1, simple_map/1, join/1, aggregate/1, plus_multi/1,
          incrementalize_filter/1, incrementalize_join/1, cycle_error/1,
          missing_fn/1, duplicate_node/1,
-         delay_inputs_not_empty_for_chain/1, delay_ordering_independent/1]).
+         delay_inputs_not_empty_for_chain/1, delay_ordering_independent/1,
+         inline_fn_map/1, inline_fn_overrides_external/1,
+         typespec_only_external_fn/1, typespec_only_no_external/1]).
 
 -define(FIXTURE_DIR, "parse_fixtures").
 
@@ -21,7 +23,9 @@ all() ->
     [simple_filter, simple_map, join, aggregate, plus_multi,
      incrementalize_filter, incrementalize_join, cycle_error,
      missing_fn, duplicate_node,
-     delay_inputs_not_empty_for_chain, delay_ordering_independent].
+     delay_inputs_not_empty_for_chain, delay_ordering_independent,
+     inline_fn_map, inline_fn_overrides_external,
+     typespec_only_external_fn, typespec_only_no_external].
 
 init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(yamerl),
@@ -264,6 +268,85 @@ delay_ordering_independent(_Config) ->
                           element(1, N#circuit_node.op) =:= delay]),
     [SourceId] = DelayNode#circuit_node.inputs,
     ok.
+
+%%--------------------------------------------------------------------
+%% Inline function compilation tests
+%%--------------------------------------------------------------------
+
+inline_fn_map(_Config) ->
+    {ok, Prog} = parse_prog(
+        "src := source(\"t\")\n"
+        "src :: stream(struct(\"x\": i64))\n"
+        "id := function((row) -> row)\n"
+        "id :: function((struct(\"x\": i64)) -> struct(\"x\": i64))\n"
+        "mapped := map(src, id)\n"
+    ),
+    {ok, G} = gdbsp_compile:compile(Prog, #{fn_registry => #{},
+                                              incrementalize => false}),
+    Nodes = maps:to_list(G#circuit_graph.nodes),
+    2 = length(Nodes),
+    MapNode = hd([N || {_, N} <- Nodes, element(1, N#circuit_node.op) =:= map]),
+    %% Identity function body is just the arg reference
+    {map, #{expr := {arg, <<"row">>}}} = MapNode#circuit_node.op,
+    ok.
+
+inline_fn_overrides_external(_Config) ->
+    ExternalBody = #{<<"call">> => <<"struct">>,
+                     <<"kwargs">> =>
+                         #{<<"x">> => #{<<"type">> => <<"i64">>, <<"value">> => <<"0">>}}},
+    FnReg = #{<<"id">> => ExternalBody},
+    {ok, Prog} = parse_prog(
+        "src := source(\"t\")\n"
+        "src :: stream(struct(\"x\": i64))\n"
+        "id := function((row) -> row)\n"
+        "id :: function((struct(\"x\": i64)) -> struct(\"x\": i64))\n"
+        "mapped := map(src, id)\n"
+    ),
+    {ok, G} = gdbsp_compile:compile(Prog, #{fn_registry => FnReg,
+                                              incrementalize => false}),
+    Nodes = maps:to_list(G#circuit_graph.nodes),
+    MapNode = hd([N || {_, N} <- Nodes, element(1, N#circuit_node.op) =:= map]),
+    %% Inline body (identity) should win over external (struct)
+    {map, #{expr := {arg, <<"row">>}}} = MapNode#circuit_node.op,
+    ok.
+
+typespec_only_external_fn(_Config) ->
+    FnReg = #{
+        <<"inc">> =>
+            #{<<"call">> => <<"add">>,
+              <<"args">> => [
+                  #{<<"call">> => <<"struct:get">>,
+                    <<"args">> => [#{<<"arg">> => <<"row">>}],
+                    <<"kwargs">> => #{<<"key">> => #{<<"type">> => <<"string">>,
+                                                      <<"value">> => <<"x">>}}},
+                  #{<<"type">> => <<"i64">>, <<"value">> => <<"1">>}
+              ]}
+    },
+    {ok, Prog} = parse_prog(
+        "src := source(\"t\")\n"
+        "src :: stream(struct(\"x\": i64))\n"
+        "inc :: function((struct(\"x\": i64)) -> i64)\n"
+        "mapped := map(src, inc)\n"
+    ),
+    {ok, G} = gdbsp_compile:compile(Prog, #{fn_registry => FnReg,
+                                              incrementalize => false}),
+    Nodes = maps:to_list(G#circuit_graph.nodes),
+    MapNode = hd([N || {_, N} <- Nodes, element(1, N#circuit_node.op) =:= map]),
+    {map, #{expr := {call, <<"add">>, _, _}}} = MapNode#circuit_node.op,
+    ok.
+
+typespec_only_no_external(_Config) ->
+    {ok, Prog} = parse_prog(
+        "src := source(\"t\")\n"
+        "src :: stream(struct(\"x\": i64))\n"
+        "inc :: function((struct(\"x\": i64)) -> i64)\n"
+        "mapped := map(src, inc)\n"
+    ),
+    case gdbsp_compile:compile(Prog, #{fn_registry => #{},
+                                         incrementalize => false}) of
+        {error, _} -> ok;
+        Other -> ct:fail("expected error, got ~p", [Other])
+    end.
 
 %%--------------------------------------------------------------------
 %% Helpers
