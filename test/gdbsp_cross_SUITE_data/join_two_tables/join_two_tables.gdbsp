@@ -1,0 +1,7 @@
+left_src := source("left")
+left_src :: stream(struct("k": i64, "a": i64))
+
+right_src := source("right")
+right_src :: stream(struct("k": i64, "b": i64))
+
+joined_set := join(left_src, right_src, on: ["k"])
