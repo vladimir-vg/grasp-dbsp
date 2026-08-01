@@ -78,6 +78,9 @@
 -export([std_lt_dynamic_dynamic/2, std_gt_dynamic_dynamic/2]).
 -export([std_le_dynamic_dynamic/2, std_ge_dynamic_dynamic/2]).
 
+%% ── std: Generic comparison ──────────────────────────────────────────
+-export([std_eq/2, std_neq/2, std_lt/2, std_gt/2, std_lte/2, std_gte/2]).
+
 %% ── std: Type predicates ─────────────────────────────────────────────
 
 %%====================================================================
@@ -515,3 +518,26 @@ std_eq_enum_enum({value, _, A}, {value, _, B}) -> {value, ?BOOL, A =:= B}.
 
 -spec std_neq_enum_enum(value(), value()) -> value().
 std_neq_enum_enum({value, _, A}, {value, _, B}) -> {value, ?BOOL, A =/= B}.
+
+%%====================================================================
+%% Generic comparison — type tag already verified by the type system.
+%% Used for all non-float, non-numeric types (i8-u64, integer, string, bytes, bits, etc.).
+%%====================================================================
+
+-spec std_eq(value(), value()) -> value().
+std_eq({value, _, A}, {value, _, B}) -> {value, ?BOOL, A =:= B}.
+
+-spec std_neq(value(), value()) -> value().
+std_neq({value, _, A}, {value, _, B}) -> {value, ?BOOL, A =/= B}.
+
+-spec std_lt(value(), value()) -> value().
+std_lt({value, _, A}, {value, _, B}) -> {value, ?BOOL, A < B}.
+
+-spec std_gt(value(), value()) -> value().
+std_gt({value, _, A}, {value, _, B}) -> {value, ?BOOL, A > B}.
+
+-spec std_lte(value(), value()) -> value().
+std_lte({value, _, A}, {value, _, B}) -> {value, ?BOOL, A =< B}.
+
+-spec std_gte(value(), value()) -> value().
+std_gte({value, _, A}, {value, _, B}) -> {value, ?BOOL, A >= B}.

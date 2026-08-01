@@ -186,6 +186,8 @@ exact_match({map, AK, AV}, {map, BK, BV}) ->
 exact_match({bytes, _}, {bytes, _}) -> true;
 exact_match({bits, _}, {bits, _}) -> true;
 exact_match({numeric, _, _}, {numeric, _, _}) -> true;
+exact_match({string, _}, string) -> true;
+exact_match(string, {string, _}) -> true;
 exact_match({string, _}, {string, _}) -> true;
 exact_match({enum, _}, {enum, _}) -> true;
 exact_match({dynamic, A}, {dynamic, B}) -> exact_match(A, B);
@@ -376,6 +378,7 @@ concrete_fn(<<"=">>, [T, T], _) when ?FIXED_INTS ->
 concrete_fn(<<"=">>, [integer, integer], _) -> <<"std.eq_integer">>;
 concrete_fn(<<"=">>, [f64, f64], _)         -> <<"std.eq_f64">>;
 concrete_fn(<<"=">>, [numeric, numeric], _) -> <<"std.eq_numeric">>;
+concrete_fn(<<"=">>, [string, string], _) -> <<"std.eq_string">>;
 concrete_fn(<<"=">>, [{string, _}, {string, _}], _) -> <<"std.eq_string">>;
 concrete_fn(<<"=">>, [{enum, _}, {enum, _}], _) -> <<"std.eq_boolean">>;
 concrete_fn(<<"=">>, [bytes, bytes], _)     -> <<"std.eq_bytes">>;
@@ -390,6 +393,7 @@ concrete_fn(<<"!=">>, [T, T], _) when ?FIXED_INTS ->
 concrete_fn(<<"!=">>, [integer, integer], _) -> <<"std.neq_integer">>;
 concrete_fn(<<"!=">>, [f64, f64], _)         -> <<"std.neq_f64">>;
 concrete_fn(<<"!=">>, [numeric, numeric], _) -> <<"std.neq_numeric">>;
+concrete_fn(<<"!=">>, [string, string], _) -> <<"std.neq_string">>;
 concrete_fn(<<"!=">>, [{string, _}, {string, _}], _) -> <<"std.neq_string">>;
 concrete_fn(<<"!=">>, [{enum, _}, {enum, _}], _) -> <<"std.neq_boolean">>;
 concrete_fn(<<"!=">>, [bytes, bytes], _)     -> <<"std.neq_bytes">>;
@@ -404,6 +408,7 @@ concrete_fn(<<"<">>, [T, T], _) when ?FIXED_INTS ->
 concrete_fn(<<"<">>, [integer, integer], _) -> <<"std.lt_integer">>;
 concrete_fn(<<"<">>, [f64, f64], _)         -> <<"std.lt_f64">>;
 concrete_fn(<<"<">>, [numeric, numeric], _) -> <<"std.lt_numeric">>;
+concrete_fn(<<"<">>, [string, string], _) -> <<"std.lt_string">>;
 concrete_fn(<<"<">>, [{string, _}, {string, _}], _) -> <<"std.lt_string">>;
 concrete_fn(<<"<">>, [{enum, _}, {enum, _}], _) -> <<"std.lt_boolean">>;
 concrete_fn(<<"<">>, [bytes, bytes], _)     -> <<"std.lt_bytes">>;
@@ -418,6 +423,7 @@ concrete_fn(<<">">>, [T, T], _) when ?FIXED_INTS ->
 concrete_fn(<<">">>, [integer, integer], _) -> <<"std.gt_integer">>;
 concrete_fn(<<">">>, [f64, f64], _)         -> <<"std.gt_f64">>;
 concrete_fn(<<">">>, [numeric, numeric], _) -> <<"std.gt_numeric">>;
+concrete_fn(<<">">>, [string, string], _) -> <<"std.gt_string">>;
 concrete_fn(<<">">>, [{string, _}, {string, _}], _) -> <<"std.gt_string">>;
 concrete_fn(<<">">>, [{enum, _}, {enum, _}], _) -> <<"std.gt_boolean">>;
 concrete_fn(<<">">>, [bytes, bytes], _)     -> <<"std.gt_bytes">>;
@@ -432,6 +438,7 @@ concrete_fn(<<"<=">>, [T, T], _) when ?FIXED_INTS ->
 concrete_fn(<<"<=">>, [integer, integer], _) -> <<"std.lte_integer">>;
 concrete_fn(<<"<=">>, [f64, f64], _)         -> <<"std.lte_f64">>;
 concrete_fn(<<"<=">>, [numeric, numeric], _) -> <<"std.lte_numeric">>;
+concrete_fn(<<"<=">>, [string, string], _) -> <<"std.lte_string">>;
 concrete_fn(<<"<=">>, [{string, _}, {string, _}], _) -> <<"std.lte_string">>;
 concrete_fn(<<"<=">>, [{enum, _}, {enum, _}], _) -> <<"std.lte_boolean">>;
 concrete_fn(<<"<=">>, [bytes, bytes], _)     -> <<"std.lte_bytes">>;
@@ -446,6 +453,7 @@ concrete_fn(<<">=">>, [T, T], _) when ?FIXED_INTS ->
 concrete_fn(<<">=">>, [integer, integer], _) -> <<"std.gte_integer">>;
 concrete_fn(<<">=">>, [f64, f64], _)         -> <<"std.gte_f64">>;
 concrete_fn(<<">=">>, [numeric, numeric], _) -> <<"std.gte_numeric">>;
+concrete_fn(<<">=">>, [string, string], _) -> <<"std.gte_string">>;
 concrete_fn(<<">=">>, [{string, _}, {string, _}], _) -> <<"std.gte_string">>;
 concrete_fn(<<">=">>, [{enum, _}, {enum, _}], _) -> <<"std.gte_boolean">>;
 concrete_fn(<<">=">>, [bytes, bytes], _)     -> <<"std.gte_bytes">>;
@@ -468,6 +476,7 @@ concrete_fn(<<"and">>, [{enum, _}, {enum, _}], _) -> <<"std.and">>;
 concrete_fn(<<"or">>,  [{enum, _}, {enum, _}], _) -> <<"std.or">>;
 
 %% Concat
+concrete_fn(<<"++">>, [string, string], _) -> <<"std.concat_string">>;
 concrete_fn(<<"++">>, [{string, _}, {string, _}], _) -> <<"std.concat_string">>;
 concrete_fn(<<"++">>, [bytes, bytes], _) -> <<"std.concat_bytes">>;
 concrete_fn(<<"++">>, [bits, bits], _) -> <<"std.concat_bits">>;
@@ -551,21 +560,32 @@ fn_impl(<<"std.div_f64">>)      -> {ok, {gdbsp_math, math_div_f64_f64, 2}};
 fn_impl(<<"std.mod_i64">>)      -> {ok, {gdbsp_math, math_mod_i64_i64, 2}};
 fn_impl(<<"std.mod_integer">>)  -> {ok, {gdbsp_math, math_mod_integer_integer, 2}};
 
-fn_impl(<<"std.eq_i64">>)       -> {ok, {gdbsp_math, math_eq_i64_i64, 2}};
-fn_impl(<<"std.eq_f64">>)       -> {ok, {gdbsp_math, math_eq_f64_f64, 2}};
-fn_impl(<<"std.eq_string">>)    -> {ok, {gdbsp_string, string_eq, 2}};
-fn_impl(<<"std.eq_numeric">>)   -> {ok, {gdbsp_math, math_eq_numeric_numeric, 2}};
-
-fn_impl(<<"std.neq_i64">>)      -> {ok, {gdbsp_math, math_neq_i64_i64, 2}};
-fn_impl(<<"std.neq_f64">>)      -> {ok, {gdbsp_math, math_neq_f64_f64, 2}};
-fn_impl(<<"std.neq_string">>)   -> {ok, {gdbsp_string, string_neq, 2}};
-fn_impl(<<"std.neq_numeric">>)  -> {ok, {gdbsp_math, math_neq_numeric_numeric, 2}};
-
-fn_impl(<<"std.lt_i64">>)       -> {ok, {gdbsp_math, math_lt_i64_i64, 2}};
-fn_impl(<<"std.lt_string">>)    -> {ok, {gdbsp_string, string_lt, 2}};
-fn_impl(<<"std.gt_i64">>)       -> {ok, {gdbsp_math, math_gt_i64_i64, 2}};
-fn_impl(<<"std.gte_i64">>)      -> {ok, {gdbsp_std, std_gte_i64_i64, 2}};
-fn_impl(<<"std.lte_i64">>)      -> {ok, {gdbsp_std, std_lte_i64_i64, 2}};
+%% Comparison — specific implementations for float and numeric (nan/inf/decimal handling).
+fn_impl(<<"std.eq_f64">>)       -> {ok, {gdbsp_std, std_eq_f64_f64, 2}};
+fn_impl(<<"std.neq_f64">>)      -> {ok, {gdbsp_std, std_neq_f64_f64, 2}};
+fn_impl(<<"std.lt_f64">>)       -> {ok, {gdbsp_std, std_lt_f64_f64, 2}};
+fn_impl(<<"std.gt_f64">>)       -> {ok, {gdbsp_std, std_gt_f64_f64, 2}};
+fn_impl(<<"std.lte_f64">>)      -> {ok, {gdbsp_std, std_lte_f64_f64, 2}};
+fn_impl(<<"std.gte_f64">>)      -> {ok, {gdbsp_std, std_gte_f64_f64, 2}};
+fn_impl(<<"std.eq_f32">>)       -> {ok, {gdbsp_std, std_eq_f32_f32, 2}};
+fn_impl(<<"std.neq_f32">>)      -> {ok, {gdbsp_std, std_neq_f32_f32, 2}};
+fn_impl(<<"std.lt_f32">>)       -> {ok, {gdbsp_std, std_lt_f32_f32, 2}};
+fn_impl(<<"std.gt_f32">>)       -> {ok, {gdbsp_std, std_gt_f32_f32, 2}};
+fn_impl(<<"std.lte_f32">>)      -> {ok, {gdbsp_std, std_lte_f32_f32, 2}};
+fn_impl(<<"std.gte_f32">>)      -> {ok, {gdbsp_std, std_gte_f32_f32, 2}};
+fn_impl(<<"std.eq_numeric">>)   -> {ok, {gdbsp_std, std_eq_numeric_numeric, 2}};
+fn_impl(<<"std.neq_numeric">>)  -> {ok, {gdbsp_std, std_neq_numeric_numeric, 2}};
+fn_impl(<<"std.lt_numeric">>)   -> {ok, {gdbsp_std, std_lt_numeric_numeric, 2}};
+fn_impl(<<"std.gt_numeric">>)   -> {ok, {gdbsp_std, std_gt_numeric_numeric, 2}};
+fn_impl(<<"std.lte_numeric">>)  -> {ok, {gdbsp_std, std_lte_numeric_numeric, 2}};
+fn_impl(<<"std.gte_numeric">>)  -> {ok, {gdbsp_std, std_gte_numeric_numeric, 2}};
+%% Comparison — generic fallback (all other types: i8-u64, integer, string, bytes, bits, enums, etc.).
+fn_impl(<<"std.eq_", _/binary>>)  -> {ok, {gdbsp_std, std_eq, 2}};
+fn_impl(<<"std.neq_", _/binary>>) -> {ok, {gdbsp_std, std_neq, 2}};
+fn_impl(<<"std.lt_", _/binary>>)  -> {ok, {gdbsp_std, std_lt, 2}};
+fn_impl(<<"std.gt_", _/binary>>)  -> {ok, {gdbsp_std, std_gt, 2}};
+fn_impl(<<"std.lte_", _/binary>>) -> {ok, {gdbsp_std, std_lte, 2}};
+fn_impl(<<"std.gte_", _/binary>>) -> {ok, {gdbsp_std, std_gte, 2}};
 
 fn_impl(<<"std.neg_i64">>)      -> {ok, {gdbsp_math, math_neg_i64, 1}};
 fn_impl(<<"std.neg_f64">>)      -> {ok, {gdbsp_math, math_neg_f64, 1}};

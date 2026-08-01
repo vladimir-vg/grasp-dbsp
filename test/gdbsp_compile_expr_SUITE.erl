@@ -214,16 +214,16 @@ t17_lower_subscript_slice(_Config) ->
 
 t18_check_ok(_Config) ->
     ok = gdbsp_compile_expr:check_fn_body(
-        {value, integer, 42}, #{<<"x">> => i64}, integer).
+        {value, integer, 42}, #{<<"x">> => i64}, integer, #{}).
 
 t19_check_return_mismatch(_Config) ->
     {error, [{return_type_mismatch, _, _}]} =
         gdbsp_compile_expr:check_fn_body(
-            {value, integer, 42}, #{}, string).
+            {value, integer, 42}, #{}, string, #{}).
 
 t20_check_ok_arg(_Config) ->
     ok = gdbsp_compile_expr:check_fn_body(
-        {arg, <<"x">>}, #{<<"x">> => i64}, i64).
+        {arg, <<"x">>}, #{<<"x">> => i64}, i64, #{}).
 
 t21_check_unbound_var(_Config) ->
     {error, Errors} = gdbsp_compile_expr:check_fn_body(
