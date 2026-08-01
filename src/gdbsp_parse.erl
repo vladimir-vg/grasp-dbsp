@@ -208,6 +208,9 @@ collect_node_args(Tokens, Acc) ->
                     {CallArgs, Rest2} = collect_inline_call_args(Rest, []),
                     collect_node_args(Rest2,
                         [{expr, {call, VarName, CallArgs}} | Acc]);
+                [{identifier, _, VarName}, {dot, _}, {identifier, _, Field} | Rest] ->
+                    collect_node_args(Rest,
+                        [{circuit_access, VarName, Field} | Acc]);
                 [{identifier, _, VarName} | Rest] ->
                     collect_node_args(Rest, [{var, VarName} | Acc]);
                 [{string, _, _} = T | Rest] ->
@@ -532,7 +535,7 @@ parse_circuit_params(Tokens, Acc) ->
     end.
 
 parse_circuit_body(Tokens, Acc) ->
-    case Tokens of
+    case skip_newlines(Tokens) of
         [{body_line, _} | Rest] ->
             case Rest of
                 [{identifier, BLine, BName}, {walrus, _} | Rest2] ->

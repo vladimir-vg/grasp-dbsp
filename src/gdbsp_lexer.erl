@@ -82,6 +82,8 @@ pass([{newline, _} | Rest], body_enter, Acc) ->
     pass(Rest, body_enter, Acc);
 pass([{indent, _} | Rest], body_enter, Acc) ->
     pass(Rest, {body_stmt, 0}, [{body_line, 0} | Acc]);
+pass([{identifier, _, <<"circuit">>} = T | Rest], body_enter, Acc) ->
+    pass(Rest, {looking, 0}, [T | Acc]);
 pass([T | Rest], body_enter, Acc) ->
     pass(Rest, normal, [T | Acc]);
 
