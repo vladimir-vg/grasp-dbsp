@@ -11,7 +11,7 @@ Compilation transforms a parsed `.gdbsp` program into a deployable DBSP
 circuit. The pipeline has six stages:
 
 ```
-parse → lower → type-infer → compile to circuit → incrementalize → deploy
+parse → compile fns → lower → type-infer → compile to circuit → incrementalize → deploy
 ```
 
 Each stage consumes the output of the previous stage and produces a
@@ -26,11 +26,35 @@ A `.gdbsp` source file is parsed into a program representation containing:
 - **Nodes** — operator definitions: `name := operator(args...)`
 - **Type annotations** — stream types: `name :: stream(type)`
 - **Function declarations** — signatures: `fn :: function((pos_args..., "key": kw_type...) → ret)`
+- **Function definitions** — inline bodies: `fn := function((params) → body_expr)` (optional)
 - **Aggregate declarations** — signatures: `fn :: aggregate_function((pos_args..., "key": kw_type...) → ret)`
+- **Circuit definitions** — named, parameterised subgraphs: `circuit name(...): ...`
 
-Forward references are allowed. The parser resolves all node names after
-reading the entire file. See [grasp-dbsp.md](grasp-dbsp.md) for the
-full language specification.
+Forward references are allowed. The parser collects all declarations before
+resolving names. See [grasp-dbsp.md](grasp-dbsp.md) and [syntax.md](syntax.md)
+for the full language specification.
+
+### 2.1 Function Definition Compilation
+
+After parsing, inline function definitions (`:= function(...)`) are compiled
+before the lowering stage runs:
+
+1. **Type-check** each function body against its matching typespec. Parameter
+   types from the typespec are bound to the parameter names from the
+   definition. The body's return type must match the declared return type.
+
+2. **Lower** the parse expression tree to the runtime expression format
+   (`gdbsp_expr.hrl`). Binary/unary operators are desugared to named function
+   calls. Dot access, array/map literals, and subscripts are desugared to
+   their runtime equivalents.
+
+3. **JSON-encode** the lowered expression tree and insert it into the function
+   registry. If an external function registry was supplied, inline definitions
+   override external ones. Typespec-only functions (no `:= function(...)` line)
+   use the external body as before.
+
+This happens before the lowering stage so that the merged function registry
+is available for type inference.
 
 ---
 
@@ -165,7 +189,9 @@ IDs after all nodes are placed. References to nodes not yet defined
 
 Operators that reference functions (`map`, `filter`, `flat_map`,
 `aggregate`) look up the function name in the **function registry**
-(see [stdlib.md](stdlib.md) §4). A missing function is a compile error:
+(see [stdlib.md](stdlib.md) §4). The registry merges inline function
+definitions (compiled from `.gdbsp` source) with externally-provided
+JSON bodies. A missing function is a compile error:
 `missing_function`.
 
 ---

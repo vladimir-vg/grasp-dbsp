@@ -8,8 +8,15 @@ Status: draft
 ## 1. Expression JSON Format
 
 Function bodies for `map`, `filter`, and `flat_map` operators are defined
-externally as JSON expression trees. The `.gdbsp` source references them by
-name only — the actual computation is provided via the function registry.
+as JSON expression trees. Bodies can be authored in two ways:
+
+- **Inline** in `.gdbsp` source using Grasp expression syntax (see
+  [grasp-dbsp.md](grasp-dbsp.md) and [syntax.md](syntax.md) §6). The compiler
+  desugars and lowers inline expressions to the JSON format described here.
+- **Externally** via the function registry (see §4), as JSON objects.
+
+The runtime sees no difference between the two — all function bodies are
+JSON expression trees by the time they reach the circuit graph.
 
 An expression tree is a recursive JSON structure. Each node is a JSON
 object identified by a unique **discriminator key**.
@@ -111,8 +118,9 @@ in the function registry.
 1. **Omit when empty.** `"args"` and `"kwargs"` are omitted from call and
    aggregate nodes when empty.
 2. **Desugared operators.** All infix operators use their stdlib function
-   names: `"integer:add"` (not `"+"`), `"integer:gt"` (not `">"`),
-   `"boolean:and"` (not `"and"`).
+   names: `add` (not `+`), `gt` (not `>`), `and` (not `and` keyword).
+   Namespaced variants (`math:add`, `integer:gt`, `boolean:and`) remain
+   valid in externally-provided JSON for backward compatibility.
 3. **Function arguments via `arg`.** `{"arg": "row"}` references the
    single function parameter (the input row). Individual fields are accessed
    via `struct:get(arg: row, "col")`.
@@ -336,16 +344,34 @@ Operators that desugar to scalar functions:
 
 | Operator | Function |
 |----------|----------|
-| `+` | `integer:add` / `float:add` / `numeric:add` |
-| `-` | `integer:sub` / `float:sub` / `numeric:sub` |
-| `*` | `integer:mul` / `float:mul` / `numeric:mul` |
-| `/` | `integer:div` / `float:div` / `numeric:div` |
-| `>` | `integer:gt` / `float:gt` / `numeric:gt` |
-| `<` | `integer:lt` / `float:lt` / `numeric:lt` |
-| `>=` | `integer:gte` / `float:gte` / `numeric:gte` |
-| `<=` | `integer:lte` / `float:lte` / `numeric:lte` |
-| `==` | `integer:eq` / `float:eq` / `string:eq` / ... |
-| `!=` | `integer:neq` / `float:neq` / `string:neq` / ... |
+| `+` | `add` |
+| `-` (binary) | `sub` |
+| `-` (unary) | `neg` |
+| `*` | `mul` |
+| `/` | `div` |
+| `%` | `mod` |
+| `>` | `gt` |
+| `<` | `lt` |
+| `>=` | `gte` |
+| `<=` | `lte` |
+| `=` | `eq` |
+| `!=` | `neq` |
+| `and` | `and` |
+| `or` | `or` |
+| `not` | `not` |
+| `++` | `concat` |
+| `\|` | `bits_or` |
+| `^` | `bits_xor` |
+| `&` | `bits_and` |
+| `<<` | `bits_shl` |
+| `>>` | `bits_shr` |
+| `<<<` | `bits_rotl` |
+| `>>>` | `bits_rotr` |
+| `~` | `bits_not` |
+
+The runtime function registry resolves these names via overload matching
+against the argument types. Namespaced aliases (e.g. `math:add`, `boolean:and`)
+are also recognized for backward compatibility.
 
 #### `boolean:` — Logic
 
@@ -445,8 +471,18 @@ name to definition.
 
 ### 4.1 Regular Functions
 
-Regular functions used by `map`, `filter`, and `flat_map` are registered
-with expression trees:
+Regular functions used by `map`, `filter`, and `flat_map` may be registered
+in two ways:
+
+- **Inline** — the function body is authored in `.gdbsp` source using
+  Grasp expression syntax (see [grasp-dbsp.md](grasp-dbsp.md)). The compiler
+  lowers the inline expression to the JSON format below.
+- **Externally** — the function body is provided as a JSON expression tree
+  in the function registry.
+
+Inline definitions override external ones when both exist for the same name.
+
+Example — external JSON registry entry:
 
 ```json
 {

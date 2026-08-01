@@ -5,6 +5,7 @@ Designed as a compilation target — human-readable, LLM-friendly, with external
 
 ## Companion documents
 
+- [syntax.md](syntax.md) — complete lexical and syntactic specification
 - [type-system.md](type-system.md) — complete type system: scalars, compounds, wrappers, assignability, temporal semantics
 - [type-inference.md](type-inference.md) — how types flow through the circuit
 - [compilation.md](compilation.md) — how `.gdbsp` source compiles to a deployable circuit
@@ -21,6 +22,7 @@ repeat identically (no-op); a conflicting repeat is an error.
 - Node definitions: `name := operator(args...)`
 - Type annotations: `name :: stream(type)` (mandatory for all source nodes)
 - Function declarations: `fn :: function((params) -> ret)`
+- Function definitions: `fn := function((params) -> body_expr)` (optional — body may also be provided externally via the function registry)
 - Aggregate function declarations: `fn :: aggregate_function((val) -> ret)`
 - Circuit definitions: `circuit name(key: internal, ...): ...` (see [circuits.md](circuits.md))
 - Fixpoint instantiation: `fp := fixpoint(name(key: expr, ...))` (see [fixpoint-circuits.md](fixpoint-circuits.md))
@@ -33,26 +35,10 @@ There are no output nodes in source code. The runtime selects which nodes serve
 as outputs externally — the same `.gdbsp` source can be used with different
 output selections.
 
-Forward references are allowed. The parser resolves all node names after reading
-the entire file.
+Forward references are allowed. The parser collects all declarations
+before resolving names.
 
-### Multiline node definitions
-
-Nodes may span multiple lines. The opening `(` may be followed by a newline,
-with arguments on subsequent lines, and the closing `)` on the same line as the
-last argument or on its own line:
-
-```
-merged := plus(
-  a,
-  b,
-  c
-)
-```
-
-Continuation lines must not start with `#`, must not contain `::` or `:=`,
-must not be empty, and must not be a bare `)`. Trailing commas on the last
-argument line are optional.
+See [syntax.md](syntax.md) for the complete lexical and syntactic specification.
 
 ## Types
 
@@ -131,31 +117,24 @@ through the circuit.
 ## Function declarations
 
 Functions are declared at top level and referenced by bare identifier in
-operator arguments. Function bodies are provided externally as JSON expression
-trees (see [stdlib.md](stdlib.md) §1).
+operator arguments.
 
-### Function
+### Typespec (required)
+
+Every function must have a typespec declaring its parameter types and return
+type:
 
 ```
 fn_name :: function((pos_type, ..., "key": kw_type, ...) -> return_type)
 ```
 
-Used with `map`, `filter`, `flat_map`. The function operates on a single row
-element (without weight). The operator handles weight propagation automatically.
-
 Parameters may be positional (bare type names, order-sensitive) or keyword
 (`"name": type`, order-insensitive). Positional params must come before keyword
-params. Example with mixed params:
+params.
 
 ```
 fn :: function((i64, "prefix": string) -> f64)
 ```
-
-The function's expression body is defined externally in the function registry
-(see [stdlib.md](stdlib.md) §1). The single parameter is conventionally named
-`"row"` and accessed via `{"arg": "row"}` in the expression tree.
-Pass-through is simply `{"arg": "row"}`; individual fields are accessed via
-`struct:get`: `{"call": "struct:get", "args": [{"arg": "row"}], "kwargs": {"key": {"type": "string", "value": "col"}}}`.
 
 Zero-parameter functions use empty parentheses:
 
@@ -163,21 +142,79 @@ Zero-parameter functions use empty parentheses:
 fn_name :: function(() -> return_type)
 ```
 
+Type variables (uppercase identifiers like `T`, `V`, `K`) are allowed in
+function and aggregate declarations and are resolved by unification at each
+call site (see [type-system.md](type-system.md) §7).
+
+### Body (optional)
+
+A function body may be defined inline using the `:=` syntax:
+
+```
+fn_name := function((params) -> body_expr)
+```
+
+Params in the body definition are **untyped** — types come exclusively from
+the typespec. Positional params precede keyword params:
+
+```
+add :: function((i64, i64) -> i64)
+add := function((x, y) -> x + y)
+```
+
+Keyword params use the shorthand `name:` (key and variable have the same name)
+or explicit `key: varname`:
+
+```
+set_flag :: function((i64, flag: boolean) -> i64)
+set_flag := function((x, flag:) -> x + flag)
+```
+
+The body expression uses Grasp expression syntax — arithmetic, comparisons,
+boolean logic, function calls, struct construction, array/map literals, dot
+access, and subscripts. See [syntax.md](syntax.md) §6 for the full expression
+grammar.
+
+The typespec and definition may appear in any order. If a typespec has no
+matching `:= function(...)` definition, the function body is sourced from the
+external JSON function registry (see [stdlib.md](stdlib.md) §4). If both an
+inline definition and an external body exist, the inline definition wins.
+
+Aggregate expressions (`count<>`, `sum<col>`) and closure expressions
+(`closure(...)`) are not allowed in regular function bodies — they are reserved
+for aggregate functions and future work respectively.
+
+Inline function bodies currently require **exact (concrete) types** in the
+typespec. Generic functions with type variables must use externally-provided
+JSON bodies. Support for generic inline bodies will be added when
+`gdbsp_type.erl` gains unification.
+
+### Usage
+
 | Operator | Function signature | Description |
 |----------|-------------------|-------------|
 | `map` | `(row_type) -> new_row_type` | Transform one row |
 | `filter` | `(row_type) -> enum("false", "true")` | Keep or discard |
 | `flat_map` | `(row_type) -> array(new_row_type)` | Expand 0..N rows |
 
-Type variables are allowed in place of concrete types; they are resolved by
-unification at each call site (see [type-system.md](type-system.md) §7).
+### Examples
 
-Examples:
+Typespec-only (body from external registry):
 
 ```
 passthrough :: function((struct("from": i64, "to": i64)) -> struct("from": i64, "to": i64))
 salary_ge_150 :: function((struct("name": string("UTF-8"), "dept": i64, "sal": i64)) -> enum("false", "true"))
 expand_items :: function((struct("id": i64, "items": array(string("UTF-8")))) -> array(struct("id": i64, "item": string("UTF-8"))))
+```
+
+With inline body:
+
+```
+rename_from_to :: function((struct("from": i64, "to": i64)) -> struct("from": i64, "z": i64))
+rename_from_to := function((row) -> struct("from": row.from, "z": row.to))
+
+is_positive :: function((i64) -> enum("false", "true"))
+is_positive := function((x) -> x > 0)
 ```
 
 ### Aggregate function
@@ -279,50 +316,44 @@ anc_deltas := differentiate(anc_state)
 
 ## Grammar
 
+See [syntax.md](syntax.md) for the complete lexical and syntactic specification.
+
 ```
-file       := (node_def | type_ann | fn_decl | agg_decl | comment)*
+program    := declaration*
 
-node_def   := NAME ":=" OPERATOR "(" args? ")" NEWLINE
-            | NAME ":=" OPERATOR "(" NEWLINE arg ("," arg)* ","? NEWLINE ")"
+declaration := node_def | typespec | fn_def | circuit_def | comment
 
-type_ann   := NAME "::" "stream" "(" type ")" NEWLINE
+node_def   := NAME ":=" op_name "(" args? ")"
+            | NAME ":=" circuit_name "(" kw_args ")"
+            | NAME ":=" NAME "." NAME
+            | NAME ":=" NAME
 
-fn_decl    := NAME "::" "function" "(" "(" params? ")" "->" type ")" NEWLINE
+typespec   := NAME "::" "stream" "(" type ")"
+            | NAME "::" "function" "(" "(" fn_type_params? ")" "->" type ")"
+            | NAME "::" "aggregate_function" "(" "(" fn_type_params? ")" "->" type ")"
 
-agg_decl   := NAME "::" "aggregate_function" "(" "(" param ")" "->" type ")" NEWLINE
-
-args       := arg ("," arg)*
-arg        := NAME | STRING | kw_arg
-kw_arg     := NAME ":" "[" STRING ("," STRING)* "]"
-            | NAME ":" STRING
-
-params     := type ("," type)*
-param      := type
-
-type       := scalar
-            | "stream" "(" type ")"
-            | "struct" "(" field_types ")"
-            | "array" "(" type ")"
-            | "array" "(" type "," INTEGER ("," INTEGER)* ")"
-            | "map" "(" type "," type ")"
-            | "optional" "(" type ")"
-            | "closure" "(" "(" params? ")" "->" type ")"
-            | "result_equivalent_closure" "(" "(" params? ")" "->" type ")"
-            | NAME            -- type variable (uppercase first letter)
-
-scalar     := "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64"
-            | "integer" | "f32" | "f64" | "numeric" | "numeric" "(" INTEGER "," INTEGER ")"
-            | "string" "(" STRING ")" | "string_with_encoding"
-            | "bytes" | "bytes" "(" INTEGER ")" | "bits" | "bits" "(" INTEGER ")"
-            | "enum" "(" STRING ("," STRING)* ")"
-            | "date" | "time" | "timestamp" | "timestamp_with_timezone" | "interval"
-            | "json" | "dynamic"
-
-field_types := field_type ("," field_type)*
-field_type  := (NAME | STRING) ":" type
+fn_def     := NAME ":=" "function" "(" fn_params "->" expr ")"
 
 comment    := "#" .* NEWLINE
 ```
+
+| Operator | Args | Semantics |
+|----------|------|-----------|
+| `source` | `"table"` | Circuit entry point. Mandatory `:: stream(...)` annotation. |
+| `delay` | `node` | z⁻¹ — one-step delay. |
+| `integrate` | `node` | Accumulate deltas into a Z-set. |
+| `differentiate` | `node` | Compute delta of accumulated state. |
+| `distinct` | `node` | Collapse opposite-weight pairs. |
+| `plus` | `node, ...` | Merge N streams by summing weights. |
+| `neg` | `node` | Invert weight sign. |
+| `map` | `node, fn` | 1→1 row transform. |
+| `flat_map` | `node, fn` | 1→N row expansion. |
+| `join` | `left, right, on: ["f", ...]` | Equi-join. |
+| `aggregate` | `node, fn, by: ["g", ...], value: "v", as: "r"` | Group-by and fold. |
+| `filter` | `node, fn` | Keep or discard rows. |
+| `project` | `node, ["f", ...]` | Drop unlisted fields. |
+| `antijoin` | `left, right, on: ["f", ...]` | Left rows with no right match. |
+| `fixpoint` | `circuit_name, kw_args` | Iterate circuit to convergence. |
 
 ## Naming conventions
 

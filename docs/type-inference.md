@@ -14,6 +14,12 @@ is stored in each lowered node and carried forward to the circuit graph,
 used by the compiler to allocate operators and by the runtime to
 validate input data.
 
+Function-level type checking for inline function bodies runs as a pre-pass
+before lowering — it verifies that each function body's return type matches
+its declared typespec. After this pre-pass, all function bodies are available
+as JSON expression trees in the merged function registry, and stream-level
+inference proceeds as described below.
+
 Type inference uses **exact type equality** via canonical text
 comparison. Assignability and widening (see
 [type-system.md](type-system.md) §6) are applied only at runtime during
@@ -151,17 +157,19 @@ is used, the return type is inferred from the input value type.
 
 ---
 
-## 6. Function Return Type Inference
+## 6. Expression Type Inference
 
 For `map` and `filter` operators, the return type is inferred from the
-function definition in the function registry:
+function definition in the function registry. This applies to both inline
+function bodies (compiled to JSON before inference) and externally-provided
+JSON bodies:
 
-- **Arg reference** (`{"arg": "row"}`): output type is the input struct type (pass-through)
-- **Struct construction** (`{"call": "struct", "kwargs": {...}}`): output type is a struct with fields matching the kwargs, each typed by its expression
-- **`struct:get`** (`{"call": "struct:get", "args": [{"arg": "row"}], "kwargs": {"key": {"type": "string", "value": "col"}}}`): output type is the specific column's type from the input schema. When the key is a string literal, type inference resolves the exact field type; when the key is computed at runtime, type inference falls back to `dynamic`.
-- **`struct:set`** (`{"call": "struct:set", "args": [{"arg": "row"}, value], "kwargs": {"key": ...}}`): output type is the input struct type with the specified field's type updated to the value's type
-- **Comparison functions** (`gte`, `lt`, `eq`, etc.): output type is `enum("false", "true")`
-- **Scalar functions** (`string:upper`, `integer:add`, etc.): output type follows the function's declared return type
+- **Arg reference** (`{"arg": N}`): output type is the declared parameter type from the function's typespec.
+- **Struct construction** (`{"call": "struct", "kwargs": {...}}`): output type is a struct with fields matching the kwargs, each typed by its expression.
+- **`struct:get`** (`{"call": "struct:get", "args": [expr], "kwargs": {"key": {...}}}`): when the key is a string literal, the output type is the specific field's type from the input struct schema; when computed at runtime, falls back to `dynamic`.
+- **`struct:set`** (`{"call": "struct:set", "args": [expr, value], "kwargs": {"key": ...}}`): output type is the input struct type with the specified field's type updated.
+- **Comparison functions** (`eq`, `lt`, `gt`, etc.): output type is `enum("false", "true")`.
+- **Other functions** (`add`, `string:upper`, etc.): output type follows the function's declared return type from `gdbsp_builtins`.
 
 ---
 
