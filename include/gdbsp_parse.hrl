@@ -11,8 +11,8 @@
 -record(gdbsp_typespec, {
     name   :: binary(),    % declared name
     spec   :: {type, term()}
-            | {function, [term()], term()}
-            | {aggregate_function, [term()], term()},
+            | {function, [term()], #{binary() => term()}, term()}
+            | {aggregate_function, [term()], #{binary() => term()}, term()},
     line   :: pos_integer()
 }).
 

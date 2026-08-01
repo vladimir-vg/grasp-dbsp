@@ -117,7 +117,7 @@ exact_match(_, dynamic) -> true;
 exact_match(Same, Same) when is_atom(Same) -> true;
 exact_match({optional, A}, {optional, B}) -> exact_match(A, B);
 exact_match({closure, AP, AE}, {closure, BP, BE}) ->
-    lists:sort(AP) =:= lists:sort(BP) andalso exact_match(AE, BE);
+    closure_params_exact_match(AP, BP) andalso exact_match(AE, BE);
 exact_match({array, AE, _}, {array, BE, _}) -> exact_match(AE, BE);
 exact_match({map, AK, AV}, {map, BK, BV}) ->
     exact_match(AK, BK) andalso exact_match(AV, BV);
@@ -132,6 +132,11 @@ exact_match({type_var, _}, _) -> true;
 exact_match(_, {type_var, _}) -> true;
 exact_match({struct, _, _}, {struct, _, _}) -> true;
 exact_match(_, _) -> false.
+
+closure_params_exact_match(AP, BP) ->
+    {APos, ANamed} = lists:partition(fun({Name, _}) -> Name =:= undefined end, AP),
+    {BPos, BNamed} = lists:partition(fun({Name, _}) -> Name =:= undefined end, BP),
+    APos =:= BPos andalso lists:sort(ANamed) =:= lists:sort(BNamed).
 
 %%====================================================================
 %% Implementation reference helpers

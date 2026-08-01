@@ -187,15 +187,36 @@ to_binary(A) when is_atom(A) -> atom_to_binary(A, utf8).
 -spec parse_type_grasp(binary() | list() | map()) ->
     {ok, gdbsp_column_type()} | {error, term()}.
 
-parse_closure_params(#{<<"params">> := ParamsMap}) when is_map(ParamsMap) ->
-    maps:fold(fun(_Name, _Type, {error, _} = E) -> E;
-                 (Name, Type, {ok, Acc}) ->
-                     case parse_type_grasp(Type) of
-                         {ok, T} -> {ok, [{to_binary(Name), T} | Acc]};
-                         Error -> Error
-                     end
-              end, {ok, []}, ParamsMap);
-parse_closure_params(_) -> {ok, []}.
+parse_closure_params(Obj) ->
+    Named = case Obj of
+        #{<<"params">> := ParamsMap} when is_map(ParamsMap) ->
+            maps:fold(fun(_Name, _Type, {error, _} = E) -> E;
+                         (Name, Type, {ok, Acc}) ->
+                             case parse_type_grasp(Type) of
+                                 {ok, T} -> {ok, [{to_binary(Name), T} | Acc]};
+                                 Error -> Error
+                             end
+                      end, {ok, []}, ParamsMap);
+        _ -> {ok, []}
+    end,
+    Pos = case Obj of
+        #{<<"positional">> := PosList} when is_list(PosList) ->
+            parse_positional_params(PosList, {ok, []});
+        _ -> {ok, []}
+    end,
+    case {Named, Pos} of
+        {{ok, NamedAcc}, {ok, PosAcc}} ->
+            {ok, PosAcc ++ NamedAcc};
+        {{error, _} = E, _} -> E;
+        {_, {error, _} = E} -> E
+    end.
+
+parse_positional_params([], Acc) -> Acc;
+parse_positional_params([Type | Rest], {ok, Acc}) ->
+    case parse_type_grasp(Type) of
+        {ok, T} -> parse_positional_params(Rest, {ok, [{undefined, T} | Acc]});
+        Error -> Error
+    end.
 
 %%====================================================================
 %% type_to_json — gdbsp_column_type() → JSON type representation
@@ -236,10 +257,18 @@ type_to_json({optional, T}) ->
 type_to_json({closure, [], T}) ->
     #{<<"closure">> => #{<<"return">> => type_to_json(T)}};
 type_to_json({closure, Params, T}) ->
-    ParamsMap = maps:from_list(
-        [{Name, type_to_json(PT)} || {Name, PT} <- Params]),
-    #{<<"closure">> => #{<<"params">> => ParamsMap,
-                         <<"return">> => type_to_json(T)}};
+    {PosParams, NamedPairs} = lists:partition(
+        fun({Name, _}) -> Name =:= undefined end, Params),
+    PosList = [type_to_json(PT) || {undefined, PT} <- PosParams],
+    NamedMap = maps:from_list(
+        [{Name, type_to_json(PT)} || {Name, PT} <- NamedPairs]),
+    Inner = case {PosList, map_size(NamedMap)} of
+        {[], 0} -> #{<<"return">> => type_to_json(T)};
+        {[], _} -> #{<<"params">> => NamedMap, <<"return">> => type_to_json(T)};
+        {_, 0} -> #{<<"positional">> => PosList, <<"return">> => type_to_json(T)};
+        _ -> #{<<"positional">> => PosList, <<"params">> => NamedMap, <<"return">> => type_to_json(T)}
+    end,
+    #{<<"closure">> => Inner};
 type_to_json({numeric, P, S}) ->
     #{<<"numeric">> => #{<<"precision">> => P, <<"scale">> => S}};
 type_to_json({bytes, N}) ->
@@ -320,12 +349,16 @@ canonical_text_inner({optional, T}) ->
 canonical_text_inner({closure, [], T}) ->
     <<"closure(->", (canonical_text_inner(T))/binary, ")">>;
 canonical_text_inner({closure, Params, T}) ->
-    Sorted = lists:sort(Params),
-    Parts = [<<"\"", Name/binary, "\":", (canonical_text_inner(PT))/binary>>
-             || {Name, PT} <- Sorted],
+    {PosParams, NamedPairs} = lists:partition(
+        fun({Name, _}) -> Name =:= undefined end, Params),
+    PosParts = [canonical_text_inner(PT) || {undefined, PT} <- PosParams],
+    SortedNamed = lists:sort(NamedPairs),
+    NamedParts = [<<"\"", Name/binary, "\":", (canonical_text_inner(PT))/binary>>
+                  || {Name, PT} <- SortedNamed],
+    AllParts = PosParts ++ NamedParts,
     Inside = lists:foldl(fun(P, <<>>) -> P;
                             (P, Acc) -> <<Acc/binary, ",", P/binary>>
-                         end, <<>>, Parts),
+                         end, <<>>, AllParts),
     <<"closure(", Inside/binary, "->", (canonical_text_inner(T))/binary, ")">>;
 canonical_text_inner({array, T, varsize}) ->
     <<"array(", (canonical_text_inner(T))/binary, ")">>;
@@ -567,15 +600,35 @@ parse_ct_qs_content(<<>>, _Acc) ->
 parse_ct_closure_params(<<"->", _/binary>> = Rest, Acc) ->
     {lists:reverse(Acc), Rest};
 parse_ct_closure_params(Bin, Acc) ->
-    {Name, Rest0} = parse_ct_quoted_string(Bin),
-    Rest1 = expect_ct(<<":">>, Rest0),
-    {Type, Rest2} = parse_ct(Rest1),
-    case Rest2 of
-        <<",", Rest3/binary>> ->
-            parse_ct_closure_params(Rest3, [{Name, Type} | Acc]);
+    Trimmed0 = skip_ct_space(Bin),
+    case Trimmed0 of
+        <<"->", _/binary>> = Rest ->
+            {lists:reverse(Acc), Rest};
+        <<$", _/binary>> ->
+            {Name, Rest0} = parse_ct_quoted_string(Trimmed0),
+            Rest1 = expect_ct(<<":">>, Rest0),
+            {Type, Rest2} = parse_ct(Rest1),
+            case skip_ct_space(Rest2) of
+                <<",", Rest3/binary>> ->
+                    parse_ct_closure_params(Rest3, [{Name, Type} | Acc]);
+                _ ->
+                    {lists:reverse([{Name, Type} | Acc]), Rest2}
+            end;
         _ ->
-            {lists:reverse([{Name, Type} | Acc]), Rest2}
+            {Type, Rest0} = parse_ct(Trimmed0),
+            case skip_ct_space(Rest0) of
+                <<",", Rest1/binary>> ->
+                    parse_ct_closure_params(Rest1, [{undefined, Type} | Acc]);
+                _ ->
+                    {lists:reverse([{undefined, Type} | Acc]), Rest0}
+            end
     end.
+
+skip_ct_space(<<$\s, Rest/binary>>) -> skip_ct_space(Rest);
+skip_ct_space(<<$\t, Rest/binary>>) -> skip_ct_space(Rest);
+skip_ct_space(<<$\r, Rest/binary>>) -> skip_ct_space(Rest);
+skip_ct_space(<<$\n, Rest/binary>>) -> skip_ct_space(Rest);
+skip_ct_space(Bin) -> Bin.
 
 %% ── expect_ct ───────────────────────────────────────────────────────
 
@@ -666,6 +719,8 @@ collapse({type_var, _} = TV) -> TV.
 
 merge_closure_params([], Acc) ->
     {ok, lists:reverse(Acc)};
+merge_closure_params([{Name, Type} | Rest], Acc) when Name =:= undefined ->
+    merge_closure_params(Rest, [{Name, Type} | Acc]);
 merge_closure_params([{Name, Type} | Rest], Acc) ->
     case lists:keyfind(Name, 1, Acc) of
         {Name, Type} -> merge_closure_params(Rest, Acc);
@@ -684,7 +739,7 @@ is_assignable(Src, Tgt) ->
 is_assignable_inner(Src, Src) -> true;
 is_assignable_inner(absent, {optional, _}) -> true;
 is_assignable_inner(absent, _) -> false;
-is_assignable_inner(Src, dynamic) -> true;
+is_assignable_inner(_Src, dynamic) -> true;
 is_assignable_inner({dynamic, _}, dynamic) -> true;
 is_assignable_inner({dynamic, T}, Tgt) -> is_assignable_inner(T, Tgt);
 is_assignable_inner(Src, {dynamic, T}) -> is_assignable_inner(Src, T);
@@ -725,9 +780,27 @@ is_assignable_to_closure({closure, [], SrcInner}, {closure, [], TgtInner}) ->
 is_assignable_to_closure(Src, {closure, [], TgtInner}) ->
     is_assignable_inner(Src, TgtInner);
 is_assignable_to_closure({closure, SrcParams, SrcInner}, {closure, TgtParams, TgtInner}) ->
-    lists:sort(SrcParams) =:= lists:sort(TgtParams) andalso
+    {SrcPos, SrcNamed} = split_closure_params(SrcParams),
+    {TgtPos, TgtNamed} = split_closure_params(TgtParams),
+    pos_params_assignable(SrcPos, TgtPos) andalso
+    named_params_assignable(SrcNamed, TgtNamed) andalso
     is_assignable_inner(SrcInner, TgtInner);
 is_assignable_to_closure(_, _) -> false.
+
+split_closure_params(Params) ->
+    lists:partition(fun({Name, _}) -> Name =:= undefined end, Params).
+
+pos_params_assignable([], []) -> true;
+pos_params_assignable([{undefined, S} | SRest], [{undefined, T} | TRest]) ->
+    is_assignable_inner(S, T) andalso pos_params_assignable(SRest, TRest);
+pos_params_assignable(_, _) -> false.
+
+named_params_assignable(SrcNamed, TgtNamed) ->
+    SortedSrc = lists:sort(SrcNamed),
+    SortedTgt = lists:sort(TgtNamed),
+    length(SortedSrc) =:= length(SortedTgt) andalso
+    lists:all(fun({{N, ST}, {N, TT}}) -> is_assignable_inner(ST, TT) end,
+              lists:zip(SortedSrc, SortedTgt)).
 
 is_assignable_to_numeric({numeric, _, _}) -> true;
 is_assignable_to_numeric(integer) -> true;
@@ -895,10 +968,16 @@ widen_impl(T, {optional, S}) ->
         {ok, W} -> {ok, {optional, W}};
         Error -> Error
     end;
-widen_impl({closure, P, S}, {closure, P, T}) ->
-    case widen_impl(S, T) of
-        {ok, W} -> {ok, {closure, P, W}};
-        Error -> Error
+widen_impl({closure, SP, S}, {closure, TP, T}) ->
+    {SPos, SNamed} = split_closure_params(SP),
+    {TPos, TNamed} = split_closure_params(TP),
+    case SPos =:= TPos andalso lists:sort(SNamed) =:= lists:sort(TNamed) of
+        true ->
+            case widen_impl(S, T) of
+                {ok, W} -> {ok, {closure, SP, W}};
+                Error -> Error
+            end;
+        false -> {error, incompatible}
     end;
 widen_impl(S, {closure, [], T}) ->
     case widen_impl(S, T) of

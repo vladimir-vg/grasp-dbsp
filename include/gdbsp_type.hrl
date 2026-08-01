@@ -26,7 +26,7 @@
     | type   %% Internal-only: meta-type; {value, type, T} wraps a gdbsp_column_type()
     | {stream, gdbsp_column_type()}
     | {optional, gdbsp_column_type()}
-    | {closure, [{binary(), gdbsp_column_type()}], gdbsp_column_type()}
+    | {closure, [{binary() | undefined, gdbsp_column_type()}], gdbsp_column_type()}
     | {array, gdbsp_column_type(), varsize | pos_integer() | [pos_integer()]}
     | {map, gdbsp_column_type(), gdbsp_column_type()}
     | {struct, #{binary() => gdbsp_column_type()}, exact | wildcard | binary()}
@@ -58,7 +58,7 @@
     | {json, gdbsp_column_type()}
     | absent   %% sole legal term: {value, absent, absent}
     | {optional, gdbsp_column_type()}
-    | {closure, [{binary(), gdbsp_column_type()}], gdbsp_column_type()}
+    | {closure, [{binary() | undefined, gdbsp_column_type()}], gdbsp_column_type()}
     | {array, gdbsp_column_type(), varsize | pos_integer() | [pos_integer()]}
     | {map, gdbsp_column_type(), gdbsp_column_type()}
     | {struct, #{binary() => gdbsp_column_type()}, exact | wildcard | binary()}

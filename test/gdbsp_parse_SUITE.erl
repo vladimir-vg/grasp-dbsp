@@ -193,12 +193,16 @@ norm_arg_val(V) -> V.
 
 typespec_to_stmt(#gdbsp_typespec{name = N, spec = {type, T}, line = L}) ->
     #{name => b2a(N), type => norm_type(T), line => L};
-typespec_to_stmt(#gdbsp_typespec{name = N, spec = {Kind, Params, Ret}, line = L}) ->
-    #{name   => b2a(N),
-      kind   => Kind,
-      params => [norm_type(P) || P <- Params],
-      return => norm_type(Ret),
-      line   => L}.
+typespec_to_stmt(#gdbsp_typespec{name = N, spec = {Kind, PosParams, KwParams, Ret}, line = L}) ->
+    Base = #{name   => b2a(N),
+             kind   => Kind,
+             params => [norm_type(P) || P <- PosParams],
+             return => norm_type(Ret),
+             line   => L},
+    case map_size(KwParams) of
+        0 -> Base;
+        _ -> Base#{kwparams => maps:map(fun(_K, V) -> norm_type(V) end, KwParams)}
+    end.
 
 %%--------------------------------------------------------------------
 %% Type normalization — Erlang type term → fixture-comparable form
@@ -215,8 +219,17 @@ norm_type({dynamic, T}) -> #{dynamic => norm_type(T)};
 norm_type({optional, T}) -> #{optional => norm_type(T)};
 norm_type({closure, [], T}) -> #{closure => #{'return' => norm_type(T)}};
 norm_type({closure, Ps, T}) ->
-    PMap = maps:from_list([{b2a(K), norm_type(V)} || {K, V} <- Ps]),
-    #{closure => #{params => PMap, 'return' => norm_type(T)}};
+    {PosParams, NamedPairs} = lists:partition(
+        fun({Name, _}) -> Name =:= undefined end, Ps),
+    PosList = [norm_type(PT) || {undefined, PT} <- PosParams],
+    PMap = maps:from_list([{b2a(K), norm_type(V)} || {K, V} <- NamedPairs]),
+    Inner = case {PosList, map_size(PMap)} of
+        {[], 0} -> #{'return' => norm_type(T)};
+        {[], _} -> #{params => PMap, 'return' => norm_type(T)};
+        {_, 0} -> #{positional => PosList, 'return' => norm_type(T)};
+        _ -> #{positional => PosList, params => PMap, 'return' => norm_type(T)}
+    end,
+    #{closure => Inner};
 norm_type({numeric, P, S}) -> #{numeric => #{precision => P, scale => S}};
 norm_type({bytes, N}) -> #{bytes => #{size => N}};
 norm_type({bits, N}) -> #{bits => #{size => N}};

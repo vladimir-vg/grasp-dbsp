@@ -750,14 +750,69 @@ parse_closure_type(Kind, Bin, Line) ->
                 <<>> ->
                     {Kind, [], Ret};
                 ParamsTrimmed ->
-                    ParamTypes = lists:map(fun(P) ->
-                        parse_type_spec(trim(P), Line)
-                    end, split_top(ParamsTrimmed, <<",">>)),
-                    {Kind, [{<<>>, PT} || PT <- ParamTypes], Ret}
+                    {PosParams, KwPairs} = parse_mixed_params(ParamsTrimmed, Line),
+                    Params = [{undefined, PT} || PT <- PosParams] ++ KwPairs,
+                    {Kind, Params, Ret}
             end;
         _ ->
             parse_error(Line, "expected '(' in closure type")
     end.
+
+%%====================================================================
+%% Mixed position + keyword param parsing for declarations and types
+%%====================================================================
+
+parse_mixed_params(<<>>, _Line) ->
+    {[], []};
+parse_mixed_params(Bin, Line) ->
+    Tokens = split_top(trim_trailing_comma(Bin), <<",">>),
+    parse_mixed_param_list(Tokens, Line, [], []).
+
+parse_mixed_param_list([], _Line, PosAcc, KwAcc) ->
+    {lists:reverse(PosAcc), lists:reverse(KwAcc)};
+parse_mixed_param_list([Tok | Rest], Line, PosAcc, KwAcc) ->
+    case split_kw_param(trim(Tok)) of
+        {true, Name, TypeBin} when KwAcc =:= [] ->
+            Name1 = case Name of
+                <<"\"", _/binary>> -> dequote(Name);
+                _ -> Name
+            end,
+            Type = parse_type_spec(trim(TypeBin), Line),
+            parse_mixed_param_list(Rest, Line, PosAcc, [{Name1, Type} | KwAcc]);
+        {true, _Name, _TypeBin} ->
+            parse_error(Line, "keyword params must come after positional params");
+        false when KwAcc =:= [] ->
+            Type = parse_type_spec(trim(Tok), Line),
+            parse_mixed_param_list(Rest, Line, [Type | PosAcc], KwAcc);
+        false ->
+            parse_error(Line, "positional params must come before keyword params")
+    end.
+
+split_kw_param(<<>>) -> false;
+split_kw_param(Bin) ->
+    split_kw_param(Bin, 0, <<>>).
+
+split_kw_param(<<>>, _Depth, _Acc) -> false;
+split_kw_param(<<$\\, C, Rest/binary>>, Depth, Acc) ->
+    split_kw_param(Rest, Depth, <<Acc/binary, $\\, C>>);
+split_kw_param(<<$", Rest/binary>>, Depth, Acc) ->
+    split_kw_param_quote(Rest, Depth, <<Acc/binary, $">>);
+split_kw_param(<<$(, Rest/binary>>, Depth, Acc) ->
+    split_kw_param(Rest, Depth + 1, <<Acc/binary, $(>>);
+split_kw_param(<<$), Rest/binary>>, Depth, Acc) when Depth > 0 ->
+    split_kw_param(Rest, Depth - 1, <<Acc/binary, $)>>);
+split_kw_param(<<$:, Rest/binary>>, 0, Acc) ->
+    {true, trim(Acc), trim(Rest)};
+split_kw_param(<<C, Rest/binary>>, Depth, Acc) ->
+    split_kw_param(Rest, Depth, <<Acc/binary, C>>).
+
+split_kw_param_quote(<<>>, _Depth, _Acc) -> false;
+split_kw_param_quote(<<$", Rest/binary>>, Depth, Acc) ->
+    split_kw_param(Rest, Depth, <<Acc/binary, $">>);
+split_kw_param_quote(<<$\\, C, Rest/binary>>, Depth, Acc) ->
+    split_kw_param_quote(Rest, Depth, <<Acc/binary, $\\, C>>);
+split_kw_param_quote(<<C, Rest/binary>>, Depth, Acc) ->
+    split_kw_param_quote(Rest, Depth, <<Acc/binary, C>>).
 
 %%====================================================================
 %% Function declarations
@@ -770,29 +825,33 @@ parse_fn_decl(Name, Kind, Rest0, St, Rest) ->
             {ParamsBin, RetBin} = split_fn_sig(Clean, St#st.line),
             Ret = parse_type_spec(trim(RetBin), St#st.line),
             case Kind of
-                aggregate_function ->
+                aggregate_function when ParamsBin =:= <<>> ->
                     Spec = #gdbsp_typespec{
                         name = Name,
-                        spec = {aggregate_function,
-                                [parse_type_spec(trim(ParamsBin), St#st.line)],
-                                Ret},
+                        spec = {aggregate_function, [], #{}, Ret},
+                        line = St#st.line
+                    },
+                    parse_lines(Rest, St#st{typespecs = [Spec | St#st.typespecs]});
+                aggregate_function ->
+                    {PosParams, KwPairs} = parse_mixed_params(ParamsBin, St#st.line),
+                    Spec = #gdbsp_typespec{
+                        name = Name,
+                        spec = {aggregate_function, PosParams, maps:from_list(KwPairs), Ret},
                         line = St#st.line
                     },
                     parse_lines(Rest, St#st{typespecs = [Spec | St#st.typespecs]});
                 function when ParamsBin =:= <<>> ->
                     Spec = #gdbsp_typespec{
                         name = Name,
-                        spec = {function, [], Ret},
+                        spec = {function, [], #{}, Ret},
                         line = St#st.line
                     },
                     parse_lines(Rest, St#st{typespecs = [Spec | St#st.typespecs]});
                 function ->
-                    Params = lists:map(fun(P) ->
-                        parse_type_spec(trim(P), St#st.line)
-                    end, split_top(ParamsBin, <<",">>)),
+                    {PosParams, KwPairs} = parse_mixed_params(ParamsBin, St#st.line),
                     Spec = #gdbsp_typespec{
                         name = Name,
-                        spec = {function, Params, Ret},
+                        spec = {function, PosParams, maps:from_list(KwPairs), Ret},
                         line = St#st.line
                     },
                     parse_lines(Rest, St#st{typespecs = [Spec | St#st.typespecs]})
