@@ -19,14 +19,6 @@ Rules.
 and                    : {token, {and_keyword, TokenLine}}.
 or                     : {token, {or_keyword, TokenLine}}.
 not                    : {token, {not_keyword, TokenLine}}.
-true                   : {token, {true_literal, TokenLine}}.
-false                  : {token, {false_literal, TokenLine}}.
-NULL                   : {token, {null_literal, TokenLine}}.
-ABSENT                 : {token, {absent_literal, TokenLine}}.
-input                  : {token, {input_keyword, TokenLine}}.
-closure                : {token, {closure_keyword, TokenLine}}.
-eval                   : {token, {eval_keyword, TokenLine}}.
-enum                   : {token, {enum_keyword, TokenLine}}.
 
 <-                     : {token, {larrow, TokenLine}}.
 :=                     : {token, {walrus, TokenLine}}.

@@ -19,8 +19,7 @@ string(Bin) ->
         S = binary_to_list(Bin),
         {ok, Raw, _EndLine} = gdbsp_lexer_core:string(S),
         Stripped = drop_skips(Raw),
-        Replaced = replace_null_absent(Stripped),
-        Marked = insert_body_markers(Replaced),
+        Marked = insert_body_markers(Stripped),
         {ok, Marked}
     catch
         C:E ->
@@ -40,18 +39,6 @@ drop_skips(Tokens) ->
         end,
         Tokens
     ).
-
-%%====================================================================
-%% NULL → absent_literal, identifier "null" → null_symbol
-%%====================================================================
-
-replace_null_absent(Tokens) ->
-    [case T of
-         {null_literal, L} -> {absent_literal, L};
-         {identifier, L, <<"ABSENT">>} -> {absent_literal, L};
-         {identifier, L, <<"null">>} -> {null_symbol, L};
-         _ -> T
-     end || T <- Tokens].
 
 %%====================================================================
 %% Circuit body indentation

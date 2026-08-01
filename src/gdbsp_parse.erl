@@ -1,18 +1,14 @@
+%%%-------------------------------------------------------------------
+%%% @doc Token-based parser for .gdbsp source.
+%%% Consumes the token stream from gdbsp_lexer and produces #gdbsp_program{}.
+%%% @end
+%%%-------------------------------------------------------------------
 -module(gdbsp_parse).
 
 -export([parse/2, parse_string/2]).
 
 -include("gdbsp_parse.hrl").
-
--import(gdbsp_string_util, [trim/1, trim_left/1, trim_right/1,
-        dequote/1, split_top/2]).
-
--record(st, {
-    line       = 0 :: pos_integer(),
-    nodes      = [] :: [#gdbsp_node_def{}],
-    typespecs  = [] :: [#gdbsp_typespec{}],
-    circuits   = [] :: [#gdbsp_circuit_def{}]
-}).
+-include("gdbsp_type.hrl").
 
 %%====================================================================
 %% Public API
@@ -29,658 +25,404 @@ parse(File, _Opts) ->
 -spec parse_string(binary(), map()) ->
     {ok, #gdbsp_program{}} | {error, term()}.
 parse_string(Bin, _Opts) ->
-    Lines = binary:split(Bin, <<"\n">>, [global]),
-    try parse_lines(Lines, #st{}) of
-        St ->
-            Prog = #gdbsp_program{
-                nodes     = lists:reverse(St#st.nodes),
-                typespecs = lists:reverse(St#st.typespecs),
-                circuits  = lists:reverse(St#st.circuits)
-            },
-            {ok, Prog}
-    catch
-        throw:{parse_error, Line, Msg} ->
-            {error, {Line, Msg}};
-        throw:{parse_error, Msg} ->
-            {error, {1, Msg}}
+    case gdbsp_lexer:string(Bin) of
+        {ok, Tokens} ->
+            try
+                {Nodes, TSs, Circuits} = parse_declarations(Tokens, [], [], []),
+                Prog = #gdbsp_program{
+                    nodes     = lists:reverse(Nodes),
+                    typespecs = lists:reverse(TSs),
+                    circuits  = lists:reverse(Circuits)
+                },
+                {ok, Prog}
+            catch
+                throw:{parse_error, Line, Msg} ->
+                    {error, {Line, Msg}}
+            end;
+        {error, _} = Err ->
+            Err
     end.
 
 %%====================================================================
-%% Line processing
+%% Top-level — collect declarations
 %%====================================================================
 
-parse_lines([], St) -> St;
-parse_lines([<<>> | Rest], St) ->
-    parse_lines(Rest, St#st{line = St#st.line + 1});
-parse_lines([Line0 | Rest], St0) ->
-    Line = trim_right(Line0),
-    St = St0#st{line = St0#st.line + 1},
-    case Line of
-        <<"#", _/binary>> -> parse_lines(Rest, St);
-        <<>> -> parse_lines(Rest, St);
-        <<"circuit ", _/binary>> ->
-            parse_circuit_def(Line, St, Rest);
-        _ ->
-            case try_node_def(Line, St, Rest) of
-                {done, St2} ->
-                    St2;
-                false ->
-                    parse_decl(Line, St, Rest)
-            end
-    end.
-
-parse_circuit_def(Line, St, Rest) ->
-    case parse_circuit_header(Line, St#st.line) of
-        {ok, {Name, Params}} ->
-            {BodyLines, Remaining} = collect_circuit_body(Rest, []),
-            BodyNodes = lists:map(
-                fun(BodyLine) ->
-                    case try_node_def_no_multi(BodyLine, St) of
-                        {ok, Node} -> Node;
-                        {error, ErrLine, ErrMsg} ->
-                            parse_error(ErrLine, "~s", [ErrMsg])
-                    end
-                end,
-                BodyLines),
-            BodySt = St#st{line = St#st.line + length(BodyLines)},
-            Def = #gdbsp_circuit_def{name = Name, params = Params, body = BodyNodes},
-            parse_lines(Remaining,
-                        BodySt#st{circuits = [Def | BodySt#st.circuits]});
-        {error, Reason} ->
-            parse_error(St#st.line, "~s", [Reason])
-    end.
-
-try_node_def_no_multi(Line0, St) ->
-    Line = trim_left(trim_right(Line0)),
-    case try_node_def_single(Line, St) of
-        {done, Node} -> {ok, Node};
-        false -> {error, St#st.line, iolist_to_binary(
-                     io_lib:format("invalid body node: ~s", [Line]))}
-    end.
-
-try_node_def_single(Line, St) ->
-    case binary:split(Line, <<" := ">>) of
-        [Name, OpCall] ->
-            TrimmedCall = trim(OpCall),
-            case binary:match(TrimmedCall, <<"(">>) of
-                nomatch ->
-                    case binary:match(TrimmedCall, <<".">>) of
-                        nomatch ->
-                            case TrimmedCall of
-                                <<>> -> false;
-                                _ ->
-                                    {done, #gdbsp_node_def{
-                                        name = Name,
-                                        op = plus,
-                                        args = [{var, TrimmedCall}],
-                                        line = St#st.line
-                                    }}
-                            end;
-                        _ ->
-                            Node = mk_circuit_access_node(Name, TrimmedCall, St),
-                            {done, Node}
-                    end;
-                _ ->
-                    case split_op_inner(TrimmedCall) of
-                        {Op, <<")">>} ->
-                            {done, mk_node(Name, Op, [], St)};
-                        {Op, Inner} ->
-                            case Op of
-                                <<"fixpoint">> ->
-                                    {Args, _Rest, _St2} = extract_fixpoint_args(Inner, [], St, 1),
-                                    {done, mk_node(Name, Op, Args, St)};
-                                _ ->
-                                    case extract_parens_content(Inner) of
-                                        {closed, InnerClean} ->
-                                            Args = parse_args(InnerClean),
-                                            {done, mk_node(Name, Op, Args, St)};
-                                        {open, _} ->
-                                            {done, mk_node(Name, Op, [], St)}
-                                    end
-                            end;
-                        false -> false
-                    end
-            end;
-        _ -> false
-    end.
-
-take_single_line_args(Bin) ->
-    case binary:match(Bin, <<")">>) of
-        {Pos, 1} ->
-            <<Inner:Pos/binary, ")", _/binary>> = Bin,
-            {closed, Inner};
-        nomatch ->
-            {open, Bin}
-    end.
-
-parse_circuit_header(Line, LineNum) ->
-    %% Line looks like: "circuit name(key1: internal1, key2: internal2):"
-    <<"circuit ", Rest0/binary>> = Line,
-    case binary:split(trim_right(Rest0), <<"(">>) of
-        [Name0, ParamsAndColon] ->
-            Name = trim(Name0),
-            case known_op(Name) of
-                true ->
-                    {error, <<"reserved operator name cannot be used as circuit name: ", Name/binary>>};
-                false ->
-                    %% ParamsAndColon looks like: "key1: internal1, key2: internal2):"
-                    case binary:match(ParamsAndColon, <<"):">>) of
-                        {Pos2, _} ->
-                            <<ParamsBin:Pos2/binary, _:2/binary>> = ParamsAndColon,
-                            Params = parse_circuit_params(ParamsBin, LineNum),
-                            {ok, {Name, Params}};
-                        nomatch ->
-                            {error, <<"expected '):' after circuit parameters">>}
-                    end
-            end;
-        _ ->
-            {error, <<"expected '(' after circuit name">>}
-    end.
-
-parse_circuit_params(Bin, _LineNum) ->
-    Pairs = split_top(trim_trailing_comma(Bin), <<",">>),
-    lists:foldl(
-        fun(Pair, Acc) ->
-            TrimPair = trim(Pair),
-            case binary:split(TrimPair, <<":">>) of
-                [Key, Val] ->
-                    KeyAtom = binary_to_atom(trim(Key), utf8),
-                    Acc#{KeyAtom => trim(Val)};
-                _ ->
-                    Acc
-            end
-        end,
-        #{},
-        Pairs
-    ).
-
-collect_circuit_body([], Acc) ->
-    {lists:reverse(Acc), []};
-collect_circuit_body([Line0 | Rest], Acc) ->
-    Line = trim_right(Line0),
-    case Line of
-        <<>> -> {lists:reverse(Acc), Rest};
-        <<"#", _/binary>> -> collect_circuit_body(Rest, Acc);
-        _ ->
-            case is_body_node_line(Line0) of
-                true -> collect_circuit_body(Rest, [Line0 | Acc]);
-                false -> {lists:reverse(Acc), [Line0 | Rest]}
-            end
-    end.
-
-is_body_node_line(Line0) ->
-    Line = trim_right(Line0),
-    case binary:match(Line, <<" := ">>) of
-        nomatch -> false;
-        _ ->
-            case Line0 of
-                <<C, _/binary>> when C =:= $\s; C =:= $\t -> true;
-                _ -> false
-            end
-    end.
-
-parse_decl(Line, St, Rest) ->
-    %% Use binary:split instead of pattern matching with variable-size prefixes
-    case binary:split(Line, <<" :: ">>) of
-        [Name, <<"function(", Rest0/binary>>] ->
-            parse_fn_decl(Name, function, Rest0, St, Rest);
-        [Name, <<"aggregate_function(", Rest0/binary>>] ->
-            parse_fn_decl(Name, aggregate_function, Rest0, St, Rest);
-        [Name, TypeBin] ->
-            parse_type_ann(Name, trim(TypeBin), St, Rest);
-        _ ->
-            parse_error(St#st.line, "unrecognized declaration: ~s", [Line])
-    end.
+parse_declarations([], Nodes, TSs, Circuits) ->
+    {Nodes, TSs, Circuits};
+parse_declarations([{newline, _} | Rest], Nodes, TSs, Circuits) ->
+    parse_declarations(Rest, Nodes, TSs, Circuits);
+parse_declarations([{identifier, _L, <<"circuit">>} | Rest], Nodes, TSs, Circuits) ->
+    {Def, Rest2} = parse_circuit_def(Rest),
+    parse_declarations(Rest2, Nodes, TSs, [Def | Circuits]);
+parse_declarations([{identifier, _, Name}, {walrus, _} | Rest], Nodes, TSs, Circuits) ->
+    {Node, Rest2} = parse_node_def(Name, Rest),
+    parse_declarations(Rest2, [Node | Nodes], TSs, Circuits);
+parse_declarations([{identifier, _, Name}, {double_colon, _} | Rest], Nodes, TSs, Circuits) ->
+    {TS, Rest2} = parse_typespec(Name, Rest),
+    parse_declarations(Rest2, Nodes, [TS | TSs], Circuits);
+parse_declarations([T | _], _Nodes, _TSs, _Circuits) ->
+    throw({parse_error, token_line(T), <<"unrecognized declaration">>}).
 
 %%====================================================================
 %% Node definitions
 %%====================================================================
 
-try_node_def(Line, St, Rest) ->
-    case binary:split(Line, <<" := ">>) of
-        [Name, OpCall] ->
-            TrimmedCall = trim(OpCall),
-            case binary:match(TrimmedCall, <<"(">>) of
-                nomatch ->
-                    case binary:match(TrimmedCall, <<".">>) of
-                        nomatch ->
-                            case TrimmedCall of
-                                <<>> -> false;
-                                _ ->
-                                    Node = #gdbsp_node_def{
-                                        name = Name,
-                                        op = plus,
-                                        args = [{var, TrimmedCall}],
-                                        line = St#st.line
-                                    },
-                                    {done, parse_lines(Rest, St#st{nodes = [Node | St#st.nodes]})}
-                            end;
-                        _ ->
-                            Node = mk_circuit_access_node(Name, TrimmedCall, St),
-                            {done, parse_lines(Rest, St#st{nodes = [Node | St#st.nodes]})}
-                    end;
-                _ ->
-                    case split_op_inner(TrimmedCall) of
-                        {Op, <<")">>} ->
-                            Node = mk_node(Name, Op, [], St),
-                            {done, parse_lines(Rest, St#st{nodes = [Node | St#st.nodes]})};
-                        {Op, Inner} ->
-                            {Args, Remaining, St2} = collect_node_args_inner(OpCall, Op, Inner, St, Rest),
-                            Node = mk_node(Name, Op, Args, St),
-                            {done, parse_lines(Remaining, St2#st{nodes = [Node | St2#st.nodes]})}
-                    end
-            end;
+parse_node_def(Name, Tokens) ->
+    case Tokens of
+        [{identifier, _, VarName}, {dot, _} | Rest] ->
+            parse_circuit_access_node(Name, VarName, Rest);
+        [{identifier, _, OpName}, {'(', _} | Rest] ->
+            parse_node_def_with_op(Name, OpName, Rest);
+        [{identifier, _, VarName} | Rest] ->
+            Node = #gdbsp_node_def{
+                name = Name, op = plus, args = [{var, VarName}],
+                line = token_line(hd([{identifier, 0, Name}]))
+            },
+            {Node, skip_to_decl(Rest)};
+        [{string, _, _} = T | Rest] ->
+            Node = #gdbsp_node_def{
+                name = Name, op = plus, args = [{string, token_val(T)}],
+                line = token_line(hd([{identifier, 0, Name}]))
+            },
+            {Node, skip_to_decl(Rest)};
         _ ->
-            false
+            throw({parse_error, token_line(hd(Tokens)),
+                   <<"expected '(' or argument after :=">>})
     end.
 
-mk_circuit_access_node(Name, VarField, St) ->
-    case binary:split(VarField, <<".">>) of
-        [VarBin, FieldBin] ->
-            #gdbsp_node_def{
-                name = Name,
-                op   = circuit_access,
-                args = [{var, trim(VarBin)}, {var, trim(FieldBin)}],
-                line = St#st.line
-            };
-        _ ->
-            parse_error(St#st.line, "invalid circuit access: ~s", [VarField])
-    end.
-
-split_op_inner(OpCall) ->
-    case binary:split(OpCall, <<"(">>) of
-        [Op, Inner] -> {Op, Inner};
-        _ -> false
-    end.
-
-collect_node_args_inner(_OpCall, _Op, Inner, St, Rest) ->
-    case _Op of
-        <<"fixpoint">> ->
-            extract_fixpoint_args(Inner, Rest, St, length(Rest));
-        _ ->
-            case extract_parens_content(Inner) of
-                {closed, InnerClean} ->
-                    case is_multiline(InnerClean, Rest) of
-                        {true, Inner2, Remaining} ->
-                            Args = parse_args(Inner2),
-                            Remaining2 = skip_trailing_paren(Remaining),
-                            Consumed = length(Rest) - length(Remaining2),
-                            {Args, Remaining2, St#st{line = St#st.line + Consumed}};
-                        false ->
-                            Args = parse_args(InnerClean),
-                            {Args, Rest, St}
-                    end;
-                {open, _} ->
-                    {[], Rest, St}
-            end
-    end.
-
-extract_parens_content(Inner) ->
-    case binary:match(Inner, <<"(">>) of
-        nomatch ->
-            Stripped = strip_trailing_paren(Inner),
-            {closed, Stripped};
-        {Pos, 1} ->
-            <<_:Pos/binary, "(", More/binary>> = Inner,
-            content_between_parens(More, 1, 0, <<>>, false)
-    end.
-
-extract_fixpoint_args(Inner, Rest, St, _RestStart) ->
-    case binary:match(Inner, <<"(">>) of
-        nomatch ->
-            CName = trim(Inner),
-            {[CName], Rest, St};
-        {ParenPos, 1} ->
-            CName = trim(binary:part(Inner, 0, ParenPos)),
-            <<_:ParenPos/binary, "(", More/binary>> = Inner,
-            case content_between_parens(More, 1, 0, <<>>, false) of
-                {closed, KwArgsStr} ->
-                    KwTokens = parse_args_raw(KwArgsStr),
-                    {[CName | KwTokens], Rest, St};
-                {open, Partial} ->
-                    feed_fixpoint_lines(CName, Partial, Rest, St, _RestStart - length(Rest))
-            end
-    end.
-
-feed_fixpoint_lines(CName, Partial, [Line0 | Rest], St, Consumed) ->
-    Line = trim(trim_right(Line0)),
-    More = <<Partial/binary, Line/binary>>,
-    case content_between_parens(More, 1, 0, <<>>, false) of
-        {closed, KwArgsStr} ->
-            KwTokens = parse_args_raw(KwArgsStr),
-            {[CName | KwTokens], Rest, St#st{line = St#st.line + Consumed + 1}};
-        {open, NewPartial} ->
-            feed_fixpoint_lines(CName, NewPartial, Rest, St, Consumed + 1)
-    end;
-feed_fixpoint_lines(CName, Partial, [], St, Consumed) ->
-    KwTokens = parse_args_raw(Partial),
-    {[CName | KwTokens], [], St#st{line = St#st.line + Consumed}}.
-
-collect_node_args(OpCall, Op, St, Rest) ->
-    %% OpCall looks like "map(src, fn)"
-    %% We need to extract everything between the first "(" and the matching ")"
-    OpLen = byte_size(Op),
-    <<_:OpLen/binary, Rest0/binary>> = OpCall,
-    case Rest0 of
-        <<"(", _/binary>> ->
-            %% Extract inner content, handling nested parens/brackets
-            {_, Inner} = extract_parens(Rest0),
-            case is_multiline(Inner, Rest) of
-                {true, Inner2, Remaining} ->
-                    Args = parse_args(Inner2),
-                    Remaining2 = skip_trailing_paren(Remaining),
-                    Consumed = length(Rest) - length(Remaining2),
-                    {Args, Remaining2, St#st{line = St#st.line + Consumed}};
-                false ->
-                    Args = parse_args(Inner),
-                    {Args, Rest, St}
-            end;
-        _ ->
-            {[], Rest, St}
-    end.
-
-is_multiline(Inner, [NextLine0 | Rest]) ->
-    NextLine = trim_right(NextLine0),
-    case is_continuation(NextLine) of
-        true ->
-            {Lines, Remaining} = collect_continuation_lines([NextLine], Rest),
-            Continued = <<Inner/binary, ",", (iolist_to_binary(Lines))/binary>>,
-            {true, trim_trailing_comma(Continued), Remaining};
-        false ->
-            false
-    end;
-is_multiline(_, []) -> false.
-
-collect_continuation_lines(Acc, [Line0 | Rest]) ->
-    Line = trim_right(Line0),
-    case is_continuation(Line) of
-        true -> collect_continuation_lines([Line | Acc], Rest);
-        false -> {lists:reverse(Acc), [Line0 | Rest]}
-    end;
-collect_continuation_lines(Acc, []) ->
-    {lists:reverse(Acc), []}.
-
-skip_trailing_paren([]) -> [];
-skip_trailing_paren([Line0 | Rest]) ->
-    case trim(trim_right(Line0)) of
-        <<")">> -> Rest;
-        <<")", _/binary>> = T ->
-            case binary:last(T) =:= $, of
-                true -> Rest;
-                false -> [Line0 | Rest]
-            end;
-        _ -> [Line0 | Rest]
-    end.
-
-is_continuation(<<>>) -> false;
-is_continuation(<<"#", _/binary>>) -> false;
-is_continuation(Line) ->
-    Trimmed0 = trim(trim_right(Line)),
-    Trimmed = case binary:last(Trimmed0) of
-        $, -> binary:part(Trimmed0, 0, byte_size(Trimmed0) - 1);
-        _ -> Trimmed0
-    end,
-    case binary:match(Trimmed, <<" ::">>) of
-        nomatch ->
-            case binary:match(Trimmed, <<" := ">>) of
-                nomatch ->
-                    Trimmed =/= <<")">> andalso Trimmed =/= <<>>;
-                _ -> false
-            end;
-        _ -> false
-    end.
-
-content_between_parens(<<>>, _Depth, _Quote, Acc, _Esc) ->
-    {open, trim_right(Acc)};
-content_between_parens(<<$\\, C, Rest/binary>>, D, Q, Acc, _Esc) ->
-    content_between_parens(Rest, D, Q, <<Acc/binary, $\\, C>>, true);
-content_between_parens(<<$", Rest/binary>>, D, Q, Acc, _Esc) ->
-    content_between_parens(Rest, D, 1 - Q, <<Acc/binary, $">>, false);
-content_between_parens(<<$(, Rest/binary>>, D, 0, Acc, _Esc) ->
-    content_between_parens(Rest, D + 1, 0, <<Acc/binary, $(>>, false);
-content_between_parens(<<$), Rest/binary>>, 1, 0, Acc, _Esc) ->
-    {closed, trim_right(Acc)};
-content_between_parens(<<$), Rest/binary>>, D, 0, Acc, _Esc) when D > 1 ->
-    content_between_parens(Rest, D - 1, 0, <<Acc/binary, $)>>, false);
-content_between_parens(<<$[, Rest/binary>>, D, 0, Acc, _Esc) ->
-    content_between_parens(Rest, D + 1000, 0, <<Acc/binary, $[>>, false);
-content_between_parens(<<$], Rest/binary>>, D, 0, Acc, _Esc) when D >= 1000 ->
-    content_between_parens(Rest, D - 1000, 0, <<Acc/binary, $]>>, false);
-content_between_parens(<<C, Rest/binary>>, D, Q, Acc, _Esc) ->
-    content_between_parens(Rest, D, Q, <<Acc/binary, C>>, false).
-
-extract_parens(Bin) ->
-    case binary:match(Bin, <<"(">>) of
-        {Pos, 1} ->
-            PrefixSize = Pos + 1,
-            <<_:PrefixSize/binary, Rest/binary>> = Bin,
-            content_between_parens(Rest, 1, 0, <<>>, false);
-        nomatch ->
-            {open, Bin}
-    end.
-
-extract_brackets(Bin) ->
-    case binary:match(Bin, <<"[">>) of
-        {Pos, 1} ->
-            PrefixSize = Pos + 1,
-            <<_:PrefixSize/binary, Rest/binary>> = Bin,
-            bracket_content(Rest, <<>>);
-        nomatch ->
-            Bin
-    end.
-
-bracket_content(<<>>, Acc) -> Acc;
-bracket_content(<<$\\, C, Rest/binary>>, Acc) ->
-    bracket_content(Rest, <<Acc/binary, $\\, C>>);
-bracket_content(<<$", Rest/binary>>, Acc) ->
-    bracket_content_quote(Rest, <<Acc/binary, $">>);
-bracket_content(<<$], Rest/binary>>, Acc) ->
-    trim_right(Acc);
-bracket_content(<<C, Rest/binary>>, Acc) ->
-    bracket_content(Rest, <<Acc/binary, C>>).
-
-bracket_content_quote(<<>>, Acc) -> Acc;
-bracket_content_quote(<<$", Rest/binary>>, Acc) ->
-    bracket_content(Rest, <<Acc/binary, $">>);
-bracket_content_quote(<<$\\, C, Rest/binary>>, Acc) ->
-    bracket_content_quote(Rest, <<Acc/binary, $\\, C>>);
-bracket_content_quote(<<C, Rest/binary>>, Acc) ->
-    bracket_content_quote(Rest, <<Acc/binary, C>>).
-
-trim_trailing_comma(Bin) ->
-    case byte_size(Bin) > 0 andalso binary:last(Bin) =:= $, of
-        true -> binary:part(Bin, 0, byte_size(Bin) - 1);
-        false -> Bin
-    end.
-
-mk_node(Name, OpBin, Args, St) ->
-    case known_op(OpBin) of
-        true ->
-            OpAtom = binary_to_atom(OpBin, utf8),
-            ParArgs = lists:map(fun parse_node_arg/1, Args),
-            #gdbsp_node_def{
-                name = Name,
-                op   = OpAtom,
-                args = ParArgs,
-                line = St#st.line
-            };
-        false ->
-            ParArgs = [{var, OpBin} | lists:map(fun parse_node_arg/1, Args)],
-            #gdbsp_node_def{
-                name = Name,
-                op   = circuit_call,
-                args = ParArgs,
-                line = St#st.line
-            }
-    end.
-
-%% Minimal set (12) + extended (4)
-known_op(<<"source">>)             -> true;
-known_op(<<"delay">>)              -> true;
-known_op(<<"integrate">>)          -> true;
-known_op(<<"differentiate">>)      -> true;
-known_op(<<"distinct">>)           -> true;
-known_op(<<"plus">>)               -> true;
-known_op(<<"neg">>)                -> true;
-known_op(<<"map">>)                -> true;
-known_op(<<"flat_map">>)           -> true;
-known_op(<<"join">>)               -> true;
-known_op(<<"aggregate">>)          -> true;
-known_op(<<"filter">>)             -> true;
-known_op(<<"project">>)            -> true;
-known_op(<<"antijoin">>)           -> true;
-known_op(<<"circuit_access">>)     -> true;
-known_op(<<"fixpoint">>)           -> true;
-known_op(_)                        -> false.
-
-parse_node_arg(Arg) when is_binary(Arg) ->
-    Trimmed = trim(Arg),
-    case Trimmed of
-        <<>> -> {error, empty_arg};
-        _ ->
-            case binary:match(Trimmed, <<":">>) of
-                {Pos, 1} when Pos > 0 ->
-                    KeyBin = binary:part(Trimmed, 0, Pos),
-                    ValBin = trim(binary:part(Trimmed, Pos + 1, byte_size(Trimmed) - Pos - 1)),
-                    Key = binary_to_atom(KeyBin, utf8),
-                    Val = parse_kw_val(ValBin),
-                    case ValBin of
-                        <<"[", _/binary>> ->
-                            Inner = extract_brackets(ValBin),
-                            Items = parse_string_list(Inner),
-                            {Key, Items};
-                        _ ->
-                            {Key, Val}
-                    end;
-                _ ->
-                    case binary:match(Trimmed, <<".">>) of
-                        {DotPos, 1} when DotPos > 0 ->
-                            VarBin = binary:part(Trimmed, 0, DotPos),
-                            FieldBin = binary:part(Trimmed, DotPos + 1,
-                                                    byte_size(Trimmed) - DotPos - 1),
-                            {circuit_access, VarBin, FieldBin};
-                        nomatch ->
-                            case Trimmed of
-                                <<"\"", _/binary>> -> {string, dequote(Trimmed)};
-                                _ -> {var, Trimmed}
-                            end
-                    end
-            end
-    end.
-
-parse_kw_val(ValBin) ->
-    Trimmed = trim(ValBin),
-    case binary:match(Trimmed, <<".">>) of
-        {DotPos, 1} when DotPos > 0 ->
-            VarBin = binary:part(Trimmed, 0, DotPos),
-            FieldBin = binary:part(Trimmed, DotPos + 1,
-                                    byte_size(Trimmed) - DotPos - 1),
-            {circuit_access, VarBin, FieldBin};
-        _ ->
-            case Trimmed of
-                <<"\"", _/binary>> -> dequote(Trimmed);
-                _ -> {var, Trimmed}
-            end
-    end.
-
-%%====================================================================
-%% Arg parsing
-%%====================================================================
-
-parse_args_raw(Bin) ->
-    Tokens = split_top(trim_trailing_comma(Bin), <<",">>),
-    [trim(T) || T <- Tokens, trim(T) =/= <<>>].
-
-parse_args(Bin) ->
-    Tokens = split_top(trim_trailing_comma(Bin), <<",">>),
-    lists:filtermap(fun(Tok) ->
-        case trim(Tok) of
-            <<>> -> false;
-            T -> {true, T}
-        end
-    end, Tokens).
-
-%%====================================================================
-%% Type annotations
-%%====================================================================
-
-parse_type_ann(Name, TypeBin, St, Rest) ->
-    Type = parse_type_spec(trim(TypeBin), St#st.line),
-    case Type of
-        {stream, _} -> ok;
-        _ -> parse_error(St#st.line,
-            "expected stream(...) type, got: ~s", [trim(TypeBin)])
-    end,
-    Spec = #gdbsp_typespec{
-        name = Name,
-        spec = {type, Type},
-        line = St#st.line
+parse_circuit_access_node(Name, Var, [{identifier, _, Field} | Rest]) ->
+    Node = #gdbsp_node_def{
+        name = Name, op = circuit_access,
+        args = [{var, Var}, {var, Field}],
+        line = token_line(hd([{identifier, 0, Name}]))
     },
-    parse_lines(Rest, St#st{typespecs = [Spec | St#st.typespecs]}).
+    {Node, skip_to_decl(Rest)};
+parse_circuit_access_node(Name, _Var, Tokens) ->
+    throw({parse_error, token_line(hd(Tokens)),
+           <<"invalid circuit access">>}).
 
-parse_type_spec(Bin, Line) ->
-    Trimmed = trim(Bin),
-    case Trimmed of
-        <<"stream(", _/binary>> ->
-            case extract_parens(Trimmed) of
-                {closed, Inner} ->
-                    {stream, parse_type_spec(trim(Inner), Line)};
-                {open, _} ->
-                    parse_error(Line, "expected ')' after stream type")
-            end;
-        <<"struct(", _/binary>> ->
-            {_, Inner} = extract_parens(Trimmed),
-            Fields = parse_struct_fields(Inner, Line),
-            {struct, Fields, exact};
-        <<"array(", _/binary>> ->
-            {_, Inner} = extract_parens(Trimmed),
-            Args = split_top(Inner, <<",">>),
-            case Args of
-                [ElemType] -> {array, parse_type_spec(ElemType, Line), varsize};
-                [ElemType | Dims] ->
-                    IntDims = lists:map(fun(D) -> binary_to_integer(trim(D)) end, Dims),
-                    {array, parse_type_spec(ElemType, Line),
-                     case IntDims of [N] -> N; _ -> IntDims end}
-            end;
-        <<"map(", _/binary>> ->
-            {_, Inner} = extract_parens(Trimmed),
-            [K, V] = split_top(Inner, <<",">>),
-            {map, parse_type_spec(K, Line), parse_type_spec(V, Line)};
-        <<"closure(", _/binary>> ->
-            parse_closure_type_from_full(closure, Trimmed, Line);
-        <<"result_equivalent_closure(", _/binary>> ->
-            parse_closure_type_from_full(result_equivalent_closure, Trimmed, Line);
+parse_node_def_with_op(Name, OpName, Tokens) ->
+    OpAtom = case known_op(OpName) of
+        true  -> binary_to_atom(OpName, utf8);
+        false -> circuit_call
+    end,
+    case OpAtom of
+        fixpoint ->
+            parse_fixpoint_node(Name, Tokens);
         _ ->
-            parse_scalar_type(Trimmed, Line)
+            parse_regular_node(Name, OpAtom, OpName, Tokens)
     end.
 
-parse_struct_fields(Bin, Line) ->
-    Pairs = split_top(Bin, <<",">>),
-    lists:foldl(fun(Pair, Acc) ->
-        TrimPair = trim(Pair),
-        case binary:split(TrimPair, <<":">>) of
-            [Key0, ValType] ->
-                Key = case trim(Key0) of
-                    <<"\"", _/binary>> = Q -> dequote(Q);
-                    K -> K
-                end,
-                maps:put(Key, parse_type_spec(trim(ValType), Line), Acc);
-            _ ->
-                %% Might be "key: type" vs "key:type" 
-                case binary:match(TrimPair, <<":">>) of
-                    {Pos, 1} ->
-                        Key0 = binary:part(TrimPair, 0, Pos),
-                        ValType = trim(binary:part(TrimPair, Pos + 1, byte_size(TrimPair) - Pos - 1)),
-                        Key = case trim(Key0) of
-                            <<"\"", _/binary>> = Q -> dequote(Q);
-                            K -> K
-                        end,
-                        maps:put(Key, parse_type_spec(ValType, Line), Acc);
-                    nomatch ->
-                        parse_error(Line, "invalid struct field: ~s", [Pair])
-                end
-        end
-    end, #{}, Pairs).
+parse_regular_node(Name, OpAtom, OpName, Tokens) ->
+    {Args, Rest} = collect_node_args(Tokens, []),
+    FinalArgs = case OpAtom of
+        circuit_call -> [{var, OpName} | Args];
+        _ -> Args
+    end,
+    Node = #gdbsp_node_def{
+        name = Name, op = OpAtom, args = FinalArgs,
+        line = token_line(hd([{identifier, 0, Name}]))
+    },
+    {Node, Rest}.
+
+%%--------------------------------------------------------------------
+%% Fixpoint
+%%--------------------------------------------------------------------
+
+parse_fixpoint_node(Name, Tokens) ->
+    {Args, Rest} = collect_fixpoint_args(Tokens, []),
+    Node = #gdbsp_node_def{
+        name = Name, op = fixpoint, args = Args,
+        line = token_line(hd([{identifier, 0, Name}]))
+    },
+    {Node, Rest}.
+
+collect_fixpoint_args(Tokens, Acc) ->
+    case skip_newlines(Tokens) of
+        [{')', _} | Rest] -> {lists:reverse(Acc), skip_to_decl(Rest)};
+        [] -> throw({parse_error, 0, <<"unexpected end of fixpoint args">>});
+        Toks ->
+            case Toks of
+                [{identifier, _, CName} | Rest] when Acc =:= [] ->
+                    collect_fixpoint_kwargs(Rest, [{var, CName} | Acc]);
+                [{identifier, _, Kw}, {':', _} | Rest] when Acc =/= [] ->
+                    {Val, Rest2} = parse_fixpoint_kw_val(Rest),
+                    collect_fixpoint_kwargs(Rest2,
+                        [{binary_to_atom(Kw, utf8), Val} | Acc]);
+                _ ->
+                    throw({parse_error, token_line(hd(Toks)),
+                           <<"expected keyword arg in fixpoint">>})
+            end
+    end.
+
+collect_fixpoint_kwargs(Tokens, Acc) ->
+    case skip_newlines(Tokens) of
+        [{')', _} | Rest] -> {lists:reverse(Acc), skip_to_decl(Rest)};
+        [] -> throw({parse_error, 0, <<"unexpected end of fixpoint args">>});
+        [{',', _} | Rest] -> collect_fixpoint_args(Rest, Acc);
+        Toks -> collect_fixpoint_args(Toks, Acc)
+    end.
+
+parse_fixpoint_kw_val(Tokens) ->
+    case Tokens of
+        [{identifier, _, V} | Rest] -> {{var, V}, Rest};
+        [{string, _, _} = T | Rest] -> {{string, token_val(T)}, Rest};
+        _ -> throw({parse_error, token_line(hd(Tokens)),
+                    <<"expected value after ':' in fixpoint arg">>})
+    end.
+
+%%--------------------------------------------------------------------
+%% Node args collection
+%%--------------------------------------------------------------------
+
+collect_node_args(Tokens, Acc) ->
+    case skip_newlines(Tokens) of
+        [{')', _} | Rest] -> {lists:reverse(Acc), skip_to_decl(Rest)};
+        [] -> {lists:reverse(Acc), []};
+        Toks ->
+            case Toks of
+                [{',', _} | Rest] ->
+                    collect_node_args(Rest, Acc);
+                [{identifier, _, KwName}, {':', _} | Rest] ->
+                    {KwVal, Rest2} = parse_kw_arg(Rest),
+                    collect_node_args(Rest2,
+                        [{binary_to_atom(KwName, utf8), KwVal} | Acc]);
+                [{identifier, _, VarName} | Rest] ->
+                    collect_node_args(Rest, [{var, VarName} | Acc]);
+                [{string, _, _} = T | Rest] ->
+                    collect_node_args(Rest, [{string, token_val(T)} | Acc]);
+                _ ->
+                    throw({parse_error, token_line(hd(Toks)),
+                           <<"unexpected token in node args">>})
+            end
+    end.
+
+parse_kw_arg([{'[', _} | Rest]) ->
+    {Items, Rest2} = collect_bracket_list(Rest, []),
+    {[list_to_binary(I) || I <- Items], Rest2};
+parse_kw_arg(Tokens) ->
+    case Tokens of
+        [{identifier, _, V} | Rest] -> {{var, V}, Rest};
+        [{string, _, _} = T | Rest] -> {{string, token_val(T)}, Rest};
+        _ -> throw({parse_error, token_line(hd(Tokens)),
+                    <<"expected value after ':' in node kwarg">>})
+    end.
+
+collect_bracket_list(Tokens, Acc) ->
+    case Tokens of
+        [{']', _} | Rest] -> {lists:reverse(Acc), Rest};
+        [{',', _} | Rest] -> collect_bracket_list(Rest, Acc);
+        [{string, _, _} = T | Rest] ->
+            collect_bracket_list(Rest, [token_val(T) | Acc]);
+        [{identifier, _, V} | Rest] ->
+            collect_bracket_list(Rest, [binary_to_list(V) | Acc]);
+        _ -> throw({parse_error, token_line(hd(Tokens)),
+                    <<"expected ']' or value in bracket list">>})
+    end.
+
+%%====================================================================
+%% Typespecs
+%%====================================================================
+
+parse_typespec(Name, Tokens) ->
+    case Tokens of
+        [{identifier, _, <<"stream">>}, {'(', _} | Rest] ->
+            {Type, Rest2} = parse_type(Rest),
+            {')', _} = expect(Rest2, ')'),
+            Spec = #gdbsp_typespec{
+                name = Name, spec = {type, {stream, Type}},
+                line = token_line(hd(Tokens))},
+            {Spec, skip_to_decl(tl(Rest2))};
+        [{identifier, _, <<"function">>}, {'(', _} | Rest] ->
+            parse_fn_typespec(Name, function, Rest);
+        [{identifier, _, <<"aggregate_function">>}, {'(', _} | Rest] ->
+            parse_fn_typespec(Name, aggregate_function, Rest);
+        _ ->
+            throw({parse_error, token_line(hd(Tokens)),
+                   <<"unknown type: expected stream/function/aggregate_function">>})
+    end.
+
+parse_fn_typespec(Name, Kind, Tokens) ->
+    case Tokens of
+        [{'(', _} | Rest] ->
+            {PosTypes, KwMap, Rest2} = parse_fn_type_params(Rest, [], []),
+            {arrow, _} = expect(Rest2, '->'),
+            {RetType, Rest3} = parse_type(tl(Rest2)),
+            {')', _} = expect(Rest3, ')'),
+            Spec = #gdbsp_typespec{
+                name = Name,
+                spec = {Kind, PosTypes, maps:from_list(KwMap), RetType},
+                line = token_line(hd(Tokens))
+            },
+            {Spec, skip_to_decl(tl(Rest3))};
+        _ ->
+            throw({parse_error, token_line(hd(Tokens)),
+                   <<"expected '(' in function declaration">>})
+    end.
+
+parse_fn_type_params(Tokens, PosAcc, KwAcc) ->
+    case Tokens of
+        [{')', _} | Rest] -> {lists:reverse(PosAcc), lists:reverse(KwAcc), Rest};
+        [] -> throw({parse_error, 0, <<"unexpected end of fn type params">>});
+        [{',', _} | Rest] -> parse_fn_type_params(Rest, PosAcc, KwAcc);
+        _ ->
+            case is_kw_type_param(Tokens) of
+                {true, Key, Rest} ->
+                    {Type, Rest2} = parse_type(Rest),
+                    parse_fn_type_params(Rest2, PosAcc, [{Key, Type} | KwAcc]);
+                false when KwAcc =:= [] ->
+                    {Type, Rest2} = parse_type(Tokens),
+                    parse_fn_type_params(Rest2, [Type | PosAcc], KwAcc);
+                false ->
+                    throw({parse_error, token_line(hd(Tokens)),
+                           <<"keyword params must come after positional params">>})
+            end
+    end.
+
+is_kw_type_param([{string, _, _}, {':', _} | _] = Tokens) ->
+    {true, token_val(hd(Tokens)), tl(tl(Tokens))};
+is_kw_type_param(_) ->
+    false.
+
+%%====================================================================
+%% Type parsing (token-based)
+%%====================================================================
+
+parse_type(Tokens) ->
+    case Tokens of
+        [{identifier, _, <<"struct">>}, {'(', _} | Rest] ->
+            parse_struct_type(Rest);
+        [{identifier, _, <<"array">>}, {'(', _} | Rest] ->
+            parse_array_type(Rest);
+        [{identifier, _, <<"map">>}, {'(', _} | Rest] ->
+            parse_map_type(Rest);
+        [{identifier, _, <<"optional">>}, {'(', _} | Rest] ->
+            {T, Rest2} = parse_type(Rest),
+            {')', _} = expect(Rest2, ')'),
+            {{optional, T}, tl(Rest2)};
+        [{identifier, _, <<"closure">>}, {'(', _} | Rest] ->
+            parse_closure_type(closure, Rest);
+        [{identifier, _, <<"result_equivalent_closure">>}, {'(', _} | Rest] ->
+            parse_closure_type(result_equivalent_closure, Rest);
+        [{identifier, _, <<"stream">>}, {'(', _} | Rest] ->
+            {T, Rest2} = parse_type(Rest),
+            {')', _} = expect(Rest2, ')'),
+            {{stream, T}, tl(Rest2)};
+        [{identifier, _, <<"string">>}, {'(', _}, {string, _, Enc}, {')', _} | Rest] ->
+            {{string, Enc}, Rest};
+        [{identifier, _, <<"enum">>}, {'(', _} | Rest] ->
+            {Values, Rest2} = parse_enum_values(Rest, []),
+            {{enum, lists:usort(Values)}, Rest2};
+        [{identifier, _, <<"bytes">>}, {'(', _}, {integer_literal, _, N}, {')', _} | Rest] ->
+            {{bytes, N}, Rest};
+        [{identifier, _, <<"bits">>}, {'(', _}, {integer_literal, _, N}, {')', _} | Rest] ->
+            {{bits, N}, Rest};
+        [{identifier, _, <<"numeric">>}, {'(', _},
+         {integer_literal, _, P}, {',', _}, {integer_literal, _, S}, {')', _} | Rest] ->
+            {{numeric, P, S}, Rest};
+        [{identifier, _, Name} | Rest] ->
+            {parse_scalar_type(Name, token_line(hd(Tokens))), Rest};
+        _ ->
+            throw({parse_error, token_line(hd(Tokens)),
+                   <<"expected type">>})
+    end.
+
+parse_enum_values(Tokens, Acc) ->
+    case Tokens of
+        [{')', _} | Rest] -> {lists:reverse(Acc), tl(Rest)};
+        [{',', _} | Rest] -> parse_enum_values(Rest, Acc);
+        [{string, _, V} | Rest] -> parse_enum_values(Rest, [V | Acc]);
+        _ -> throw({parse_error, token_line(hd(Tokens)),
+                    <<"expected string value or ')' in enum type">>})
+    end.
+
+parse_struct_type(Tokens) ->
+    {Fields, Rest} = parse_struct_fields(Tokens, #{}),
+    {{struct, Fields, exact}, Rest}.
+
+parse_struct_fields(Tokens, Acc) ->
+    case skip_newlines(Tokens) of
+        [{')', _} | Rest] -> {Acc, tl(Rest)};
+        [] -> {Acc, []};
+        [{',', _} | Rest] -> parse_struct_fields(Rest, Acc);
+        [{string, _, _}, {':', _} | _] ->
+            Key = token_val(hd(Tokens)),
+            {T, Rest} = parse_type(tl(tl(Tokens))),
+            parse_struct_fields(Rest, Acc#{Key => T});
+        [{identifier, _, FName}, {':', _} | Rest] ->
+            {T, Rest2} = parse_type(Rest),
+            parse_struct_fields(Rest2, Acc#{FName => T});
+        _ ->
+            throw({parse_error, token_line(hd(Tokens)),
+                   <<"invalid struct field">>})
+    end.
+
+parse_array_type(Tokens) ->
+    {ElemType, Rest} = parse_type(Tokens),
+    case skip_newlines(Rest) of
+        [{')', _} | Rest2] ->
+            {{array, ElemType, varsize}, tl(Rest2)};
+        [{',', _} | Rest2] ->
+            case Rest2 of
+                [{integer_literal, _, Dim} | Rest3] ->
+                    {Dims, Rest4} = parse_array_dims(Rest3, [Dim]),
+                    ArrayType = case Dims of
+                        [N] -> {array, ElemType, N};
+                        _   -> {array, ElemType, Dims}
+                    end,
+                    {ArrayType, Rest4};
+                _ ->
+                    throw({parse_error, token_line(hd(Rest2)),
+                           <<"expected integer dimension">>})
+            end;
+        _ ->
+            throw({parse_error, token_line(hd(Rest)),
+                   <<"expected ')' or dimensions in array type">>})
+    end.
+
+parse_array_dims(Tokens, Acc) ->
+    case skip_newlines(Tokens) of
+        [{')', _} | Rest] -> {lists:reverse(Acc), tl(Rest)};
+        [{',', _} | Rest] ->
+            case skip_newlines(Rest) of
+                [{integer_literal, _, Dim} | Rest2] ->
+                    parse_array_dims(Rest2, [Dim | Acc]);
+                _ ->
+                    throw({parse_error, token_line(hd(Rest)),
+                           <<"expected integer dimension">>})
+            end;
+        [{integer_literal, _, Dim} | Rest] ->
+            parse_array_dims(Rest, [Dim | Acc]);
+        _ ->
+            throw({parse_error, token_line(hd(Tokens)),
+                   <<"expected ')' or ',' or integer dimension">>})
+    end.
+
+parse_map_type(Tokens) ->
+    {K, Rest} = parse_type(Tokens),
+    {',', _} = expect(Rest, ','),
+    {V, Rest2} = parse_type(tl(Rest)),
+    {')', _} = expect(Rest2, ')'),
+    {{map, K, V}, tl(Rest2)}.
+
+parse_closure_type(Kind, Tokens) ->
+    case Tokens of
+        [{'(', _} | Rest] ->
+            {PosTypes, KwMap, Rest2} = parse_fn_type_params(Rest, [], []),
+            {arrow, _} = expect(Rest2, '->'),
+            {RetType, Rest3} = parse_type(tl(Rest2)),
+            {')', _} = expect(Rest3, ')'),
+            Params = [{undefined, T} || T <- PosTypes] ++ KwMap,
+            {{Kind, Params, RetType}, tl(Rest3)};
+        _ ->
+            %% zero-param closure: closure(() -> T)
+            _ = expect(Tokens, '('),
+            _ = expect(tl(Tokens), ')'),
+            {arrow, _} = expect(tl(tl(Tokens)), '->'),
+            {RetType, Rest} = parse_type(tl(tl(tl(Tokens)))),
+            {')', _} = expect(Rest, ')'),
+            {{Kind, [], RetType}, tl(Rest)}
+    end.
 
 parse_scalar_type(<<"i8">>, _) -> i8;
 parse_scalar_type(<<"i16">>, _) -> i16;
@@ -704,229 +446,111 @@ parse_scalar_type(<<"timestamp">>, _) -> timestamp;
 parse_scalar_type(<<"timestamp_with_timezone">>, _) -> timestamp_with_timezone;
 parse_scalar_type(<<"interval">>, _) -> interval;
 parse_scalar_type(<<"string_with_encoding">>, _) -> string_with_encoding;
-parse_scalar_type(Bin, Line) when is_binary(Bin) ->
-    case Bin of
-        <<"string(\"UTF-8\")">> -> {string, <<"UTF-8">>};
-        <<"string(", _/binary>> ->
-            {_, Inner} = extract_parens(Bin),
-            {string, dequote(trim(Inner))};
-        <<"enum(", _/binary>> ->
-            {_, Inner} = extract_parens(Bin),
-            {enum, parse_string_list(Inner)};
-        <<"bytes(", _/binary>> ->
-            {_, Inner} = extract_parens(Bin),
-            {bytes, binary_to_integer(trim(Inner))};
-        <<"bits(", _/binary>> ->
-            {_, Inner} = extract_parens(Bin),
-            {bits, binary_to_integer(trim(Inner))};
-        <<"numeric(", _/binary>> ->
-            {_, Inner} = extract_parens(Bin),
-            [P, S] = split_top(Inner, <<",">>),
-            {numeric, binary_to_integer(trim(P)), binary_to_integer(trim(S))};
-        <<"optional(", _/binary>> ->
-            {_, Inner} = extract_parens(Bin),
-            {optional, parse_type_spec(Inner, Line)};
-        _ ->
-            case is_type_var(Bin) of
-                true -> Bin;
-                false -> parse_error(Line, "unknown type: ~s", [Bin])
-            end
+parse_scalar_type(Name, Line) ->
+    case is_type_var(Name) of
+        true -> Name;
+        false ->
+            throw({parse_error, Line,
+                   iolist_to_binary(["unknown type: ", Name])})
     end.
 
 is_type_var(Bin) when byte_size(Bin) > 0 ->
     First = binary:first(Bin),
     First >= $A andalso First =< $Z.
 
-parse_closure_type_from_full(Kind, Bin, Line) ->
-    Name = atom_to_binary(Kind, utf8),
-    PrefixLen = byte_size(Name) + 1,
-    <<_:PrefixLen/binary, Inner/binary>> = Bin,
-    [ParamsGroup, RetWithParen] = split_top(Inner, <<"->">>),
-    Ret = parse_closure_ret(RetWithParen, Line),
-    ParamsGroupTrimmed = trim(ParamsGroup),
-    ParamsInner = case ParamsGroupTrimmed of
-        <<"(", _/binary>> ->
-            {_, Inner2} = extract_parens(ParamsGroupTrimmed),
-            Inner2;
+%%====================================================================
+%% Circuit definitions
+%%====================================================================
+
+parse_circuit_def([{identifier, _, Name}, {'(', _} | Rest]) ->
+    {Params, Rest2} = parse_circuit_params(Rest, #{}),
+    {')', _} = expect(Rest2, ')'),
+    {':', _} = expect(tl(Rest2), ':'),
+    Tokens3 = tl(tl(Rest2)),
+    {BodyNodes, Rest3} = parse_circuit_body(Tokens3, []),
+    Def = #gdbsp_circuit_def{name = Name, params = Params, body = BodyNodes},
+    {Def, Rest3};
+parse_circuit_def(Tokens) ->
+    throw({parse_error, token_line(hd(Tokens)),
+           <<"expected '(' after circuit name">>}).
+
+parse_circuit_params(Tokens, Acc) ->
+    case skip_newlines(Tokens) of
+        [{')', _} | _] -> {Acc, Tokens};
+        [{',', _} | Rest] -> parse_circuit_params(Rest, Acc);
+        [{identifier, _, Key}, {':', _}, {identifier, _, Val} | Rest] ->
+            KeyAtom = binary_to_atom(Key, utf8),
+            parse_circuit_params(Rest, Acc#{KeyAtom => Val});
         _ ->
-            ParamsGroupTrimmed
-    end,
-    case trim(ParamsInner) of
-        <<>> ->
-            {Kind, [], Ret};
-        ParamsTrimmed ->
-            {PosParams, KwPairs} = parse_mixed_params(ParamsTrimmed, Line),
-            Params = [{undefined, PT} || PT <- PosParams] ++ KwPairs,
-            {Kind, Params, Ret}
+            throw({parse_error, token_line(hd(Tokens)),
+                   <<"expected 'key: internal' in circuit params">>})
     end.
 
-parse_closure_ret(RetWithParen, Line) ->
-    Trimmed = trim(RetWithParen),
-    case binary:last(Trimmed) of
-        $) ->
-            RetBin = binary:part(Trimmed, 0, byte_size(Trimmed) - 1),
-            parse_type_spec(trim(RetBin), Line);
-        _ ->
-            parse_error(Line, "expected ')' in closure type")
-    end.
-
-%%====================================================================
-%% Function declarations
-%%====================================================================
-%% Mixed position + keyword param parsing for declarations and types
-%%====================================================================
-
-parse_mixed_params(<<>>, _Line) ->
-    {[], []};
-parse_mixed_params(Bin, Line) ->
-    Tokens = split_top(trim_trailing_comma(Bin), <<",">>),
-    parse_mixed_param_list(Tokens, Line, [], []).
-
-parse_mixed_param_list([], _Line, PosAcc, KwAcc) ->
-    {lists:reverse(PosAcc), lists:reverse(KwAcc)};
-parse_mixed_param_list([Tok | Rest], Line, PosAcc, KwAcc) ->
-    case split_kw_param(trim(Tok)) of
-        {true, Name, TypeBin} when KwAcc =:= [] ->
-            Name1 = case Name of
-                <<"\"", _/binary>> -> dequote(Name);
-                _ -> Name
-            end,
-            Type = parse_type_spec(trim(TypeBin), Line),
-            parse_mixed_param_list(Rest, Line, PosAcc, [{Name1, Type} | KwAcc]);
-        {true, _Name, _TypeBin} ->
-            parse_error(Line, "keyword params must come after positional params");
-        false when KwAcc =:= [] ->
-            Type = parse_type_spec(trim(Tok), Line),
-            parse_mixed_param_list(Rest, Line, [Type | PosAcc], KwAcc);
-        false ->
-            parse_error(Line, "positional params must come before keyword params")
-    end.
-
-split_kw_param(<<>>) -> false;
-split_kw_param(Bin) ->
-    split_kw_param(Bin, 0, <<>>).
-
-split_kw_param(<<>>, _Depth, _Acc) -> false;
-split_kw_param(<<$\\, C, Rest/binary>>, Depth, Acc) ->
-    split_kw_param(Rest, Depth, <<Acc/binary, $\\, C>>);
-split_kw_param(<<$", Rest/binary>>, Depth, Acc) ->
-    split_kw_param_quote(Rest, Depth, <<Acc/binary, $">>);
-split_kw_param(<<$(, Rest/binary>>, Depth, Acc) ->
-    split_kw_param(Rest, Depth + 1, <<Acc/binary, $(>>);
-split_kw_param(<<$), Rest/binary>>, Depth, Acc) when Depth > 0 ->
-    split_kw_param(Rest, Depth - 1, <<Acc/binary, $)>>);
-split_kw_param(<<$:, Rest/binary>>, 0, Acc) ->
-    {true, trim(Acc), trim(Rest)};
-split_kw_param(<<C, Rest/binary>>, Depth, Acc) ->
-    split_kw_param(Rest, Depth, <<Acc/binary, C>>).
-
-split_kw_param_quote(<<>>, _Depth, _Acc) -> false;
-split_kw_param_quote(<<$", Rest/binary>>, Depth, Acc) ->
-    split_kw_param(Rest, Depth, <<Acc/binary, $">>);
-split_kw_param_quote(<<$\\, C, Rest/binary>>, Depth, Acc) ->
-    split_kw_param_quote(Rest, Depth, <<Acc/binary, $\\, C>>);
-split_kw_param_quote(<<C, Rest/binary>>, Depth, Acc) ->
-    split_kw_param_quote(Rest, Depth, <<Acc/binary, C>>).
-
-%%====================================================================
-%% Function declarations
-%%====================================================================
-
-parse_fn_decl(Name, Kind, Rest0, St, Rest) ->
-    Clean = trim(Rest0),
-    case Clean of
-        <<"(", _/binary>> ->
-            {ParamsBin, RetBin} = split_fn_sig(Clean, St#st.line),
-            Ret = parse_type_spec(trim(RetBin), St#st.line),
-            case Kind of
-                aggregate_function when ParamsBin =:= <<>> ->
-                    Spec = #gdbsp_typespec{
-                        name = Name,
-                        spec = {aggregate_function, [], #{}, Ret},
-                        line = St#st.line
-                    },
-                    parse_lines(Rest, St#st{typespecs = [Spec | St#st.typespecs]});
-                aggregate_function ->
-                    {PosParams, KwPairs} = parse_mixed_params(ParamsBin, St#st.line),
-                    Spec = #gdbsp_typespec{
-                        name = Name,
-                        spec = {aggregate_function, PosParams, maps:from_list(KwPairs), Ret},
-                        line = St#st.line
-                    },
-                    parse_lines(Rest, St#st{typespecs = [Spec | St#st.typespecs]});
-                function when ParamsBin =:= <<>> ->
-                    Spec = #gdbsp_typespec{
-                        name = Name,
-                        spec = {function, [], #{}, Ret},
-                        line = St#st.line
-                    },
-                    parse_lines(Rest, St#st{typespecs = [Spec | St#st.typespecs]});
-                function ->
-                    {PosParams, KwPairs} = parse_mixed_params(ParamsBin, St#st.line),
-                    Spec = #gdbsp_typespec{
-                        name = Name,
-                        spec = {function, PosParams, maps:from_list(KwPairs), Ret},
-                        line = St#st.line
-                    },
-                    parse_lines(Rest, St#st{typespecs = [Spec | St#st.typespecs]})
+parse_circuit_body(Tokens, Acc) ->
+    case Tokens of
+        [{body_line, _} | Rest] ->
+            case Rest of
+                [{identifier, _, BName}, {walrus, _} | Rest2] ->
+                    {Node, Rest3} = parse_node_def(BName, Rest2),
+                    parse_circuit_body(Rest3, [Node | Acc]);
+                _ ->
+                    throw({parse_error, token_line(hd(Rest)),
+                           <<"invalid node in circuit body">>})
             end;
         _ ->
-            parse_error(St#st.line, "expected '(' in function declaration")
-    end.
-
-split_fn_sig(<<"(", Rest/binary>>, Line) ->
-    split_fn_sig(Rest, 0, <<>>, Line).
-
-split_fn_sig(<<>>, _Depth, _Acc, Line) ->
-    parse_error(Line, "invalid function declaration");
-split_fn_sig(<<$\\, C, Rest/binary>>, D, Acc, Line) ->
-    split_fn_sig(Rest, D, <<Acc/binary, $\\, C>>, Line);
-split_fn_sig(<<$", Rest/binary>>, D, Acc, Line) ->
-    split_fn_sig_quote(Rest, D, <<Acc/binary, $">>, Line);
-split_fn_sig(<<$(, Rest/binary>>, D, Acc, Line) ->
-    split_fn_sig(Rest, D + 1, <<Acc/binary, $(>>, Line);
-split_fn_sig(<<$), Rest/binary>>, D, Acc, Line) when D > 0 ->
-    split_fn_sig(Rest, D - 1, <<Acc/binary, $)>>, Line);
-split_fn_sig(<<$), Rest/binary>>, 0, Acc, Line) ->
-    Rest1 = trim_left(Rest),
-    case Rest1 of
-        <<"->", $\s, Ret0/binary>> ->
-            Ret = strip_trailing_paren(trim(Ret0)),
-            {trim_right(Acc), Ret};
-        <<"->", Ret0/binary>> ->
-            Ret = strip_trailing_paren(trim(Ret0)),
-            {trim_right(Acc), Ret};
-        _ ->
-            parse_error(Line, "invalid function declaration")
-    end;
-split_fn_sig(<<C, Rest/binary>>, D, Acc, Line) ->
-    split_fn_sig(Rest, D, <<Acc/binary, C>>, Line).
-
-split_fn_sig_quote(<<$", Rest/binary>>, D, Acc, Line) ->
-    split_fn_sig(Rest, D, <<Acc/binary, $">>, Line);
-split_fn_sig_quote(<<$\\, C, Rest/binary>>, D, Acc, Line) ->
-    split_fn_sig_quote(Rest, D, <<Acc/binary, $\\, C>>, Line);
-split_fn_sig_quote(<<C, Rest/binary>>, D, Acc, Line) ->
-    split_fn_sig_quote(Rest, D, <<Acc/binary, C>>, Line).
-
-strip_trailing_paren(Bin) ->
-    Trimmed = trim_right(Bin),
-    case byte_size(Trimmed) > 0 andalso binary:last(Trimmed) =:= $) of
-        true -> binary:part(Trimmed, 0, byte_size(Trimmed) - 1);
-        false -> Trimmed
+            {lists:reverse(Acc), Tokens}
     end.
 
 %%====================================================================
-parse_string_list(Bin) ->
-    Items = split_top(trim(Bin), <<",">>),
-    lists:map(fun(I) -> dequote(trim(I)) end, Items).
-
-%%====================================================================
-%% Error handling
+%% Helpers
 %%====================================================================
 
-parse_error(Line, Fmt) ->
-    throw({parse_error, Line, iolist_to_binary(io_lib:format(Fmt, []))}).
+known_op(<<"source">>)             -> true;
+known_op(<<"delay">>)              -> true;
+known_op(<<"integrate">>)          -> true;
+known_op(<<"differentiate">>)      -> true;
+known_op(<<"distinct">>)           -> true;
+known_op(<<"plus">>)               -> true;
+known_op(<<"neg">>)                -> true;
+known_op(<<"map">>)                -> true;
+known_op(<<"flat_map">>)           -> true;
+known_op(<<"join">>)               -> true;
+known_op(<<"aggregate">>)          -> true;
+known_op(<<"filter">>)             -> true;
+known_op(<<"project">>)            -> true;
+known_op(<<"antijoin">>)           -> true;
+known_op(<<"circuit_access">>)     -> true;
+known_op(<<"fixpoint">>)           -> true;
+known_op(_)                        -> false.
 
-parse_error(Line, Fmt, Args) ->
-    throw({parse_error, Line, iolist_to_binary(io_lib:format(Fmt, Args))}).
+skip_newlines(Tokens) ->
+    case Tokens of
+        [{newline, _} | Rest] -> skip_newlines(Rest);
+        [{indent, _} | Rest] -> skip_newlines(Rest);
+        _ -> Tokens
+    end.
+
+skip_to_decl(Tokens) ->
+    case Tokens of
+        [{newline, _} | Rest] -> Rest;
+        [{indent, _} | Rest] -> Rest;
+        [] -> [];
+        _ -> Tokens
+    end.
+
+expect(Tokens, Tag) ->
+    case Tokens of
+        [{Tag, _} = T | _] -> T;
+        [] -> throw({parse_error, 0, iolist_to_binary(
+                      ["expected '", atom_to_list(Tag), "'"])});
+        [T | _] ->
+            throw({parse_error, token_line(T),
+                   iolist_to_binary(["expected '", atom_to_list(Tag), "'"])})
+    end.
+
+token_line({_, Line}) when is_integer(Line) -> Line;
+token_line({_, Line, _}) when is_integer(Line) -> Line;
+token_line({_, Line, _, _}) when is_integer(Line) -> Line;
+token_line(_) -> 0.
+
+token_val({_, _, Val}) -> Val.

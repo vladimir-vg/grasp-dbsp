@@ -1,2 +1,4 @@
 test_suite_graphs/
 _build/
+src/gdbsp_lexer_core.erl
+erl_crash.dump
