@@ -60,8 +60,7 @@ Wrapper around the leex-generated scanner:
   level.
 - Export `string/1 :: binary() -> {ok, [token()]} | {error, term()}`.
 
-**2c.** Write unit tests for the lexer: verify tokenization of sample `.gdbsp`
-snippets covering all token types.
+**2c.** Write tests for the lexer (see TDD Phase 1 below).
 
 ### Step 3 — Parser Rewrite: `src/gdbsp_parse.erl`
 
@@ -280,50 +279,213 @@ compile(Program, Options) ->
 Inline definitions override external ones when both exist. Typespec-only
 functions use the external JSON body as before.
 
-### Step 9 — Tests
+---
 
-**9a. Parse tests.** New YAML sections in `test/parse_fixtures/parse.yaml`:
+## 2. TDD Plan
 
-- Function definition with all-positional params.
-- Function definition with mixed positional/keyword params.
-- Function definition with explicit keyword variable names (`d: dvar`).
-- Expression: arithmetic, comparison, boolean, concatenation, bitwise.
-- Expression: function calls, struct construction (`struct(...)`), map literals
-  (`{k: v}`), array literals, dot access, subscripts.
-- Operator precedence: `a + b * c`, `a > b and c < d`.
-- Cross-group error: `a + b < c`.
-- Aggregates in function body → parse error.
-- Closure in function body → parse error.
+Implementation follows a test-driven approach organized into six phases,
+each with specific test modules and cycles.
 
-**9b. Lowering tests.** Verify parse_expr → runtime expr conversion for each
-node type. Verify correct operator desugaring names.
+### Key Principles
 
-**9c. Type-check tests.**
+1. **New modules are pure TDD:** Lexer, expression lowering, and type checking
+   — all new modules with no legacy code. Write test → fail → implement → pass.
+2. **Parser is regression-first, then new features:** The parser is rewritten
+   monolithically. The 10 existing `parse.yaml` fixtures serve as the regression
+   contract. New YAML cases are added once the token-based parser is functional.
+3. **Full regression after every change:** Run `rebar3 ct` before committing.
 
-- Correct function body with matching return type.
-- Return type mismatch → error.
-- Unbound variable in body → error.
-- Param count mismatch → error.
-- Keyword param mismatch → error.
+### Running Tests
 
-**9d. Compilation integration tests.**
+```bash
+# Individual test suites
+rebar3 ct --suite=test/gdbsp_lexer_SUITE
+rebar3 ct --suite=test/gdbsp_parse_SUITE
+rebar3 ct --suite=test/gdbsp_compile_expr_SUITE
+rebar3 ct --suite=test/gdbsp_compile_SUITE
 
-- Full compile of `.gdbsp` with inline function bodies.
-- Mixed inline + external functions (inline overrides, external used as
-  fallback).
-- External-only functions continue to work.
+# Full regression
+rebar3 ct
+```
 
-**9e. Backward compatibility.** All existing tests in
-`test/parse_fixtures/parse.yaml` pass unchanged.
+### Phase 1: Lexer (Step 2)
 
-### Step 10 — `rebar.config`
+**New test module:** `test/gdbsp_lexer_SUITE.erl` (Common Test). Tests
+`gdbsp_lexer:string/1` in isolation.
 
-If the leex compiler plugin is not already present, add it so that
-`gdbsp_lexer_core.xrl` is compiled during `rebar3 compile`.
+| # | Test (write first) | Implement | Assert |
+|---|---|---|---|
+| 1 | Tokenize `name := source("table")` | leex rules for identifiers, strings, `:=`, `()`, newline | `[{identifier,"name"}, {walrus}, {identifier,"source"}, {'('}, {string,"table"}, {')'}]` |
+| 2 | Tokenize `name :: stream(struct("f": i64))` | leex rules for `::`, compound type keywords | Full token sequence |
+| 3 | Tokenize integer/float/decimal/bits literals (`42`, `3.14`, `0b1011`) | Literal leex rules + `parse_number/1`, `parse_bit_string/1` | Correct token types with parsed values |
+| 4 | Tokenize expression operators: `+ - * / % = != < > <= >= and or not` | Operator leex rules | Each produces correct token atom |
+| 5 | Tokenize bitwise: `\| ^ & << >> <<< >>> ~ ++` | Operator leex rules | Each produces correct token atom |
+| 6 | Tokenize delimiters: `{ } [ ] . , : -> := :: **` | Delimiter leex rules | Each produces correct token atom |
+| 7 | Tokenize function definition: `add := function((x, y, d:) -> x + y)` | All token types together | Correct token sequence |
+| 8 | Tokenize circuit body with indentation → `body_line` / `body_end` markers | Indentation tracking in `gdbsp_lexer.erl` wrapper | Body content wrapped in markers |
+| 9 | Tokenize comments — no tokens produced | `#[^\n]*` skip rule | Comment lines produce zero tokens |
+
+Run: `rebar3 ct --suite=test/gdbsp_lexer_SUITE`
+
+### Phase 2: Parser — Backward Compatibility (Steps 3a–3c, 3f, 10)
+
+**Existing test module:** `test/gdbsp_parse_SUITE.erl` (10 test cases in
+`test/parse_fixtures/parse.yaml`). These are the regression contract.
+
+| # | Action | Verify |
+|---|---|---|
+| 1 | Implement `parse_program/1` skeleton + `parse_node_def/2` for known operators | Incrementally: first test case passes, then two, etc. |
+| 2 | Add `parse_typespec/2` path (`:: stream(...)`, `:: function(...)`, `:: aggregate_function(...)`) | Parser produces identical `#gdbsp_typespec{}` structures to old parser |
+| 3 | Add `parse_circuit_def/1` path with indented body | Circuit body nodes parsed correctly |
+| 4 | Add fixpoint parsing within `parse_node_def` | Fixpoint args match old output |
+| 5 | Add `rebar.config` leex plugin if needed | Compilation succeeds |
+
+Run: `rebar3 ct --suite=test/gdbsp_parse_SUITE` after each sub-step.
+
+### Phase 3: Parser — New Features (Steps 3d–3e, 4)
+
+**Add YAML test cases** to `test/parse_fixtures/parse.yaml`. Each new case
+is added BEFORE implementing the corresponding parser feature.
+
+| # | Test case (YAML) | Implement | Assert |
+|---|---|---|---|
+| 1 | Function definition: `add := function((x, y) -> x + y)` | `parse_fn_def/2`, `parse_fn_params/1` for positional params | `#gdbsp_fn_def{name="add", params=[{pos,"x"},{pos,"y"}], body=...}` |
+| 2 | Keyword params: `f := function((x, d:, e: evar) -> ...)` | Keyword shorthand `name:` and explicit `key: var` | `params=[{pos,"x"},{kw,"d","d"},{kw,"e","evar"}]` |
+| 3 | Integer literal `42` in body | `parse_atomic/1` literal production | `{const, _, 42, integer, _, _}` |
+| 4 | String `"hello"`, `true`, `false`, `null` | All literal + symbol types | Correct `{const,...}` / `{symbol,...}` nodes |
+| 5 | Binary ops: `x + y`, `a * b` | Full precedence-climbing chain | `{binop, _, '+', {var,_,<<"x">>}, {var,_,<<"y">>}}` |
+| 6 | Precedence: `a + b * c`, `x > y and z` | `parse_or` → `parse_and` → `parse_cmp` → `parse_grouped_binary` → `parse_prefix` | Correctly nested binop tree |
+| 7 | Cross-group error: `a + b < c` | Error detection in `parse_grouped_binary_rest` | `{error, {cross_group_arithmetic, _}, _}` |
+| 8 | Function calls: `sqrt(x)`, `struct:get(row, key: "col")` | `parse_atomic` call path, mixed pos/kw args | `{call, _, <<"sqrt">>, [{var,_,<<"x">>}]}` |
+| 9 | Map literal `{a: 1, b: x}` | `parse_dict/1` | `{dict_literal, _, [{kv,<<"a">>,...},{kv,<<"b">>,...}], undefined}` |
+| 10 | Array literal `[1, 2, 3]`, `[x, *rest]` | `parse_array/1` | `{array_literal, _, [...]}` |
+| 11 | Dot access `row.field` | `parse_dot_chain` | `{dot_access, _, {var,_,<<"row">>}, <<"field">>}` |
+| 12 | Subscript `arr[0]`, slice `s[0:5]` | `parse_subscript`, `parse_slice` | `{subscript, _, _, {index,...}}` / `{subscript, _, _, {slice,...}}` |
+| 13 | Aggregate in function body → parse error | Guard in `parse_atomic` | `{error, ...}` |
+| 14 | Closure in function body → parse error | Guard in `parse_atomic` | `{error, ...}` |
+| 15 | Function def without matching typespec (positive — parse succeeds, error at compile) | Just parse successfully | `#gdbsp_fn_def{}` |
+| 16 | Unknown variable in body (positive — parse succeeds, error at type-check) | Parse `{var, _, Name}` even for unknown names | `{var, _, <<"unknown">>}` |
+
+Run: `rebar3 ct --suite=test/gdbsp_parse_SUITE` after each sub-step.
+
+**After all Phase 3 tests pass:** Create `include/gdbsp_parse_expr.hrl` with
+the `parse_expr()` type definition. Add `#gdbsp_fn_def{}` record and extend
+`#gdbsp_program{}` with `fn_defs` field (Step 4).
+
+### Phase 4: Expression Lowering + Type Checking (Steps 5–6)
+
+**New test module:** `test/gdbsp_compile_expr_SUITE.erl` (Common Test). Tests
+`gdbsp_compile_expr:lower_expr/2`, `check_fn_body/3`, and `check_all_fns/1`.
+
+**4a. Lowering tests.**
+
+| # | Test `lower_expr/2` input | Assert on output |
+|---|---|---|
+| 1 | `{const, _, 42, integer, _, _}`, `#{}` | `{value, integer, 42}` |
+| 2 | `{const, _, <<"hi">>, string, _, _}`, `#{}` | `{value, {string, <<"UTF-8">>}, <<"hi">>}` |
+| 3 | `{const, _, absent, _, _, _}`, `#{}` | `{value, absent, absent}` |
+| 4 | `{symbol, _, <<"true">>}`, `#{}` | `{value, {enum,[<<"false">>,<<"true">>]}, <<"true">>}` |
+| 5 | `{symbol, _, <<"null">>}`, `#{}` | `{value, {enum,[<<"null">>]}, <<"null">>}` |
+| 6 | `{var, _, <<"x">>}`, `#{"x" => "x"}` | `{arg, <<"x">>}` |
+| 7 | `{var, _, <<"y">>}`, `#{}` → error | `unbound_var` |
+| 8 | `{binop, _, '+', {var,_,<<"x">>}, {var,_,<<"y">>}}`, `#{"x"=>"x","y"=>"y"}` | `{call, <<"add">>, [{arg,<<"x">>},{arg,<<"y">>}], #{}}` |
+| 9 | All 23 operators (one test per operator) | Each produces correct desugared function name (see §6.5 of syntax.md) |
+| 10 | `{unop, _, '-', {var,_,<<"x">>}}`, `#{"x"=>"x"}` | `{call, <<"neg">>, [{arg,<<"x">>}], #{}}` |
+| 11 | `{dot_access, _, {var,_,<<"r">>}, <<"f">>}`, `#{"r"=>"r"}` | `{call, <<"struct:get">>, [{arg,<<"r">>}], #{<<"key">> => {value, {string,<<"UTF-8">>}, <<"f">>}}` |
+| 12 | `{array_literal, _, [e1, e2]}`, bindings | `{call, <<"array">>, [e1', e2'], #{}}` |
+| 13 | `{dict_literal, _, [{kv,<<"a">>,v1}], undefined}`, bindings | `{call, <<"map">>, [], #{<<"a">> => v1'}}` |
+| 14 | `{call, _, <<"sqrt">>, [e1]}`, bindings | `{call, <<"sqrt">>, [e1'], #{}}` |
+| 15 | `{call, _, <<"f">>, [e1, {kv,<<"k">>,v1}]}`, bindings | `{call, <<"f">>, [e1'], #{<<"k">> => v1'}}` |
+| 16 | `{subscript, _, e, {index, k}}`, bindings | `{get, e', [k']}` |
+| 17 | `{subscript, _, e, {slice, s, undefined, undefined}}`, bindings | `{slice, e', s', undefined, undefined}` |
+
+**4b. Type checking tests.**
+
+| # | Test `check_fn_body/3` input | Assert |
+|---|---|---|
+| 1 | Body `{value, integer, 42}`, env `#{x => i64}`, ret `i64` | `ok` |
+| 2 | Body `{value, integer, 42}`, env `#{}`, ret `string` | `return_type_mismatch` |
+| 3 | Body `{arg, <<"x">>}`, env `#{<<"x">> => i64}`, ret `i64` | `ok` |
+| 4 | Body `{arg, <<"x">>}`, env `#{}`, ret `i64` | `unbound_var` |
+| 5 | Body `{call, <<"add">>, [{arg,<<"x">>},{arg,<<"y">>}], #{}}`, env `#{"x"=>i64, "y"=>i64}`, ret `i64` | `ok` (exercises `gdbsp_builtins:lookup_fn`) |
+| 6 | Same body but ret `string` | `return_type_mismatch` |
+
+**4c. Integration tests.** `check_all_fns/1` on full programs:
+
+| # | Program input | Assert |
+|---|---|---|
+| 1 | fn_def with matching typespec | `{ok, FnJsonMap, []}` |
+| 2 | fn_def without matching typespec | `{error, #{fn_name => missing_typespec}}` |
+| 3 | Param count mismatch (positional) | `{error, ...}` |
+| 4 | Keyword param name mismatch | `{error, ...}` |
+| 5 | Round-trip: parse string → lower → JSON → `json_to_expr` | Runtime expr matches original lowered form |
+
+Run: `rebar3 ct --suite=test/gdbsp_compile_expr_SUITE`
+
+### Phase 5: Builtins (Step 7)
+
+Add test cases to `test/gdbsp_compile_expr_SUITE.erl` (the type checker's
+`check_fn_body/3` already exercises `lookup_fn` through call resolution; add
+explicit tests here).
+
+| # | Test | Assert |
+|---|---|---|
+| 1 | `gdbsp_builtins:lookup_fn(<<"add">>, [i64, i64], [])` | `{ok, i64, _}` |
+| 2 | Same for all 14 new names | All resolve |
+| 3 | `gdbsp_builtins:lookup_fn(<<"math:add">>, [i64, i64], [])` | `{ok, i64, _}` (backward compat) |
+| 4 | `gdbsp_builtins:binop_fn_name('+')` | `<<"add">>` |
+| 5 | Cross-check: operator desugaring produces names resolvable via `lookup_fn` | All 23 operators |
+
+Run alongside Phase 4 tests: `rebar3 ct --suite=test/gdbsp_compile_expr_SUITE`
+
+### Phase 6: Compilation Integration (Step 8)
+
+**Modify existing test module:** `test/gdbsp_compile_SUITE.erl`. Add test cases
+that compile full `.gdbsp` source strings with inline function bodies.
+
+| # | Test | Assert |
+|---|---|---|
+| 1 | Compile `.gdbsp` with inline function + `map(input, fn)` | Circuit graph has `map` node with expression JSON from inline body |
+| 2 | Inline fn overrides external fn_registry entry for same name | Inline body wins |
+| 3 | Typespec-only fn (no `:= function(...)` line) + external fn_registry entry | External body used |
+| 4 | Typespec-only fn with no external body → error | `missing_function` |
+
+Run: `rebar3 ct --suite=test/gdbsp_compile_SUITE`
+
+### Full Regression
+
+After all phases complete:
+
+```bash
+rebar3 ct
+```
+
+All existing suites must pass unchanged:
+- `gdbsp_parse_SUITE` (10 existing + 16 new = 26 test cases)
+- `gdbsp_type_infer_SUITE` (34 test cases)
+- `gdbsp_e2e_SUITE` (38 YAML files)
+- `gdbsp_compile_lower_SUITE` (28 test cases)
+- `gdbsp_compile_SUITE` (12 existing + 4 new = 16 test cases)
+- All operator suites (10+ suites)
+- `gdbsp_graphviz_SUITE`, `gdbsp_deploy_SUITE`
+- `gdbsp_rec_SUITE`, `gdbsp_rec_coord_SUITE`, `gdbsp_rec_integration_SUITE`
+
+### Test File Summary
+
+| File | Action | Tests what |
+|------|--------|-----------|
+| `test/gdbsp_lexer_SUITE.erl` | CREATE | Lexer tokenization, indentation tracking (Phase 1) |
+| `test/parse_fixtures/parse.yaml` | MODIFY | Add 16 new cases for fn defs + expressions (Phase 3) |
+| `test/gdbsp_compile_expr_SUITE.erl` | CREATE | `lower_expr/2`, `check_fn_body/3`, `check_all_fns/1`, builtin lookups (Phases 4–5) |
+| `test/gdbsp_compile_SUITE.erl` | MODIFY | Add 4 compilation integration cases (Phase 6) |
+
+No changes needed for: `gdbsp_type_infer_SUITE`, `gdbsp_e2e_SUITE`,
+`gdbsp_compile_lower_SUITE`, operator suites, rec suites — they use the
+fn_registry API that remains unchanged.
 
 ---
 
-## 2. Files Summary
+## 3. Files Summary
 
 | Action | File |
 |--------|------|
@@ -336,3 +498,7 @@ If the leex compiler plugin is not already present, add it so that
 | MODIFY | `src/gdbsp_compile.erl` |
 | MODIFY | `src/gdbsp_builtins.erl` |
 | MODIFY | `rebar.config` (leex plugin if needed) |
+| CREATE | `test/gdbsp_lexer_SUITE.erl` |
+| CREATE | `test/gdbsp_compile_expr_SUITE.erl` |
+| MODIFY | `test/parse_fixtures/parse.yaml` |
+| MODIFY | `test/gdbsp_compile_SUITE.erl` |
