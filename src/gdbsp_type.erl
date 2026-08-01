@@ -347,7 +347,7 @@ canonical_text_inner({bits, N}) ->
 canonical_text_inner({optional, T}) ->
     <<"optional(", (canonical_text_inner(T))/binary, ")">>;
 canonical_text_inner({closure, [], T}) ->
-    <<"closure(->", (canonical_text_inner(T))/binary, ")">>;
+    <<"closure(() -> ", (canonical_text_inner(T))/binary, ")">>;
 canonical_text_inner({closure, Params, T}) ->
     {PosParams, NamedPairs} = lists:partition(
         fun({Name, _}) -> Name =:= undefined end, Params),
@@ -359,7 +359,7 @@ canonical_text_inner({closure, Params, T}) ->
     Inside = lists:foldl(fun(P, <<>>) -> P;
                             (P, Acc) -> <<Acc/binary, ",", P/binary>>
                          end, <<>>, AllParts),
-    <<"closure(", Inside/binary, "->", (canonical_text_inner(T))/binary, ")">>;
+    <<"closure((", Inside/binary, ") -> ", (canonical_text_inner(T))/binary, ")">>;
 canonical_text_inner({array, T, varsize}) ->
     <<"array(", (canonical_text_inner(T))/binary, ")">>;
 canonical_text_inner({array, T, N}) when is_integer(N) ->
@@ -456,9 +456,28 @@ parse_ct_params_for(<<"optional">>, Bin) ->
     {[T], Rest};
 
 parse_ct_params_for(<<"closure">>, Bin) ->
-    {Params, Rest0} = parse_ct_closure_params(Bin, []),
-    Rest1 = expect_ct(<<"->">>, Rest0),
-    {RetType, Rest2} = parse_ct(Rest1),
+    Trimmed = skip_ct_space(Bin),
+    {ParamsGroup, RetWithParen} = split_ct_arrow(Trimmed, 0, <<>>),
+    ParamsGroupTrimmed = string:trim(ParamsGroup),
+    ParamsInner = case ParamsGroupTrimmed of
+        <<"(", Inner0/binary>> ->
+            Case0 = case byte_size(Inner0) > 0 andalso binary:last(Inner0) =:= $) of
+                true -> binary:part(Inner0, 0, byte_size(Inner0) - 1);
+                false -> Inner0
+            end,
+            string:trim(Case0);
+        _ -> ParamsGroupTrimmed
+    end,
+    Params = case skip_ct_space(ParamsInner) of
+        <<>> -> [];
+        P -> parse_ct_closure_params_list(P, [])
+    end,
+    RetStr = string:trim(RetWithParen),
+    RetBin = case byte_size(RetStr) > 0 andalso binary:last(RetStr) of
+        $) -> string:trim(binary:part(RetStr, 0, byte_size(RetStr) - 1));
+        _ -> RetStr
+    end,
+    {RetType, Rest2} = parse_ct(RetBin),
     {[Params, RetType], Rest2};
 
 parse_ct_params_for(<<"array">>, Bin) ->
@@ -501,6 +520,54 @@ parse_ct_params_for(<<"dynamic">>, Bin) ->
 
 parse_ct_params_for(Name, _Bin) ->
     throw({parse_error, {unknown_type_name, Name}}).
+
+split_ct_arrow(<<"->", Rest/binary>>, 0, Acc) ->
+    {Acc, Rest};
+split_ct_arrow(<<$\\, C, Rest/binary>>, Depth, Acc) ->
+    split_ct_arrow(Rest, Depth, <<Acc/binary, $\\, C>>);
+split_ct_arrow(<<$", Rest/binary>>, Depth, Acc) ->
+    split_ct_arrow_quote(Rest, Depth, <<Acc/binary, $">>);
+split_ct_arrow(<<$(, Rest/binary>>, Depth, Acc) ->
+    split_ct_arrow(Rest, Depth + 1, <<Acc/binary, $(>>);
+split_ct_arrow(<<$), Rest/binary>>, Depth, Acc) when Depth > 0 ->
+    split_ct_arrow(Rest, Depth - 1, <<Acc/binary, $)>>);
+split_ct_arrow(<<C, Rest/binary>>, Depth, Acc) ->
+    split_ct_arrow(Rest, Depth, <<Acc/binary, C>>);
+split_ct_arrow(<<>>, _Depth, _Acc) ->
+    throw({parse_error, {expected_arrow, closure}}).
+
+split_ct_arrow_quote(<<$", Rest/binary>>, Depth, Acc) ->
+    split_ct_arrow(Rest, Depth, <<Acc/binary, $">>);
+split_ct_arrow_quote(<<$\\, C, Rest/binary>>, Depth, Acc) ->
+    split_ct_arrow_quote(Rest, Depth, <<Acc/binary, $\\, C>>);
+split_ct_arrow_quote(<<C, Rest/binary>>, Depth, Acc) ->
+    split_ct_arrow_quote(Rest, Depth, <<Acc/binary, C>>);
+split_ct_arrow_quote(<<>>, _Depth, _Acc) ->
+    throw({parse_error, {unclosed_quote, closure}}).
+
+parse_ct_closure_params_list(Bin, Acc) ->
+    Trimmed0 = skip_ct_space(Bin),
+    case Trimmed0 of
+        <<>> -> lists:reverse(Acc);
+        <<$", _/binary>> ->
+            {Name, Rest0} = parse_ct_quoted_string(Trimmed0),
+            Rest1 = expect_ct(<<":">>, Rest0),
+            {Type, Rest2} = parse_ct(Rest1),
+            case skip_ct_space(Rest2) of
+                <<",", Rest3/binary>> ->
+                    parse_ct_closure_params_list(Rest3, [{Name, Type} | Acc]);
+                _ ->
+                    lists:reverse([{Name, Type} | Acc])
+            end;
+        _ ->
+            {Type, Rest0} = parse_ct(Trimmed0),
+            case skip_ct_space(Rest0) of
+                <<",", Rest1/binary>> ->
+                    parse_ct_closure_params_list(Rest1, [{undefined, Type} | Acc]);
+                _ ->
+                    lists:reverse([{undefined, Type} | Acc])
+            end
+    end.
 
 parse_ct_enum_names(Bin, Acc) ->
     {Name, Rest0} = parse_ct_quoted_string(Bin),
@@ -594,35 +661,6 @@ parse_ct_qs_content(<<C, Rest/binary>>, Acc) ->
     parse_ct_qs_content(Rest, <<Acc/binary, C>>);
 parse_ct_qs_content(<<>>, _Acc) ->
     throw({parse_error, unterminated_string}).
-
-%% ── parse_ct_closure_params ─────────────────────────────────────────
-
-parse_ct_closure_params(<<"->", _/binary>> = Rest, Acc) ->
-    {lists:reverse(Acc), Rest};
-parse_ct_closure_params(Bin, Acc) ->
-    Trimmed0 = skip_ct_space(Bin),
-    case Trimmed0 of
-        <<"->", _/binary>> = Rest ->
-            {lists:reverse(Acc), Rest};
-        <<$", _/binary>> ->
-            {Name, Rest0} = parse_ct_quoted_string(Trimmed0),
-            Rest1 = expect_ct(<<":">>, Rest0),
-            {Type, Rest2} = parse_ct(Rest1),
-            case skip_ct_space(Rest2) of
-                <<",", Rest3/binary>> ->
-                    parse_ct_closure_params(Rest3, [{Name, Type} | Acc]);
-                _ ->
-                    {lists:reverse([{Name, Type} | Acc]), Rest2}
-            end;
-        _ ->
-            {Type, Rest0} = parse_ct(Trimmed0),
-            case skip_ct_space(Rest0) of
-                <<",", Rest1/binary>> ->
-                    parse_ct_closure_params(Rest1, [{undefined, Type} | Acc]);
-                _ ->
-                    {lists:reverse([{undefined, Type} | Acc]), Rest0}
-            end
-    end.
 
 skip_ct_space(<<$\s, Rest/binary>>) -> skip_ct_space(Rest);
 skip_ct_space(<<$\t, Rest/binary>>) -> skip_ct_space(Rest);
@@ -776,7 +814,7 @@ is_assignable_to_enum(absent, _TgtNames) -> false;
 is_assignable_to_enum(_, _TgtNames) -> false.
 
 is_assignable_to_closure({closure, [], SrcInner}, {closure, [], TgtInner}) ->
-    is_assignable_inner(SrcInner, TgtInner);
+    SrcInner =:= TgtInner;
 is_assignable_to_closure(Src, {closure, [], TgtInner}) ->
     is_assignable_inner(Src, TgtInner);
 is_assignable_to_closure({closure, SrcParams, SrcInner}, {closure, TgtParams, TgtInner}) ->
@@ -784,23 +822,17 @@ is_assignable_to_closure({closure, SrcParams, SrcInner}, {closure, TgtParams, Tg
     {TgtPos, TgtNamed} = split_closure_params(TgtParams),
     pos_params_assignable(SrcPos, TgtPos) andalso
     named_params_assignable(SrcNamed, TgtNamed) andalso
-    is_assignable_inner(SrcInner, TgtInner);
+    SrcInner =:= TgtInner;
 is_assignable_to_closure(_, _) -> false.
 
 split_closure_params(Params) ->
     lists:partition(fun({Name, _}) -> Name =:= undefined end, Params).
 
-pos_params_assignable([], []) -> true;
-pos_params_assignable([{undefined, S} | SRest], [{undefined, T} | TRest]) ->
-    is_assignable_inner(S, T) andalso pos_params_assignable(SRest, TRest);
+pos_params_assignable(Pos, Pos) -> true;
 pos_params_assignable(_, _) -> false.
 
 named_params_assignable(SrcNamed, TgtNamed) ->
-    SortedSrc = lists:sort(SrcNamed),
-    SortedTgt = lists:sort(TgtNamed),
-    length(SortedSrc) =:= length(SortedTgt) andalso
-    lists:all(fun({{N, ST}, {N, TT}}) -> is_assignable_inner(ST, TT) end,
-              lists:zip(SortedSrc, SortedTgt)).
+    lists:sort(SrcNamed) =:= lists:sort(TgtNamed).
 
 is_assignable_to_numeric({numeric, _, _}) -> true;
 is_assignable_to_numeric(integer) -> true;

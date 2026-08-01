@@ -137,11 +137,19 @@ trees (see [stdlib.md](stdlib.md) §1).
 ### Function
 
 ```
-fn_name :: function((param_types...) -> return_type)
+fn_name :: function((pos_type, ..., "key": kw_type, ...) -> return_type)
 ```
 
 Used with `map`, `filter`, `flat_map`. The function operates on a single row
 element (without weight). The operator handles weight propagation automatically.
+
+Parameters may be positional (bare type names, order-sensitive) or keyword
+(`"name": type`, order-insensitive). Positional params must come before keyword
+params. Example with mixed params:
+
+```
+fn :: function((i64, "prefix": string) -> f64)
+```
 
 The function's expression body is defined externally in the function registry
 (see [stdlib.md](stdlib.md) §1). The single parameter is conventionally named
@@ -175,7 +183,7 @@ expand_items :: function((struct("id": i64, "items": array(string("UTF-8")))) ->
 ### Aggregate function
 
 ```
-fn_name :: aggregate_function((value_type) -> result_type)
+fn_name :: aggregate_function((pos_type, ..., "key": kw_type, ...) -> result_type)
 ```
 
 Used with `aggregate`. The `value_type` is the type of the `value:` field in the

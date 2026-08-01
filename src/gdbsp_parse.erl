@@ -647,11 +647,9 @@ parse_type_spec(Bin, Line) ->
             [K, V] = split_top(Inner, <<",">>),
             {map, parse_type_spec(K, Line), parse_type_spec(V, Line)};
         <<"closure(", _/binary>> ->
-            {_, Inner} = extract_parens(Trimmed),
-            parse_closure_type(closure, Inner, Line);
+            parse_closure_type_from_full(closure, Trimmed, Line);
         <<"result_equivalent_closure(", _/binary>> ->
-            {_, Inner} = extract_parens(Trimmed),
-            parse_closure_type(result_equivalent_closure, Inner, Line);
+            parse_closure_type_from_full(result_equivalent_closure, Trimmed, Line);
         _ ->
             parse_scalar_type(Trimmed, Line)
     end.
@@ -739,25 +737,41 @@ is_type_var(Bin) when byte_size(Bin) > 0 ->
     First = binary:first(Bin),
     First >= $A andalso First =< $Z.
 
-parse_closure_type(Kind, Bin, Line) ->
-    Trimmed = trim(Bin),
-    case Trimmed of
+parse_closure_type_from_full(Kind, Bin, Line) ->
+    Name = atom_to_binary(Kind, utf8),
+    PrefixLen = byte_size(Name) + 1,
+    <<_:PrefixLen/binary, Inner/binary>> = Bin,
+    [ParamsGroup, RetWithParen] = split_top(Inner, <<"->">>),
+    Ret = parse_closure_ret(RetWithParen, Line),
+    ParamsGroupTrimmed = trim(ParamsGroup),
+    ParamsInner = case ParamsGroupTrimmed of
         <<"(", _/binary>> ->
-            {_, Inner} = extract_parens(Trimmed),
-            [ParamsBin, RetBin] = split_top(Inner, <<"->">>),
-            Ret = parse_type_spec(trim(RetBin), Line),
-            case trim(ParamsBin) of
-                <<>> ->
-                    {Kind, [], Ret};
-                ParamsTrimmed ->
-                    {PosParams, KwPairs} = parse_mixed_params(ParamsTrimmed, Line),
-                    Params = [{undefined, PT} || PT <- PosParams] ++ KwPairs,
-                    {Kind, Params, Ret}
-            end;
+            {_, Inner2} = extract_parens(ParamsGroupTrimmed),
+            Inner2;
         _ ->
-            parse_error(Line, "expected '(' in closure type")
+            ParamsGroupTrimmed
+    end,
+    case trim(ParamsInner) of
+        <<>> ->
+            {Kind, [], Ret};
+        ParamsTrimmed ->
+            {PosParams, KwPairs} = parse_mixed_params(ParamsTrimmed, Line),
+            Params = [{undefined, PT} || PT <- PosParams] ++ KwPairs,
+            {Kind, Params, Ret}
     end.
 
+parse_closure_ret(RetWithParen, Line) ->
+    Trimmed = trim(RetWithParen),
+    case binary:last(Trimmed) of
+        $) ->
+            RetBin = binary:part(Trimmed, 0, byte_size(Trimmed) - 1),
+            parse_type_spec(trim(RetBin), Line);
+        _ ->
+            parse_error(Line, "expected ')' in closure type")
+    end.
+
+%%====================================================================
+%% Function declarations
 %%====================================================================
 %% Mixed position + keyword param parsing for declarations and types
 %%====================================================================

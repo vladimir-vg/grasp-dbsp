@@ -45,17 +45,29 @@ Wrappers add a layer of semantics around an inner type.
 | Type | Meaning |
 |------|---------|
 | `optional(T)` | `T` or absent. The `ABSENT` literal has type `absent` and is assignable to any `optional(T)`. Collapses: `optional(optional(T))` → `optional(T)`. |
-| `closure(P, T)` | Opaque reference to a deterministic deferred computation with named parameters `P` and return type `T`. Equality is byte-identity. |
-| `result_equivalent_closure(P, T)` | Opaque reference to a deferred computation that may produce semantically equivalent yet non-identical results on each evaluation. Same structure as `closure` but without the byte-identity guarantee. |
+| `closure(() -> T)` | Opaque reference to a deterministic deferred computation. Takes positional and named parameters, returns type `T`. Equality is byte-identity. |
+| `result_equivalent_closure(() -> T)` | Opaque reference to a deferred computation that may produce semantically equivalent yet non-identical results on each evaluation. Same structure as `closure` but without the byte-identity guarantee. |
 
 **`optional(T)` semantics:**
 - `optional(dynamic)` does NOT collapse to `dynamic` — `dynamic` does not accept `absent`.
 - `optional(enum(S))` retains the wrapper — absence differs from an enum value.
 - The `ABSENT` literal is resolved at compile time to the expected `optional(T)` type.
 
-**`closure(P, T)` and `result_equivalent_closure(P, T)` structure:**
-`P` is a map of parameter names to types: `{param1: T1, param2: T2}`.
-A closure with no parameters uses empty params: `closure(() -> T)` / `result_equivalent_closure(() -> T)`.
+**`closure(...)` and `result_equivalent_closure(...)` structure:**
+
+Parameters use the syntax `(pos_type, ..., "key": kw_type, ...)` inside the closure
+type. Positional params are bare types written first; named params use quoted-string
+keys and follow the positional params. Order of positional params matters; order of
+named params does not. A closure with no parameters uses `closure(() -> T)` /
+`result_equivalent_closure(() -> T)`.
+
+Syntax (in type annotations, canonical text, and `.gdbsp` source declarations):
+- `closure(() -> T)` — no parameters
+- `closure((i64) -> f64)` — one positional parameter
+- `closure((i64, "key": string) -> f64)` — mixed positional and named
+
+In the internal representation (`gdbsp_column_type()`), positional params carry
+`undefined` as the name; named params carry a `binary()` name.
 
 ### 1.3 Compound Types
 
@@ -252,9 +264,12 @@ Redundant nesting is eliminated at type construction time:
 ```
 optional(optional(T))                  →  optional(T)
 string("UTF-8")                        →  string
-optional(closure(P1, closure(P2, T)))  →  optional(closure(P1 ∪ P2, T))
-closure(P1, closure(P2, T))            →  closure(P1 ∪ P2, T)
+optional(closure(P1, closure(P2, T)))  →  optional(closure(P1 ++ P2, T))
+closure(P1, closure(P2, T))            →  closure(P1 ++ P2, T)
 ```
+
+Positional params are concatenated in order. Named params are merged by name;
+if the same name appears with different types the collapse is an error.
 
 `optional(dynamic)` does NOT collapse to `dynamic`.
 
@@ -291,9 +306,8 @@ Follows the chains and cross-signed tables in §4.
 
 | Source | Target | Assignable? |
 |--------|--------|-------------|
-| `closure(P, T)` | `closure(P, T)` | Yes |
-| `closure(P, T)` | `closure(P, U)` if `T → U` | Yes — covariant return |
-| `closure(P, T)` | `closure(Q, T)` if params compatible | Yes — compatible params |
+| `closure(P, T)` | `closure(P, T)` | Yes — exact match (positional params in order, named params by name, return type exact) |
+| `closure(P, T)` | `closure(Q, T)` if params match exactly | Yes — param-invariant, return type must be identical |
 | `closure(P, T)` | `result_equivalent_closure(P, T)` | Yes — deterministic is a subset of possibly-non-deterministic |
 | `result_equivalent_closure(P, T)` | `closure(P, T)` | No |
 | `closure` / `rec_closure` | `dynamic` | Yes |
@@ -405,7 +419,7 @@ Every type has a deterministic single-line text representation. This form is use
 | `string(e)` | `string("CP1251")` |
 | `enum("v1",...)` | `enum("v1","v2")` — values sorted alphabetically |
 | `optional(T)` | `optional(<T>)` |
-| `closure(P, T)` | `closure((<params>) -> <T>)` |
+| `closure((...) -> T)` | `closure((i64,"k":string)->f64)` — positional params bare, named as `"key":type` |
 | `result_equivalent_closure(P, T)` | `result_equivalent_closure((<params>) -> <T>)` |
 | `struct("f1": T1, ...)` | `struct("f1":<T1>,"f2":<T2>)` — fields sorted alphabetically |
 | `array(T)` | `array(<T>)` |
@@ -495,6 +509,7 @@ When types appear in JSON (e.g., in schema storage, function registries, or valu
 {"optional": {"array": "f64"}}
 {"closure": {"return": "bytes"}}
 {"closure": {"params": {"p1": "i64"}, "return": "string"}}
+{"closure": {"positional": ["i64"], "params": {"k": "string"}, "return": "f64"}}
 {"result_equivalent_closure": {"params": {"k": "i64"}, "return": "f64"}}
 ```
 

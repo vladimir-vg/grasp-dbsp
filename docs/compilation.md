@@ -25,8 +25,8 @@ A `.gdbsp` source file is parsed into a program representation containing:
 
 - **Nodes** — operator definitions: `name := operator(args...)`
 - **Type annotations** — stream types: `name :: stream(type)`
-- **Function declarations** — signatures: `fn :: function((params) → ret)`
-- **Aggregate declarations** — signatures: `fn :: aggregate_function((val) → ret)`
+- **Function declarations** — signatures: `fn :: function((pos_args..., "key": kw_type...) → ret)`
+- **Aggregate declarations** — signatures: `fn :: aggregate_function((pos_args..., "key": kw_type...) → ret)`
 
 Forward references are allowed. The parser resolves all node names after
 reading the entire file. See [grasp-dbsp.md](grasp-dbsp.md) for the
