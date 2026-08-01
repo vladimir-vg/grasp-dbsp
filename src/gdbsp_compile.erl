@@ -8,6 +8,7 @@
 -module(gdbsp_compile).
 
 -export([compile/2, compile_with_names/2]).
+-export([load_stdlib/0, build_stdlib_map/1]).
 
 -include("gdbsp_parse.hrl").
 -include("gdbsp_circuit.hrl").
@@ -78,3 +79,28 @@ compile_inline_fns(Program, _ExternalFnReg) ->
         {error, ErrorMap} ->
             throw({compile_error, {inline_fn_errors, ErrorMap}})
     end.
+
+%%====================================================================
+%% stdlib loading
+%%====================================================================
+
+-type stdlib_map() :: #{binary() => [#gdbsp_typespec{}]}.
+
+-spec load_stdlib() -> {ok, stdlib_map()} | {error, term()}.
+load_stdlib() ->
+    PrivDir = code:priv_dir(grasp_dbsp),
+    Path = filename:join(PrivDir, "stdlib.gdbsp"),
+    case file:read_file(Path) of
+        {ok, Bin} ->
+            {ok, Prog} = gdbsp_parse:parse_string(Bin, #{}),
+            {ok, build_stdlib_map(Prog#gdbsp_program.typespecs)};
+        {error, _} = E -> E
+    end.
+
+-spec build_stdlib_map([#gdbsp_typespec{}]) -> stdlib_map().
+build_stdlib_map(Typespecs) ->
+    lists:foldl(
+        fun(#gdbsp_typespec{name = N} = TS, Acc) ->
+            Existing = maps:get(N, Acc, []),
+            Acc#{N => [TS | Existing]}
+        end, #{}, Typespecs).

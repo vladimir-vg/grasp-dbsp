@@ -57,20 +57,46 @@ parse_declarations([{indent, _} | Rest], Nodes, TSs, Circuits, FnDefs) ->
 parse_declarations([{identifier, _L, <<"circuit">>} | Rest], Nodes, TSs, Circuits, FnDefs) ->
     {Def, Rest2} = parse_circuit_def(Rest),
     parse_declarations(Rest2, Nodes, TSs, [Def | Circuits], FnDefs);
-parse_declarations([{identifier, Line, Name}, {walrus, _} | Rest], Nodes, TSs, Circuits, FnDefs) ->
-    case Rest of
-        [{identifier, _, <<"function">>}, {'(', _} | _] ->
-            {Fn, Rest2} = parse_fn_def(Name, Line, Rest),
-            parse_declarations(Rest2, Nodes, TSs, Circuits, [Fn | FnDefs]);
+parse_declarations([{identifier, Line, FirstName} | Rest], Nodes, TSs, Circuits, FnDefs) ->
+    {Name, Rest2} = parse_compound_name(FirstName, Rest),
+    case Rest2 of
+        [{double_colon, _} | Rest3] ->
+            {TS, Rest4} = parse_typespec(Name, Rest3),
+            parse_declarations(Rest4, Nodes, [TS | TSs], Circuits, FnDefs);
+        [{walrus, _} | Rest3] ->
+            case Rest3 of
+                [{identifier, _, <<"function">>}, {'(', _} | _] ->
+                    {Fn, Rest4} = parse_fn_def(Name, Line, Rest3),
+                    parse_declarations(Rest4, Nodes, TSs, Circuits, [Fn | FnDefs]);
+                _ ->
+                    {Node, Rest4} = parse_node_def(Name, Line, Rest3),
+                    parse_declarations(Rest4, [Node | Nodes], TSs, Circuits, FnDefs)
+            end;
         _ ->
-            {Node, Rest2} = parse_node_def(Name, Line, Rest),
-            parse_declarations(Rest2, [Node | Nodes], TSs, Circuits, FnDefs)
+            throw({parse_error, token_line(hd(Rest2)), <<"unrecognized declaration">>})
     end;
-parse_declarations([{identifier, _, Name}, {double_colon, _} | Rest], Nodes, TSs, Circuits, FnDefs) ->
-    {TS, Rest2} = parse_typespec(Name, Rest),
-    parse_declarations(Rest2, Nodes, [TS | TSs], Circuits, FnDefs);
 parse_declarations([T | _], _Nodes, _TSs, _Circuits, _FnDefs) ->
     throw({parse_error, token_line(T), <<"unrecognized declaration">>}).
+
+%%--------------------------------------------------------------------
+%% Compound name parsing — consumes identifier (. identifier)*
+%%--------------------------------------------------------------------
+
+parse_compound_name(Name, [{dot, _}, T | Rest]) ->
+    Next = token_name(T),
+    parse_compound_name(<<Name/binary, ".", Next/binary>>, Rest);
+parse_compound_name(Name, Tokens) ->
+    {Name, Tokens}.
+
+token_name({identifier, _, N}) -> N;
+token_name({not_keyword, _}) -> <<"not">>;
+token_name({and_keyword, _}) -> <<"and">>;
+token_name({or_keyword, _}) -> <<"or">>;
+token_name({N, _}) when is_atom(N) -> atom_to_binary(N, utf8);
+token_name(T) -> token_name2(T).
+
+token_name2({N, _, _}) when is_atom(N) -> atom_to_binary(N, utf8);
+token_name2(_) -> <<>>.
 
 %%====================================================================
 %% Node definitions

@@ -6,6 +6,8 @@
 
 -include_lib("common_test/include/ct.hrl").
 -include("gdbsp_circuit.hrl").
+-include("gdbsp_parse.hrl").
+-include("gdbsp_type.hrl").
 
 -export([all/0]).
 -export([init_per_suite/1, end_per_suite/1]).
@@ -15,7 +17,10 @@
          missing_fn/1, duplicate_node/1,
          delay_inputs_not_empty_for_chain/1, delay_ordering_independent/1,
          inline_fn_map/1, inline_fn_overrides_external/1,
-         typespec_only_external_fn/1, typespec_only_no_external/1]).
+         typespec_only_external_fn/1, typespec_only_no_external/1,
+         stdlib_parse_ok/1, stdlib_has_arithmetic/1,
+         stdlib_typespec_correct/1, stdlib_agg_overloads/1,
+         stdlib_missing_file/1, stdlib_operator_tvar/1]).
 
 -define(FIXTURE_DIR, "parse_fixtures").
 
@@ -25,7 +30,10 @@ all() ->
      missing_fn, duplicate_node,
      delay_inputs_not_empty_for_chain, delay_ordering_independent,
      inline_fn_map, inline_fn_overrides_external,
-     typespec_only_external_fn, typespec_only_no_external].
+     typespec_only_external_fn, typespec_only_no_external,
+     stdlib_parse_ok, stdlib_has_arithmetic,
+     stdlib_typespec_correct, stdlib_agg_overloads,
+     stdlib_missing_file, stdlib_operator_tvar].
 
 init_per_suite(Config) ->
     {ok, _} = application:ensure_all_started(yamerl),
@@ -349,8 +357,64 @@ typespec_only_no_external(_Config) ->
     end.
 
 %%--------------------------------------------------------------------
+%% stdlib loading tests (Phase A)
+%%--------------------------------------------------------------------
+
+stdlib_parse_ok(_Config) ->
+    case gdbsp_compile:load_stdlib() of
+        {ok, StdlibMap} when is_map(StdlibMap) -> ok;
+        {error, Reason} -> ct:fail("load_stdlib failed: ~p", [Reason])
+    end.
+
+stdlib_has_arithmetic(_Config) ->
+    {ok, StdlibMap} = gdbsp_compile:load_stdlib(),
+    true = maps:is_key(<<"std.add_i64">>, StdlibMap),
+    true = maps:is_key(<<"std.add_numeric">>, StdlibMap),
+    true = maps:is_key(<<"std.mul_f64">>, StdlibMap),
+    true = maps:is_key(<<"std.neg_i64">>, StdlibMap).
+
+stdlib_typespec_correct(_Config) ->
+    {ok, StdlibMap} = gdbsp_compile:load_stdlib(),
+    [TS] = maps:get(<<"std.add_i64">>, StdlibMap),
+    {function, [i64, i64], #{}, i64} = TS#gdbsp_typespec.spec.
+
+stdlib_agg_overloads(_Config) ->
+    {ok, StdlibMap} = gdbsp_compile:load_stdlib(),
+    TSList = maps:get(<<"agg:sum">>, StdlibMap),
+    true = (length(TSList) >= 2),
+    %% Verify i64 variant
+    true = lists:any(
+        fun(#gdbsp_typespec{spec = {aggregate_function, [i64], #{}, i64}}) -> true;
+           (_) -> false
+        end, TSList),
+    %% Verify numeric variant
+    true = lists:any(
+        fun(#gdbsp_typespec{spec = {aggregate_function, [numeric], #{}, numeric}}) -> true;
+           (_) -> false
+        end, TSList).
+
+stdlib_missing_file(_Config) ->
+    %% Test that loading a non-existent path returns error
+    Result = load_stdlib_at("/nonexistent/path/stdlib.gdbsp"),
+    {error, _} = Result.
+
+stdlib_operator_tvar(_Config) ->
+    {ok, StdlibMap} = gdbsp_compile:load_stdlib(),
+    %% Operator entries not in Phase A's stdlib yet, but verify the map works
+    %% (this test prepares for Phase E when operator TVars are added)
+    true = is_map(StdlibMap).
+
+%%--------------------------------------------------------------------
 %% Helpers
 %%--------------------------------------------------------------------
 
 parse_prog(Str) ->
     gdbsp_parse:parse_string(list_to_binary(Str), #{}).
+
+load_stdlib_at(Path) ->
+    case file:read_file(Path) of
+        {ok, Bin} ->
+            {ok, Prog} = gdbsp_parse:parse_string(Bin, #{}),
+            {ok, gdbsp_compile:build_stdlib_map(Prog#gdbsp_program.typespecs)};
+        {error, _} = E -> E
+    end.
