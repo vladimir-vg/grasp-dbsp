@@ -12,7 +12,7 @@
 -export([format_error/1]).
 
 %% User code. This is placed here to allow extra attributes.
--file("/home/vladimir/work/gordeev-automations/grasp-dbsp/src/gdbsp_lexer_core.xrl", 78).
+-file("src/gdbsp_lexer_core.xrl", 78).
 
 -export([parse_number/1, unescape/1, to_binary/1, parse_bit_string/1]).
 
@@ -420,7 +420,7 @@ tab_size() -> 8.
 %% return signal either an unrecognised character or end of current
 %% input.
 
--file("/home/vladimir/work/gordeev-automations/grasp-dbsp/src/gdbsp_lexer_core.erl", 388).
+-file("src/gdbsp_lexer_core.erl", 388).
 yystate() -> 65.
 
 yystate(68, [45|Ics], Line, Col, Tlen, Action, Alen) ->
@@ -1019,237 +1019,237 @@ yyaction(46, TokenLen, YYtcs, TokenLine, _) ->
 yyaction(_, _, _, _, _) -> error.
 
 -compile({inline,yyaction_0/1}).
--file("/home/vladimir/work/gordeev-automations/grasp-dbsp/src/gdbsp_lexer_core.xrl", 12).
+-file("src/gdbsp_lexer_core.xrl", 12).
 yyaction_0(TokenLine) ->
      { token, { newline_indent, TokenLine } } .
 
 -compile({inline,yyaction_1/0}).
--file("/home/vladimir/work/gordeev-automations/grasp-dbsp/src/gdbsp_lexer_core.xrl", 13).
+-file("src/gdbsp_lexer_core.xrl", 13).
 yyaction_1() ->
      skip_token .
 
 -compile({inline,yyaction_2/0}).
--file("/home/vladimir/work/gordeev-automations/grasp-dbsp/src/gdbsp_lexer_core.xrl", 14).
+-file("src/gdbsp_lexer_core.xrl", 14).
 yyaction_2() ->
      skip_token .
 
 -compile({inline,yyaction_3/1}).
--file("/home/vladimir/work/gordeev-automations/grasp-dbsp/src/gdbsp_lexer_core.xrl", 15).
+-file("src/gdbsp_lexer_core.xrl", 15).
 yyaction_3(TokenLine) ->
      { token, { newline, TokenLine } } .
 
 -compile({inline,yyaction_4/1}).
--file("/home/vladimir/work/gordeev-automations/grasp-dbsp/src/gdbsp_lexer_core.xrl", 17).
+-file("src/gdbsp_lexer_core.xrl", 17).
 yyaction_4(TokenLine) ->
      { token, { and_keyword, TokenLine } } .
 
 -compile({inline,yyaction_5/1}).
--file("/home/vladimir/work/gordeev-automations/grasp-dbsp/src/gdbsp_lexer_core.xrl", 18).
+-file("src/gdbsp_lexer_core.xrl", 18).
 yyaction_5(TokenLine) ->
      { token, { or_keyword, TokenLine } } .
 
 -compile({inline,yyaction_6/1}).
--file("/home/vladimir/work/gordeev-automations/grasp-dbsp/src/gdbsp_lexer_core.xrl", 19).
+-file("src/gdbsp_lexer_core.xrl", 19).
 yyaction_6(TokenLine) ->
      { token, { not_keyword, TokenLine } } .
 
 -compile({inline,yyaction_7/1}).
--file("/home/vladimir/work/gordeev-automations/grasp-dbsp/src/gdbsp_lexer_core.xrl", 21).
+-file("src/gdbsp_lexer_core.xrl", 21).
 yyaction_7(TokenLine) ->
      { token, { larrow, TokenLine } } .
 
 -compile({inline,yyaction_8/1}).
--file("/home/vladimir/work/gordeev-automations/grasp-dbsp/src/gdbsp_lexer_core.xrl", 22).
+-file("src/gdbsp_lexer_core.xrl", 22).
 yyaction_8(TokenLine) ->
      { token, { walrus, TokenLine } } .
 
 -compile({inline,yyaction_9/1}).
--file("/home/vladimir/work/gordeev-automations/grasp-dbsp/src/gdbsp_lexer_core.xrl", 23).
+-file("src/gdbsp_lexer_core.xrl", 23).
 yyaction_9(TokenLine) ->
      { token, { double_colon, TokenLine } } .
 
 -compile({inline,yyaction_10/1}).
--file("/home/vladimir/work/gordeev-automations/grasp-dbsp/src/gdbsp_lexer_core.xrl", 24).
+-file("src/gdbsp_lexer_core.xrl", 24).
 yyaction_10(TokenLine) ->
      { token, { arrow, TokenLine } } .
 
 -compile({inline,yyaction_11/1}).
--file("/home/vladimir/work/gordeev-automations/grasp-dbsp/src/gdbsp_lexer_core.xrl", 25).
+-file("src/gdbsp_lexer_core.xrl", 25).
 yyaction_11(TokenLine) ->
      { token, { double_star, TokenLine } } .
 
 -compile({inline,yyaction_12/1}).
--file("/home/vladimir/work/gordeev-automations/grasp-dbsp/src/gdbsp_lexer_core.xrl", 26).
+-file("src/gdbsp_lexer_core.xrl", 26).
 yyaction_12(TokenLine) ->
      { token, { '>=', TokenLine } } .
 
 -compile({inline,yyaction_13/1}).
--file("/home/vladimir/work/gordeev-automations/grasp-dbsp/src/gdbsp_lexer_core.xrl", 27).
+-file("src/gdbsp_lexer_core.xrl", 27).
 yyaction_13(TokenLine) ->
      { token, { '<=', TokenLine } } .
 
 -compile({inline,yyaction_14/1}).
--file("/home/vladimir/work/gordeev-automations/grasp-dbsp/src/gdbsp_lexer_core.xrl", 28).
+-file("src/gdbsp_lexer_core.xrl", 28).
 yyaction_14(TokenLine) ->
      { token, { '!=', TokenLine } } .
 
 -compile({inline,yyaction_15/1}).
--file("/home/vladimir/work/gordeev-automations/grasp-dbsp/src/gdbsp_lexer_core.xrl", 30).
+-file("src/gdbsp_lexer_core.xrl", 30).
 yyaction_15(TokenLine) ->
      { token, { '++', TokenLine } } .
 
 -compile({inline,yyaction_16/1}).
--file("/home/vladimir/work/gordeev-automations/grasp-dbsp/src/gdbsp_lexer_core.xrl", 31).
+-file("src/gdbsp_lexer_core.xrl", 31).
 yyaction_16(TokenLine) ->
      { token, { '<<<', TokenLine } } .
 
 -compile({inline,yyaction_17/1}).
--file("/home/vladimir/work/gordeev-automations/grasp-dbsp/src/gdbsp_lexer_core.xrl", 32).
+-file("src/gdbsp_lexer_core.xrl", 32).
 yyaction_17(TokenLine) ->
      { token, { '>>>', TokenLine } } .
 
 -compile({inline,yyaction_18/1}).
--file("/home/vladimir/work/gordeev-automations/grasp-dbsp/src/gdbsp_lexer_core.xrl", 33).
+-file("src/gdbsp_lexer_core.xrl", 33).
 yyaction_18(TokenLine) ->
      { token, { '<<', TokenLine } } .
 
 -compile({inline,yyaction_19/1}).
--file("/home/vladimir/work/gordeev-automations/grasp-dbsp/src/gdbsp_lexer_core.xrl", 34).
+-file("src/gdbsp_lexer_core.xrl", 34).
 yyaction_19(TokenLine) ->
      { token, { '>>', TokenLine } } .
 
 -compile({inline,yyaction_20/1}).
--file("/home/vladimir/work/gordeev-automations/grasp-dbsp/src/gdbsp_lexer_core.xrl", 35).
+-file("src/gdbsp_lexer_core.xrl", 35).
 yyaction_20(TokenLine) ->
      { token, { dot, TokenLine } } .
 
 -compile({inline,yyaction_21/1}).
--file("/home/vladimir/work/gordeev-automations/grasp-dbsp/src/gdbsp_lexer_core.xrl", 36).
+-file("src/gdbsp_lexer_core.xrl", 36).
 yyaction_21(TokenLine) ->
      { token, { '~', TokenLine } } .
 
 -compile({inline,yyaction_22/1}).
--file("/home/vladimir/work/gordeev-automations/grasp-dbsp/src/gdbsp_lexer_core.xrl", 37).
+-file("src/gdbsp_lexer_core.xrl", 37).
 yyaction_22(TokenLine) ->
      { token, { '&', TokenLine } } .
 
 -compile({inline,yyaction_23/1}).
--file("/home/vladimir/work/gordeev-automations/grasp-dbsp/src/gdbsp_lexer_core.xrl", 38).
+-file("src/gdbsp_lexer_core.xrl", 38).
 yyaction_23(TokenLine) ->
      { token, { '^', TokenLine } } .
 
 -compile({inline,yyaction_24/1}).
--file("/home/vladimir/work/gordeev-automations/grasp-dbsp/src/gdbsp_lexer_core.xrl", 39).
+-file("src/gdbsp_lexer_core.xrl", 39).
 yyaction_24(TokenLine) ->
      { token, { '|', TokenLine } } .
 
 -compile({inline,yyaction_25/1}).
--file("/home/vladimir/work/gordeev-automations/grasp-dbsp/src/gdbsp_lexer_core.xrl", 41).
+-file("src/gdbsp_lexer_core.xrl", 41).
 yyaction_25(TokenLine) ->
      { token, { '+', TokenLine } } .
 
 -compile({inline,yyaction_26/1}).
--file("/home/vladimir/work/gordeev-automations/grasp-dbsp/src/gdbsp_lexer_core.xrl", 42).
+-file("src/gdbsp_lexer_core.xrl", 42).
 yyaction_26(TokenLine) ->
      { token, { '-', TokenLine } } .
 
 -compile({inline,yyaction_27/1}).
--file("/home/vladimir/work/gordeev-automations/grasp-dbsp/src/gdbsp_lexer_core.xrl", 43).
+-file("src/gdbsp_lexer_core.xrl", 43).
 yyaction_27(TokenLine) ->
      { token, { '*', TokenLine } } .
 
 -compile({inline,yyaction_28/1}).
--file("/home/vladimir/work/gordeev-automations/grasp-dbsp/src/gdbsp_lexer_core.xrl", 44).
+-file("src/gdbsp_lexer_core.xrl", 44).
 yyaction_28(TokenLine) ->
      { token, { '/', TokenLine } } .
 
 -compile({inline,yyaction_29/1}).
--file("/home/vladimir/work/gordeev-automations/grasp-dbsp/src/gdbsp_lexer_core.xrl", 45).
+-file("src/gdbsp_lexer_core.xrl", 45).
 yyaction_29(TokenLine) ->
      { token, { '%', TokenLine } } .
 
 -compile({inline,yyaction_30/1}).
--file("/home/vladimir/work/gordeev-automations/grasp-dbsp/src/gdbsp_lexer_core.xrl", 46).
+-file("src/gdbsp_lexer_core.xrl", 46).
 yyaction_30(TokenLine) ->
      { token, { '=', TokenLine } } .
 
 -compile({inline,yyaction_31/1}).
--file("/home/vladimir/work/gordeev-automations/grasp-dbsp/src/gdbsp_lexer_core.xrl", 47).
+-file("src/gdbsp_lexer_core.xrl", 47).
 yyaction_31(TokenLine) ->
      { token, { '>', TokenLine } } .
 
 -compile({inline,yyaction_32/1}).
--file("/home/vladimir/work/gordeev-automations/grasp-dbsp/src/gdbsp_lexer_core.xrl", 48).
+-file("src/gdbsp_lexer_core.xrl", 48).
 yyaction_32(TokenLine) ->
      { token, { '<', TokenLine } } .
 
 -compile({inline,yyaction_33/1}).
--file("/home/vladimir/work/gordeev-automations/grasp-dbsp/src/gdbsp_lexer_core.xrl", 49).
+-file("src/gdbsp_lexer_core.xrl", 49).
 yyaction_33(TokenLine) ->
      { token, { ':', TokenLine } } .
 
 -compile({inline,yyaction_34/1}).
--file("/home/vladimir/work/gordeev-automations/grasp-dbsp/src/gdbsp_lexer_core.xrl", 50).
+-file("src/gdbsp_lexer_core.xrl", 50).
 yyaction_34(TokenLine) ->
      { token, { ',', TokenLine } } .
 
 -compile({inline,yyaction_35/1}).
--file("/home/vladimir/work/gordeev-automations/grasp-dbsp/src/gdbsp_lexer_core.xrl", 51).
+-file("src/gdbsp_lexer_core.xrl", 51).
 yyaction_35(TokenLine) ->
      { token, { '(', TokenLine } } .
 
 -compile({inline,yyaction_36/1}).
--file("/home/vladimir/work/gordeev-automations/grasp-dbsp/src/gdbsp_lexer_core.xrl", 52).
+-file("src/gdbsp_lexer_core.xrl", 52).
 yyaction_36(TokenLine) ->
      { token, { ')', TokenLine } } .
 
 -compile({inline,yyaction_37/1}).
--file("/home/vladimir/work/gordeev-automations/grasp-dbsp/src/gdbsp_lexer_core.xrl", 53).
+-file("src/gdbsp_lexer_core.xrl", 53).
 yyaction_37(TokenLine) ->
      { token, { '{', TokenLine } } .
 
 -compile({inline,yyaction_38/1}).
--file("/home/vladimir/work/gordeev-automations/grasp-dbsp/src/gdbsp_lexer_core.xrl", 54).
+-file("src/gdbsp_lexer_core.xrl", 54).
 yyaction_38(TokenLine) ->
      { token, { '}', TokenLine } } .
 
 -compile({inline,yyaction_39/1}).
--file("/home/vladimir/work/gordeev-automations/grasp-dbsp/src/gdbsp_lexer_core.xrl", 55).
+-file("src/gdbsp_lexer_core.xrl", 55).
 yyaction_39(TokenLine) ->
      { token, { '[', TokenLine } } .
 
 -compile({inline,yyaction_40/1}).
--file("/home/vladimir/work/gordeev-automations/grasp-dbsp/src/gdbsp_lexer_core.xrl", 56).
+-file("src/gdbsp_lexer_core.xrl", 56).
 yyaction_40(TokenLine) ->
      { token, { ']', TokenLine } } .
 
 -compile({inline,yyaction_41/2}).
--file("/home/vladimir/work/gordeev-automations/grasp-dbsp/src/gdbsp_lexer_core.xrl", 59).
+-file("src/gdbsp_lexer_core.xrl", 59).
 yyaction_41(TokenChars, TokenLine) ->
      { token, { bits_literal, TokenLine, parse_bit_string (TokenChars) } } .
 
 -compile({inline,yyaction_42/2}).
--file("/home/vladimir/work/gordeev-automations/grasp-dbsp/src/gdbsp_lexer_core.xrl", 62).
+-file("src/gdbsp_lexer_core.xrl", 62).
 yyaction_42(TokenChars, TokenLine) ->
      { token, { float_literal, TokenLine, parse_number (TokenChars) } } .
 
 -compile({inline,yyaction_43/2}).
--file("/home/vladimir/work/gordeev-automations/grasp-dbsp/src/gdbsp_lexer_core.xrl", 65).
+-file("src/gdbsp_lexer_core.xrl", 65).
 yyaction_43(TokenChars, TokenLine) ->
      { token, { decimal_literal, TokenLine, parse_number (TokenChars) } } .
 
 -compile({inline,yyaction_44/2}).
--file("/home/vladimir/work/gordeev-automations/grasp-dbsp/src/gdbsp_lexer_core.xrl", 68).
+-file("src/gdbsp_lexer_core.xrl", 68).
 yyaction_44(TokenChars, TokenLine) ->
      { token, { integer_literal, TokenLine, parse_number (TokenChars) } } .
 
 -compile({inline,yyaction_45/2}).
--file("/home/vladimir/work/gordeev-automations/grasp-dbsp/src/gdbsp_lexer_core.xrl", 71).
+-file("src/gdbsp_lexer_core.xrl", 71).
 yyaction_45(TokenChars, TokenLine) ->
      { token, { string, TokenLine, unescape (TokenChars) } } .
 
 -compile({inline,yyaction_46/2}).
--file("/home/vladimir/work/gordeev-automations/grasp-dbsp/src/gdbsp_lexer_core.xrl", 74).
+-file("src/gdbsp_lexer_core.xrl", 74).
 yyaction_46(TokenChars, TokenLine) ->
      { token, { identifier, TokenLine, to_binary (TokenChars) } } .
 -file("/usr/lib/erlang/lib/parsetools-2.6/include/leexinc.hrl", 344).

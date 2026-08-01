@@ -7,7 +7,7 @@
 %%%-------------------------------------------------------------------
 -module(gdbsp_builtins).
 
--export([binop_fn_name/1, resolve_name/1]).
+-export([binop_fn_name/1, unop_fn_name/1, resolve_name/1]).
 -export([lookup_fn/3, lookup_agg/2]).
 
 -include("gdbsp_type.hrl").
@@ -20,11 +20,11 @@
 %%====================================================================
 
 -spec binop_fn_name(atom()) -> binary().
-binop_fn_name('+')  -> <<"math:add">>;
-binop_fn_name('-')  -> <<"math:sub">>;
-binop_fn_name('*')  -> <<"math:mul">>;
-binop_fn_name('/')  -> <<"math:div">>;
-binop_fn_name('%')  -> <<"math:mod">>;
+binop_fn_name('+')  -> <<"add">>;
+binop_fn_name('-')  -> <<"sub">>;
+binop_fn_name('*')  -> <<"mul">>;
+binop_fn_name('/')  -> <<"div">>;
+binop_fn_name('%')  -> <<"mod">>;
 binop_fn_name('=')  -> <<"eq">>;
 binop_fn_name('!=') -> <<"neq">>;
 binop_fn_name('<')  -> <<"lt">>;
@@ -32,13 +32,18 @@ binop_fn_name('>')  -> <<"gt">>;
 binop_fn_name('<=') -> <<"lte">>;
 binop_fn_name('>=') -> <<"gte">>;
 binop_fn_name('++') -> <<"concat">>;
-binop_fn_name('<<') -> <<"bits:shl">>;
-binop_fn_name('>>') -> <<"bits:shr">>;
-binop_fn_name('<<<') -> <<"bits:rotl">>;
-binop_fn_name('>>>') -> <<"bits:rotr">>;
-binop_fn_name('&')  -> <<"bits:and">>;
-binop_fn_name('|')  -> <<"bits:or">>;
-binop_fn_name('^')  -> <<"bits:xor">>.
+binop_fn_name('<<') -> <<"bits_shl">>;
+binop_fn_name('>>') -> <<"bits_shr">>;
+binop_fn_name('<<<') -> <<"bits_rotl">>;
+binop_fn_name('>>>') -> <<"bits_rotr">>;
+binop_fn_name('&')  -> <<"bits_and">>;
+binop_fn_name('|')  -> <<"bits_or">>;
+binop_fn_name('^')  -> <<"bits_xor">>.
+
+-spec unop_fn_name(atom()) -> binary().
+unop_fn_name('-')   -> <<"neg">>;
+unop_fn_name('~')   -> <<"bits_not">>;
+unop_fn_name('not') -> <<"not">>.
 
 -spec resolve_name(binary()) -> binary().
 resolve_name(<<"date">>) -> <<"temporal:date">>;
@@ -56,6 +61,20 @@ resolve_name(<<"min">>) -> <<"agg:min">>;
 resolve_name(<<"max">>) -> <<"agg:max">>;
 resolve_name(<<"avg">>) -> <<"agg:avg">>;
 resolve_name(<<"xor">>) -> <<"agg:xor">>;
+resolve_name(<<"add">>) -> <<"math:add">>;
+resolve_name(<<"sub">>) -> <<"math:sub">>;
+resolve_name(<<"mul">>) -> <<"math:mul">>;
+resolve_name(<<"div">>) -> <<"math:div">>;
+resolve_name(<<"mod">>) -> <<"math:mod">>;
+resolve_name(<<"neg">>) -> <<"math:neg">>;
+resolve_name(<<"bits_or">>) -> <<"bits:or">>;
+resolve_name(<<"bits_xor">>) -> <<"bits:xor">>;
+resolve_name(<<"bits_and">>) -> <<"bits:and">>;
+resolve_name(<<"bits_shl">>) -> <<"bits:shl">>;
+resolve_name(<<"bits_shr">>) -> <<"bits:shr">>;
+resolve_name(<<"bits_rotl">>) -> <<"bits:rotl">>;
+resolve_name(<<"bits_rotr">>) -> <<"bits:rotr">>;
+resolve_name(<<"bits_not">>) -> <<"bits:not">>;
 resolve_name(Other) -> Other.
 
 %%====================================================================

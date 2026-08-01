@@ -30,9 +30,11 @@ compile(Program, Options) ->
 -spec compile_with_names(#gdbsp_program{}, options()) ->
     {ok, #circuit_graph{}, #{binary() => node_id()}} | {error, term()}.
 compile_with_names(Program, Options) ->
-    FnReg = maps:get(fn_registry, Options, #{}),
+    ExternalFnReg = maps:get(fn_registry, Options, #{}),
     Incr = maps:get(incrementalize, Options, false),
     try
+        InlineFnReg = compile_inline_fns(Program, ExternalFnReg),
+        FnReg = maps:merge(ExternalFnReg, InlineFnReg),
         TSMap = build_ts_map(Program#gdbsp_program.typespecs),
         case gdbsp_compile_lower:run(Program, #{}) of
             {ok, Lowered0} ->
@@ -66,3 +68,13 @@ build_ts_map(Typespecs) ->
                 Acc#{N => T};
            (_, Acc) -> Acc
         end, #{}, Typespecs).
+
+compile_inline_fns(#gdbsp_program{fn_defs = []}, _ExternalFnReg) ->
+    #{};
+compile_inline_fns(Program, _ExternalFnReg) ->
+    case gdbsp_compile_expr:check_all_fns(Program) of
+        {ok, InlineFnReg, _Warnings} ->
+            InlineFnReg;
+        {error, ErrorMap} ->
+            throw({compile_error, {inline_fn_errors, ErrorMap}})
+    end.
