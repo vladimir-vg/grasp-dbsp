@@ -8,7 +8,7 @@
 %%%-------------------------------------------------------------------
 -module(gdbsp_compile_graph).
 
--export([build_from_lowered/2]).
+-export([build_from_lowered/3]).
 
 -include("gdbsp_circuit.hrl").
 -include("gdbsp_lowered.hrl").
@@ -19,16 +19,17 @@
 -import(gdbsp_string_util, [trim/1, dequote/1, split_top/2, parse_string_list/1]).
 
 -type fn_registry() :: #{binary() := jsx:json_term()}.
+-type fn_params() :: #{binary() => #{pos := [binary()], kw := [{binary(), binary()}]}}.
 
--spec build_from_lowered(#lowered_graph{}, fn_registry()) ->
+-spec build_from_lowered(#lowered_graph{}, fn_registry(), fn_params()) ->
     {ok, #circuit_graph{}, #{binary() => node_id()}} | {error, term()}.
 build_from_lowered(#lowered_graph{nodes = LNodes, tag_map = TagMap,
-                                  fixpoints = Fixpoints}, FnReg) ->
+                                  fixpoints = Fixpoints}, FnReg, FnParams) ->
     NodeList = maps:to_list(LNodes),
     case lowered_topo_sort(NodeList) of
         {ok, Order} ->
             {Graph0, LnIdMap, CircuitFixpointInputs, CircuitFixpointOutputs} =
-                construct_from_lowered(NodeList, Order, FnReg),
+                construct_from_lowered(NodeList, Order, FnReg, FnParams),
             {Graph1, RecOutputTags} = construct_fixpoints(Graph0, Fixpoints, LnIdMap,
                                           CircuitFixpointInputs, CircuitFixpointOutputs),
             ok = validate_rec_source_inputs(Graph1),
@@ -91,7 +92,7 @@ lowered_topo_loop(Q, InDeg, Consumers, Total, Acc) ->
 %% Circuit graph construction from lowered nodes
 %%====================================================================
 
-construct_from_lowered(NodeList, Order, FnReg) ->
+construct_from_lowered(NodeList, Order, FnReg, FnParams) ->
     LNodeById = maps:from_list(NodeList),
     {G, LnIdMap, FixInMap, FixOutMap} = lists:foldl(
         fun(LId, {GAcc, IdMapAcc, FIMAcc, FOMAcc}) ->
@@ -134,7 +135,7 @@ construct_from_lowered(NodeList, Order, FnReg) ->
                     {G4, IdMapAcc#{LId => NodeId}, FIMAcc, FOMAcc};
                 _ ->
                     {OpTuple, SubNodes} = make_operator_lowered(
-                        GAcc, Op, Args, CInputIds, Type, FnReg),
+                        GAcc, Op, Args, CInputIds, Type, FnReg, FnParams),
                     {G2, FinalId} = add_with_sub_nodes(GAcc, OpTuple, CInputIds, SubNodes),
                     Schema = compute_schema_lowered(Op, Args, CInputIds, Type, G2),
                     G3 = set_schema(G2, FinalId, Schema),
@@ -222,7 +223,7 @@ build_aggregate_graph_lowered(G, Args, InputIds, FnReg) ->
 %% Operator mapping from lowered args
 %%--------------------------------------------------------------------
 
-make_operator_lowered(G, Op, Args, InputIds, TS, FnReg) ->
+make_operator_lowered(G, Op, Args, InputIds, TS, FnReg, FnParams) ->
     case Op of
         source ->
             TableName = get_string_arg(Args, 1),
@@ -241,18 +242,19 @@ make_operator_lowered(G, Op, Args, InputIds, TS, FnReg) ->
             {{neg}, []};
         map ->
             FnName = get_var_arg(Args, 2),
-            Expr = resolve_fn(FnName, FnReg),
+            {Expr, ArgName} = resolve_fn(FnName, FnReg, FnParams),
             RowType = get_input_row_type(InputIds, G),
-            Spec = #{kind => expr, expr => Expr, row_type => RowType},
+            Spec = #{kind => expr, expr => Expr, row_type => RowType,
+                     arg_name => ArgName},
             {{map, Spec}, []};
         filter ->
             FnName = get_var_arg(Args, 2),
-            Expr = resolve_fn(FnName, FnReg),
+            {Expr, ArgName} = resolve_fn(FnName, FnReg, FnParams),
             RowType = get_input_row_type(InputIds, G),
-            {{filter, #{expr => Expr, row_type => RowType}}, []};
+            {{filter, #{expr => Expr, row_type => RowType, arg_name => ArgName}}, []};
         flat_map ->
             FnName = get_var_arg(Args, 2),
-            Expr = resolve_fn(FnName, FnReg),
+            {Expr, ArgName} = resolve_fn(FnName, FnReg, FnParams),
             RowType = get_input_row_type(InputIds, G),
             OutType = case TS of
                 {struct, _, _} = Struct -> Struct;
@@ -263,7 +265,7 @@ make_operator_lowered(G, Op, Args, InputIds, TS, FnReg) ->
             InputCols = get_schema(G, hd(InputIds)),
             NewCols = AllCols -- InputCols,
             {{flat_map, #{expr => Expr, row_type => RowType,
-                          unnest_outs => NewCols}}, []};
+                          unnest_outs => NewCols, arg_name => ArgName}}, []};
         project ->
             KeepFields = get_string_list_arg(Args, 2),
             {{map, #{kind => project, keep => KeepFields}}, []};
@@ -682,16 +684,98 @@ build_consumer_index(Nodes) ->
 
 %%====================================================================
 
-resolve_fn(FnName, FnReg) ->
+resolve_fn(FnName, FnReg, FnParams) ->
     case maps:find(FnName, FnReg) of
         {ok, ExprJson} ->
             case gdbsp_expr:json_to_expr(ExprJson) of
-                {ok, Expr} -> Expr;
+                {ok, Expr} ->
+                    Reduced = beta_reduce(Expr, FnReg, FnParams,
+                                          sets:from_list([FnName])),
+                    {Reduced, fn_arg_name(FnName, FnParams)};
                 {error, _} = Err -> throw({compile_error, {invalid_fn_expr, FnName, Err}})
             end;
         error ->
             throw({compile_error, {missing_function, FnName}})
     end.
+
+fn_arg_name(FnName, FnParams) ->
+    case maps:find(FnName, FnParams) of
+        {ok, #{pos := [ArgName | _]}} -> ArgName;
+        _ -> <<"row">>
+    end.
+
+%%====================================================================
+%% Inline-function call beta-reduction
+%%====================================================================
+
+beta_reduce({call, Name, PosArgs, KwArgs}, FnReg, FnParams, InProgress) ->
+    RedPos = [beta_reduce(A, FnReg, FnParams, InProgress) || A <- PosArgs],
+    RedKw = maps:map(fun(_K, V) -> beta_reduce(V, FnReg, FnParams, InProgress) end, KwArgs),
+    case maps:is_key(Name, FnReg) andalso not sets:is_element(Name, InProgress) of
+        true ->
+            case gdbsp_expr:json_to_expr(maps:get(Name, FnReg)) of
+                {ok, CalleeExpr} ->
+                    CalleeRed = beta_reduce(CalleeExpr, FnReg, FnParams,
+                                            sets:add_element(Name, InProgress)),
+                    substitute(CalleeRed, RedPos, RedKw, Name, FnParams);
+                {error, _} ->
+                    {call, Name, RedPos, RedKw}
+            end;
+        false ->
+            {call, Name, RedPos, RedKw}
+    end;
+beta_reduce({get, Obj, Keys}, FnReg, FnParams, InProgress) ->
+    {get, beta_reduce(Obj, FnReg, FnParams, InProgress),
+     [beta_reduce(K, FnReg, FnParams, InProgress) || K <- Keys]};
+beta_reduce({slice, Obj, Start, Stop, Step}, FnReg, FnParams, InProgress) ->
+    {slice, beta_reduce(Obj, FnReg, FnParams, InProgress),
+            beta_reduce_opt(Start, FnReg, FnParams, InProgress),
+            beta_reduce_opt(Stop, FnReg, FnParams, InProgress),
+            beta_reduce_opt(Step, FnReg, FnParams, InProgress)};
+beta_reduce(Other, _FnReg, _FnParams, _InProgress) ->
+    Other.
+
+beta_reduce_opt(undefined, _FnReg, _FnParams, _InProgress) -> undefined;
+beta_reduce_opt(E, FnReg, FnParams, InProgress) ->
+    beta_reduce(E, FnReg, FnParams, InProgress).
+
+%% Substitute a callee's declared positional/kw parameters (by exact name)
+%% with the caller's argument expressions.
+substitute(Body, PosArgs, KwArgs, CalleeName, FnParams) ->
+    #{pos := PosNames, kw := KwParams} = fn_params_for(CalleeName, FnParams),
+    PosBindings = lists:zip(PosNames, PosArgs),
+    KwBindings = maps:from_list(
+        [{Var, maps:get(Key, KwArgs)}
+         || {Key, Var} <- KwParams, maps:is_key(Key, KwArgs)]),
+    do_substitute(Body, PosBindings, KwBindings).
+
+fn_params_for(Name, FnParams) ->
+    maps:get(Name, FnParams, #{pos => [<<"row">>], kw => []}).
+
+do_substitute({arg, Name}, PosBindings, KwBindings) ->
+    case lists:keyfind(Name, 1, PosBindings) of
+        {Name, ArgExpr} -> ArgExpr;
+        false ->
+            case maps:find(Name, KwBindings) of
+                {ok, ArgExpr} -> ArgExpr;
+                error -> {arg, Name}
+            end
+    end;
+do_substitute({call, Name, PosArgs, KwArgs}, PB, KB) ->
+    {call, Name, [do_substitute(A, PB, KB) || A <- PosArgs],
+           maps:map(fun(_K, V) -> do_substitute(V, PB, KB) end, KwArgs)};
+do_substitute({get, Obj, Keys}, PB, KB) ->
+    {get, do_substitute(Obj, PB, KB), [do_substitute(K, PB, KB) || K <- Keys]};
+do_substitute({slice, Obj, Start, Stop, Step}, PB, KB) ->
+    {slice, do_substitute(Obj, PB, KB),
+            do_substitute_opt(Start, PB, KB),
+            do_substitute_opt(Stop, PB, KB),
+            do_substitute_opt(Step, PB, KB)};
+do_substitute(Other, _PB, _KB) ->
+    Other.
+
+do_substitute_opt(undefined, _PB, _KB) -> undefined;
+do_substitute_opt(E, PB, KB) -> do_substitute(E, PB, KB).
 
 resolve_agg_fn_name(FnName, FnReg) ->
     case maps:find(FnName, FnReg) of

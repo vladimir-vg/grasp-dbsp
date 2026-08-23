@@ -35,18 +35,21 @@ compile_with_names(Program, Options) ->
     Incr = maps:get(incrementalize, Options, false),
     try
         {ok, StdlibMap} = load_stdlib(),
-        InlineFnReg = compile_inline_fns(Program, StdlibMap),
+        {InlineFnReg, FnParams} = compile_inline_fns(Program, StdlibMap),
         case duplicate_fn_names(ExternalFnReg, InlineFnReg) of
             [] -> ok;
             [Name | _] -> throw({compile_error, {duplicate_function, Name}})
         end,
         FnReg = maps:merge(ExternalFnReg, InlineFnReg),
+        CallableMap = gdbsp_compile_expr:merge_callable_maps(
+            StdlibMap,
+            gdbsp_compile_expr:inline_sig_map(Program#gdbsp_program.typespecs)),
         TSMap = build_ts_map(Program#gdbsp_program.typespecs),
         case gdbsp_compile_lower:run(Program, #{}) of
             {ok, Lowered0} ->
-                case gdbsp_type_infer:infer_lowered(Lowered0, TSMap, FnReg, StdlibMap) of
+                case gdbsp_type_infer:infer_lowered(Lowered0, TSMap, FnReg, CallableMap) of
                     {ok, Lowered} ->
-                        case gdbsp_compile_graph:build_from_lowered(Lowered, FnReg) of
+                        case gdbsp_compile_graph:build_from_lowered(Lowered, FnReg, FnParams) of
                             {ok, Graph, NameToId} ->
                                 Graph2 = case Incr of
                                     true  -> gdbsp_compile_incremental:run(Graph);
@@ -76,11 +79,11 @@ build_ts_map(Typespecs) ->
         end, #{}, Typespecs).
 
 compile_inline_fns(#gdbsp_program{fn_defs = []}, _StdlibMap) ->
-    #{};
+    {#{}, #{}};
 compile_inline_fns(Program, StdlibMap) ->
     case gdbsp_compile_expr:check_all_fns(Program, StdlibMap) of
-        {ok, InlineFnReg, _Warnings} ->
-            InlineFnReg;
+        {ok, InlineFnReg, FnParams, _Warnings} ->
+            {InlineFnReg, FnParams};
         {error, ErrorMap} ->
             throw({compile_error, {inline_fn_errors, ErrorMap}})
     end.

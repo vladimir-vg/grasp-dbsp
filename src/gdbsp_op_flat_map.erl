@@ -25,8 +25,9 @@
 -spec init(map()) -> {op_state(), [term()], [term()]}.
 init(#{expr := Expr, row_type := _RowType, unnest_outs := OutVars} = Args) ->
     Value = maps:get(value_mod, Args, gdbsp_value),
+    ArgName = maps:get(arg_name, Args, <<"row">>),
     Fun = fun(Row) ->
-        case Value:eval_expr(Expr, Row) of
+        case Value:eval_expr(Expr, Row, ArgName) of
             {ok, {value, {array, ElemType, _}, Arr}} ->
                 unnest_array(Arr, ElemType, OutVars, Row, Value);
             {ok, {value, {map, _KType, VType}, MapVals}} ->

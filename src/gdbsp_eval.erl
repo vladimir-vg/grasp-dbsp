@@ -16,7 +16,7 @@
 -include("gdbsp_expr.hrl").
 
 %% ── Core evaluators ─────────────────────────────────────────────────
--export([eval_with_blob/2, eval_with_row/2]).
+-export([eval_with_blob/2, eval_with_row/3]).
 -export([eval_with_blob_batch/2]).
 
 %%====================================================================
@@ -34,11 +34,11 @@ eval_with_blob(Expr, Fetcher) ->
 %% eval_with_row
 %%====================================================================
 
--spec eval_with_row(expr(), value()) ->
+-spec eval_with_row(expr(), value(), binary()) ->
     {ok, value()} | drop_row | {error, term()}.
-eval_with_row(Expr, {value, {struct, _Fields, _Rest}, _Data} = Row) ->
-    do_eval(Expr, {row, Row});
-eval_with_row(_Expr, _NotAStruct) ->
+eval_with_row(Expr, {value, {struct, _Fields, _Rest}, _Data} = Row, ArgName) ->
+    do_eval(Expr, {row, Row, ArgName});
+eval_with_row(_Expr, _NotAStruct, _ArgName) ->
     {error, {eval_with_row_requires_struct_value, _NotAStruct}}.
 
 %%====================================================================
@@ -64,11 +64,11 @@ do_eval({value, type, T}, _Ctx) ->
     {ok, {type, T}};
 do_eval({value, _, _} = V, _Ctx) ->
     {ok, V};
-do_eval({arg, <<"row">>}, {row, Row}) -> {ok, Row};
+do_eval({arg, Name}, {row, Row, ArgName}) when Name =:= ArgName -> {ok, Row};
 do_eval({arg, _}, _Ctx) -> {error, unknown_arg};
 do_eval({call, <<"storage:blob">>, [], Kw}, {blob, Fetcher}) ->
     resolve_blob(Kw, Fetcher);
-do_eval({call, <<"storage:blob">>, _, _}, {row, _Row}) ->
+do_eval({call, <<"storage:blob">>, _, _}, {row, _, _}) ->
     {error, blob_resolution_not_allowed_in_row_eval};
 do_eval({call, Name, PosArgs, KwArgs}, Ctx) ->
     eval_call(Name, PosArgs, KwArgs, Ctx);

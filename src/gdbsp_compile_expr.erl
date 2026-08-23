@@ -9,7 +9,7 @@
 -module(gdbsp_compile_expr).
 
 -export([lower_expr/2, lower_fn_body/2]).
--export([check_fn_body/4, check_all_fns/2]).
+-export([check_fn_body/4, check_all_fns/2, inline_sig_map/1, merge_callable_maps/2]).
 
 -include("gdbsp_parse.hrl").
 -include("gdbsp_expr.hrl").
@@ -258,9 +258,36 @@ merge_pos_kw_errors(PosErrors, KwErrors) ->
 %%====================================================================
 
 -spec check_all_fns(#gdbsp_program{}, gdbsp_builtins:stdlib_map()) ->
-    {ok, #{binary() => jsx:json_term()}, [term()]} | {error, #{binary() => term()}}.
+    {ok, #{binary() => jsx:json_term()}, #{binary() => map()}, [term()]} |
+    {error, #{binary() => term()}}.
 check_all_fns(#gdbsp_program{fn_defs = FnDefs, typespecs = TSs}, StdlibMap) ->
-    check_all_fns(FnDefs, TSs, StdlibMap, #{}, [], []).
+    CallableMap = merge_callable_maps(StdlibMap, inline_sig_map(TSs)),
+    case check_all_fns(FnDefs, TSs, CallableMap, #{}, [], []) of
+        {ok, FnJsonMap, Warnings} ->
+            {ok, FnJsonMap, build_fn_params(FnDefs), Warnings};
+        {error, _} = Err -> Err
+    end.
+
+%% Callable signatures resolvable from inside inline-function bodies: the
+%% stdlib plus every user-declared function typespec. Both use the same
+%% {function, Pos, Kw, Ret} shape matched by gdbsp_builtins:resolve_call/4.
+inline_sig_map(TSs) ->
+    lists:foldl(
+        fun(#gdbsp_typespec{name = N, spec = {function, _, _, _}} = TS, Acc) ->
+                Acc#{N => [TS | maps:get(N, Acc, [])]};
+           (_, Acc) -> Acc
+        end, #{}, TSs).
+
+merge_callable_maps(A, B) ->
+    maps:merge_with(fun(_K, LA, LB) -> LA ++ LB end, A, B).
+
+build_fn_params(FnDefs) ->
+    maps:from_list(
+        [begin
+             Pos = [PName || {pos, PName} <- Params],
+             Kw = [{Key, Var} || {kw, Key, Var} <- Params],
+             {FnName, #{pos => Pos, kw => Kw}}
+         end || #gdbsp_fn_def{name = FnName, params = Params} <- FnDefs]).
 
 check_all_fns([], _TSs, _StdlibMap, FnJsonMap, _Warnings, Errors) ->
     case Errors of

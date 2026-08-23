@@ -49,10 +49,11 @@ init(#{kind := wrap, row_type := RowType} = Args) ->
     {#{'fun' => Fun, downstream_label => default}, [default], [default]};
 init(#{expr := Expr, row_type := _RowType} = Args) ->
     Value = maps:get(value_mod, Args, gdbsp_value),
+    ArgName = maps:get(arg_name, Args, <<"row">>),
     case maps:find(out, Args) of
         {ok, OutCol} ->
             Fun = fun(Row) ->
-                case Value:eval_expr(Expr, Row) of
+                case Value:eval_expr(Expr, Row, ArgName) of
                     {ok, {value, OutType, ResultVal}} ->
                         Value:struct_extend(Row, OutCol, {value, OutType, ResultVal});
                     drop_row -> erlang:throw(drop_row);
@@ -61,7 +62,7 @@ init(#{expr := Expr, row_type := _RowType} = Args) ->
             end;
         error ->
             Fun = fun(Row) ->
-                case Value:eval_expr(Expr, Row) of
+                case Value:eval_expr(Expr, Row, ArgName) of
                     {ok, {value, _, _} = Result} -> Result;
                     drop_row -> erlang:throw(drop_row);
                     {error, _} -> erlang:throw(drop_row)

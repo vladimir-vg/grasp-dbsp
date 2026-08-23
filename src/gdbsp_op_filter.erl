@@ -25,8 +25,9 @@
 -spec init(map()) -> {op_state(), [term()], [term()]}.
 init(#{expr := Expr, row_type := _RowType} = Args) ->
     Value = maps:get(value_mod, Args, gdbsp_value),
+    ArgName = maps:get(arg_name, Args, <<"row">>),
     Pred = fun(Row) ->
-        case Value:eval_expr(Expr, Row) of
+        case Value:eval_expr(Expr, Row, ArgName) of
             {ok, {value, {enum, [<<"false">>, <<"true">>]}, true}} -> true;
             _ -> false
         end

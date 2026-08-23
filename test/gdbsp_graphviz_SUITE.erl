@@ -287,7 +287,7 @@ lower(Source) ->
 compile_minimal(Source) ->
     {ok, Prog} = gdbsp_parse:parse_string(Source, #{}),
     {ok, LG} = gdbsp_compile_lower:run(Prog, #{}),
-    gdbsp_compile_graph:build_from_lowered(LG, #{}).
+    gdbsp_compile_graph:build_from_lowered(LG, #{}, #{}).
 
 contains(String, Sub) ->
     string:str(String, Sub) > 0.
