@@ -440,7 +440,7 @@
                   value: "v"
             - {type: "i64", value: "2"}
     ge_1:
-      call: "ge"
+      call: ">="
       args:
         - call: "std.struct_get"
           args:

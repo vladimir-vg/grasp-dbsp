@@ -146,10 +146,12 @@ run_one_fixture(Fixture, GroupName, Config) ->
     end.
 
 run_positive(Prog, Functions, ExpectedRaw, GroupName, Config) ->
-    TSMap = build_ts_map(Prog#gdbsp_program.typespecs),
-    {ok, StdlibMap} = gdbsp_compile:load_stdlib(),
-    Lowered0 = lower_program(Prog),
-    {ok, Lowered} = gdbsp_type_infer:infer_lowered(Lowered0, TSMap, Functions, StdlibMap),
+    Lowered = case gdbsp_compile:infer(Prog, Functions) of
+        {ok, L, _FnReg, _FnParams} -> L;
+        {error, Reason} ->
+            ct:pal("Inference failed: ~p", [Reason]),
+            error({infer_error, Reason})
+    end,
 
     %% Generate lowered graph DOT
     write_dot_file("type_infer", GroupName, "lowered",
@@ -175,18 +177,37 @@ run_positive(Prog, Functions, ExpectedRaw, GroupName, Config) ->
     ok.
 
 run_negative(Prog, Functions, ExpectedErrorsRaw) ->
-    TSMap = build_ts_map(Prog#gdbsp_program.typespecs),
-    {ok, StdlibMap} = gdbsp_compile:load_stdlib(),
-    Lowered0 = lower_program(Prog),
-    case gdbsp_type_infer:infer_lowered(Lowered0, TSMap, Functions, StdlibMap) of
-        {ok, _Lowered} ->
+    case gdbsp_compile:infer(Prog, Functions) of
+        {ok, _Lowered, _FnReg, _FnParams} ->
             ct:fail("expected error but infer succeeded");
-        {error, Reason} when is_map(Reason) ->
-            check_expected_errors(Reason, ExpectedErrorsRaw);
-        {error, Other} ->
-            ct:pal("Unexpected error reason: ~p", [Other]),
-            error({unexpected_error, Other})
+        {error, Reason} ->
+            check_expected_errors(normalize_error(Reason), ExpectedErrorsRaw)
     end.
+
+normalize_error(Reason) when is_map(Reason) ->
+    case maps:is_key(<<"class">>, Reason) of
+        true -> Reason;
+        false -> #{<<"class">> => <<"unknown_error">>, <<"reason">> => Reason}
+    end;
+normalize_error({inline_fn_errors, ErrorMap}) ->
+    case lists:append(maps:values(ErrorMap)) of
+        [First | _] -> #{<<"class">> => error_tag(First)};
+        [] -> #{<<"class">> => <<"inline_fn_errors">>}
+    end;
+normalize_error({duplicate_function, _}) ->
+    #{<<"class">> => <<"duplicate_function">>};
+normalize_error({fixpoint_error, Reason}) ->
+    #{<<"class">> => <<"fixpoint_error">>, <<"reason">> => Reason};
+normalize_error(Other) ->
+    #{<<"class">> => <<"unexpected_error">>, <<"reason">> => Other}.
+
+error_tag(T) when is_atom(T) -> atom_to_binary(T, utf8);
+error_tag(T) when is_tuple(T) ->
+    case element(1, T) of
+        Tag when is_atom(Tag) -> atom_to_binary(Tag, utf8);
+        _ -> iolist_to_binary(io_lib:format("~p", [T]))
+    end;
+error_tag(T) -> iolist_to_binary(io_lib:format("~p", [T])).
 
 check_expected_errors(_Actual, []) ->
     ok;
@@ -220,28 +241,6 @@ match_value(Exp, Act) when is_list(Exp), is_list(Act) ->
     lists:sort(Exp) =:= lists:sort(Act);
 match_value(Exp, Act) ->
     Exp =:= Act.
-
-%%====================================================================
-%% Compilation pipeline helpers
-%%====================================================================
-
-build_ts_map(Typespecs) ->
-    lists:foldl(
-        fun(#gdbsp_typespec{name = N, spec = {type, {stream, Inner}}}, Acc) ->
-                Acc#{N => Inner};
-           (#gdbsp_typespec{name = N, spec = {type, T}}, Acc) ->
-                Acc#{N => T};
-           (_TS, Acc) ->
-                Acc
-        end, #{}, Typespecs).
-
-lower_program(Prog) ->
-    case gdbsp_compile_lower:run(Prog, #{}) of
-        {ok, Lowered} -> Lowered;
-        {error, Reason} ->
-            ct:pal("Lowering failed: ~p", [Reason]),
-            error({lowering_error, Reason})
-    end.
 
 %%--------------------------------------------------------------------
 %% Build a tag-name → type map from the inferred lowered graph

@@ -56,6 +56,12 @@ infer_map_output_type(#{<<"arg">> := _ArgName}, InputType, _StdlibMap) ->
 infer_map_output_type(#{<<"call">> := CallName} = CallJson, InputType, StdlibMap) ->
     infer_call_output_type(bin(CallName), CallJson, InputType, StdlibMap);
 
+infer_map_output_type(#{<<"get">> := _} = GetJson, InputType, StdlibMap) ->
+    infer_expr_output_type(GetJson, InputType, StdlibMap);
+
+infer_map_output_type(#{<<"slice">> := _} = SliceJson, InputType, StdlibMap) ->
+    infer_expr_output_type(SliceJson, InputType, StdlibMap);
+
 infer_map_output_type(_Other, InputType, _StdlibMap) ->
     InputType.
 
@@ -74,6 +80,15 @@ infer_expr_output_type(#{<<"arg">> := _ArgName}, InputType, _StdlibMap) ->
 
 infer_expr_output_type(#{<<"call">> := CallName} = CallJson, InputType, StdlibMap) ->
     infer_call_output_type(bin(CallName), CallJson, InputType, StdlibMap);
+
+infer_expr_output_type(#{<<"get">> := ObjJson, <<"keys">> := [KeyJson | _]},
+                       InputType, StdlibMap) ->
+    ContainerType = infer_expr_output_type(ObjJson, InputType, StdlibMap),
+    infer_get_json_type(ContainerType, KeyJson);
+
+infer_expr_output_type(#{<<"slice">> := ObjJson}, InputType, StdlibMap) ->
+    ContainerType = infer_expr_output_type(ObjJson, InputType, StdlibMap),
+    infer_slice_json_type(ContainerType);
 
 infer_expr_output_type(#{<<"aggregate">> := _AggName}, _InputType, _StdlibMap) ->
     dynamic;
@@ -106,8 +121,66 @@ infer_call_output_type(CallName, CallJson, InputType, StdlibMap) ->
     KwPairs = [{K, infer_expr_output_type(V, InputType, StdlibMap)} || {K, V} <- maps:to_list(KwArgs)],
     case gdbsp_builtins:resolve_call(CallName, PosTypes, KwPairs, StdlibMap) of
         {ok, RetType, _ConcreteName} -> RetType;
-        {error, _} -> dynamic
+        {error, Reason} ->
+            error(#{<<"class">> => <<"fn_lookup_error">>,
+                    <<"function">> => CallName,
+                    <<"reason">> => Reason})
     end.
+
+%%====================================================================
+%% get / slice (subscript) output type resolution
+%%====================================================================
+
+infer_get_json_type({array, T, _}, KeyJson) ->
+    case is_integer_key_json(KeyJson) of
+        true -> T;
+        false -> dynamic
+    end;
+infer_get_json_type({map, K, V}, KeyJson) ->
+    case extract_literal_type(KeyJson) of
+        {ok, KT} ->
+            case gdbsp_builtins:exact_match(K, KT) of
+                true -> V;
+                false -> dynamic
+            end;
+        false -> dynamic
+    end;
+infer_get_json_type({struct, Fields, _}, KeyJson) ->
+    case extract_string_literal(KeyJson) of
+        {ok, KeyStr} -> field_type(KeyStr, {struct, Fields, exact});
+        false -> dynamic
+    end;
+infer_get_json_type(dynamic, _) -> dynamic;
+infer_get_json_type({dynamic, _}, _) -> dynamic;
+infer_get_json_type(Container, _) ->
+    error(#{<<"class">> => <<"type_conflict">>,
+            <<"message">> => <<"get on non-container">>,
+            <<"container">> => gdbsp_type:canonical_text(Container)}).
+
+infer_slice_json_type({array, T, _}) -> {array, T, varsize};
+infer_slice_json_type(string) -> string;
+infer_slice_json_type({string, _}) -> string;
+infer_slice_json_type(bytes) -> bytes;
+infer_slice_json_type({bytes, _}) -> bytes;
+infer_slice_json_type(dynamic) -> dynamic;
+infer_slice_json_type({dynamic, _}) -> dynamic;
+infer_slice_json_type(Container) ->
+    error(#{<<"class">> => <<"type_conflict">>,
+            <<"message">> => <<"slice on non-sequence">>,
+            <<"container">> => gdbsp_type:canonical_text(Container)}).
+
+is_integer_key_json(#{<<"type">> := T, <<"value">> := _}) ->
+    T =:= <<"integer">> orelse T =:= <<"i64">> orelse T =:= <<"i32">> orelse
+    T =:= <<"i16">> orelse T =:= <<"i8">> orelse T =:= <<"u64">> orelse
+    T =:= <<"u32">> orelse T =:= <<"u16">> orelse T =:= <<"u8">>;
+is_integer_key_json(_) -> false.
+
+extract_literal_type(#{<<"type">> := TypeJson, <<"value">> := _}) ->
+    case gdbsp_type:parse_type(TypeJson) of
+        {ok, T} -> {ok, T};
+        _ -> false
+    end;
+extract_literal_type(_) -> false.
 
 %%====================================================================
 %% struct:get / struct:set output type resolution

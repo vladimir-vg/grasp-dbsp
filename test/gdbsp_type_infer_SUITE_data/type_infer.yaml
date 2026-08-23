@@ -562,3 +562,28 @@
               value: "key"
   expected:
     out: dynamic
+
+- description: "subscript element type infers array element type"
+  source: |
+    src := source("data")
+    src :: stream(struct("vals": array(i64)))
+    first := function((row) -> struct("v": std.struct_get(row, key: "vals")[0]))
+    first :: function((struct("vals": array(i64))) -> struct("v": i64))
+    out := map(src, first)
+  expected:
+    out:
+      struct:
+        v: i64
+
+- description: "slice infers array type"
+  source: |
+    src := source("data")
+    src :: stream(struct("vals": array(i64)))
+    head := function((row) -> struct("v": std.struct_get(row, key: "vals")[0:2]))
+    head :: function((struct("vals": array(i64))) -> struct("v": array(i64)))
+    out := map(src, head)
+  expected:
+    out:
+      struct:
+        v:
+          array: i64

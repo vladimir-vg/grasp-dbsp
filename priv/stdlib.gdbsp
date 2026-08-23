@@ -238,6 +238,7 @@ std.string_gte :: function((string("UTF-8"), string("UTF-8")) -> enum("false","t
 std.concat_string :: function((string("UTF-8"), string("UTF-8")) -> string("UTF-8"))
 std.concat_bytes  :: function((bytes, bytes) -> bytes)
 std.concat_bits   :: function((bits, bits) -> bits)
+std.concat_array  :: function((array(T), array(T)) -> array(T))
 
 # ===== Bytes / Bits =====
 

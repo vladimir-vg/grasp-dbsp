@@ -11,6 +11,7 @@
 -export([resolve_call/4]).
 -export([operand_types/1, is_valid_operand/2, concrete_fn/3]).
 -export([unify_types/3, fn_impl/1, agg_impl/1]).
+-export([exact_match/2]).
 
 -include("gdbsp_type.hrl").
 -include("gdbsp_parse.hrl").
@@ -40,7 +41,9 @@ binop_fn_name('<<<') -> <<"<<<">>;
 binop_fn_name('>>>') -> <<">>>">>;
 binop_fn_name('&')   -> <<"&">>;
 binop_fn_name('|')   -> <<"|">>;
-binop_fn_name('^')   -> <<"^">>.
+binop_fn_name('^')   -> <<"^">>;
+binop_fn_name('and') -> <<"and">>;
+binop_fn_name('or')  -> <<"or">>.
 
 -spec unop_fn_name(atom()) -> binary().
 unop_fn_name('-')   -> <<"-">>;
@@ -123,20 +126,41 @@ find_concrete_ts(Name, PosTypes, KwPairs, StdlibMap) ->
             {error, {missing_typespec, Name}}
     end.
 
-match_stdlib_ts([], _PosTypes, _KwPairs) ->
-    {error, no_matching_overload};
-match_stdlib_ts([#gdbsp_typespec{spec = {function, Pos, Kw, Ret}} | Rest],
-                PosTypes, KwPairs) ->
-    case match_pos(Pos, PosTypes) andalso match_kw(Kw, KwPairs) of
-        true -> {ok, Ret};
-        false -> match_stdlib_ts(Rest, PosTypes, KwPairs)
-    end;
-match_stdlib_ts([#gdbsp_typespec{spec = {aggregate_function, Pos, Kw, Ret}} | Rest],
-                PosTypes, KwPairs) ->
-    case match_pos(Pos, PosTypes) andalso match_kw(Kw, KwPairs) of
-        true -> {ok, Ret};
-        false -> match_stdlib_ts(Rest, PosTypes, KwPairs)
+match_stdlib_ts(TSpecs, PosTypes, KwPairs) ->
+    case match_stdlib_ts_loop(TSpecs, PosTypes, KwPairs) of
+        {ok, Ret} -> {ok, Ret};
+        no_match ->
+            case undeclared_kwarg(TSpecs, KwPairs) of
+                none -> {error, no_matching_overload};
+                {ok, Key} -> {error, {unexpected_kw_arg, Key}}
+            end
     end.
+
+match_stdlib_ts_loop([], _PosTypes, _KwPairs) ->
+    no_match;
+match_stdlib_ts_loop([#gdbsp_typespec{spec = {function, Pos, Kw, Ret}} | Rest],
+                     PosTypes, KwPairs) ->
+    case match_pos(Pos, PosTypes) andalso match_kw(Kw, KwPairs) of
+        true -> {ok, Ret};
+        false -> match_stdlib_ts_loop(Rest, PosTypes, KwPairs)
+    end;
+match_stdlib_ts_loop([#gdbsp_typespec{spec = {aggregate_function, Pos, Kw, Ret}} | Rest],
+                     PosTypes, KwPairs) ->
+    case match_pos(Pos, PosTypes) andalso match_kw(Kw, KwPairs) of
+        true -> {ok, Ret};
+        false -> match_stdlib_ts_loop(Rest, PosTypes, KwPairs)
+    end.
+
+undeclared_kwarg(TSpecs, KwPairs) ->
+    Declared = lists:usort(lists:append([declared_kw_keys(TS) || TS <- TSpecs])),
+    case [K || {K, _} <- KwPairs, not lists:member(K, Declared)] of
+        [Key | _] -> {ok, Key};
+        [] -> none
+    end.
+
+declared_kw_keys(#gdbsp_typespec{spec = {function, _, Kw, _}}) -> maps:keys(Kw);
+declared_kw_keys(#gdbsp_typespec{spec = {aggregate_function, _, Kw, _}}) -> maps:keys(Kw);
+declared_kw_keys(_) -> [].
 
 %%====================================================================
 %% Overload matching helpers
@@ -151,6 +175,12 @@ match_pos([PT | PRest], [AT | ARest]) ->
 match_pos(_, _) -> false.
 
 match_kw(Kw, KwPairs) ->
+    case lists:any(fun({K, _}) -> not maps:is_key(K, Kw) end, KwPairs) of
+        true -> false;
+        false -> declared_kwargs_match(Kw, KwPairs)
+    end.
+
+declared_kwargs_match(Kw, KwPairs) ->
     maps:fold(fun(K, PT, true) ->
         case lists:keyfind(K, 1, KwPairs) of
             {K, AT} -> exact_match(PT, AT);
@@ -158,8 +188,10 @@ match_kw(Kw, KwPairs) ->
         end
     end, true, Kw).
 
-exact_match(dynamic, _) -> true;
-exact_match(_, dynamic) -> true;
+exact_match(dynamic, dynamic) -> true;
+exact_match(dynamic, {dynamic, _}) -> true;
+exact_match({dynamic, _}, dynamic) -> true;
+exact_match({dynamic, _}, {dynamic, _}) -> true;
 exact_match(Same, Same) when is_atom(Same) -> true;
 exact_match({optional, A}, {optional, B}) -> exact_match(A, B);
 exact_match({closure, AP, AE}, {closure, BP, BE}) ->
@@ -174,7 +206,6 @@ exact_match({string, _}, string) -> true;
 exact_match(string, {string, _}) -> true;
 exact_match({string, _}, {string, _}) -> true;
 exact_match({enum, _}, {enum, _}) -> true;
-exact_match({dynamic, A}, {dynamic, B}) -> exact_match(A, B);
 exact_match({json, A}, {json, B}) -> exact_match(A, B);
 exact_match({type_var, _}, _) -> true;
 exact_match(_, {type_var, _}) -> true;
@@ -457,6 +488,7 @@ fn_impl(<<"std.add_integer">>)  -> {ok, {gdbsp_math, math_add_integer_integer, 2
 fn_impl(<<"std.add_numeric">>)  -> {ok, {gdbsp_math, math_add_numeric_numeric, 2}};
 fn_impl(<<"std.add_f64">>)      -> {ok, {gdbsp_math, math_add_f64_f64, 2}};
 fn_impl(<<"std.add_interval">>) -> {ok, {gdbsp_temporal, temporal_add_interval_interval, 2}};
+fn_impl(<<"std.sub_interval">>) -> {ok, {gdbsp_temporal, temporal_sub_interval_interval, 2}};
 
 fn_impl(<<"std.sub_i64">>)      -> {ok, {gdbsp_math, math_sub_i64_i64, 2}};
 fn_impl(<<"std.sub_integer">>)  -> {ok, {gdbsp_math, math_sub_integer_integer, 2}};
@@ -504,12 +536,13 @@ fn_impl(<<"std.lte_", _/binary>>) -> {ok, {gdbsp_std, std_lte, 2}};
 fn_impl(<<"std.gte_", _/binary>>) -> {ok, {gdbsp_std, std_gte, 2}};
 
 fn_impl(<<"std.neg_i64">>)      -> {ok, {gdbsp_math, math_neg_i64, 1}};
+fn_impl(<<"std.neg_integer">>)  -> {ok, {gdbsp_math, math_neg_integer, 1}};
 fn_impl(<<"std.neg_f64">>)      -> {ok, {gdbsp_math, math_neg_f64, 1}};
 fn_impl(<<"std.neg_numeric">>)  -> {ok, {gdbsp_math, math_neg_numeric, 1}};
 
 fn_impl(<<"std.not">>)          -> {ok, {gdbsp_std, std_not_boolean, 1}};
-fn_impl(<<"std.and">>)          -> {ok, {gdbsp_std, std_and_boolean, 2}};
-fn_impl(<<"std.or">>)           -> {ok, {gdbsp_std, std_or_boolean, 2}};
+fn_impl(<<"std.and">>)          -> {ok, {gdbsp_std, std_and_boolean_boolean, 2}};
+fn_impl(<<"std.or">>)           -> {ok, {gdbsp_std, std_or_boolean_boolean, 2}};
 
 fn_impl(<<"std.concat_string">>) -> {ok, {gdbsp_string, string_concat, 2}};
 fn_impl(<<"std.concat_bytes">>)  -> {ok, {gdbsp_bytes, bytes_concat, 2}};

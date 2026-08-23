@@ -677,7 +677,7 @@
       params:
         - {pos: x}
       body:
-        unop: not_op
+        unop: 'not'
         expr: {var: x}
       line: 1
     - name: g

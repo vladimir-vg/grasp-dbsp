@@ -51,7 +51,7 @@ end_per_suite(_Config) ->
 simple_filter(_Config) ->
     FnReg = #{
         <<"salary_ge_150">> =>
-            #{<<"call">> => <<"gte">>,
+            #{<<"call">> => <<">=">>,
               <<"args">> => [
                   #{<<"call">> => <<"std.struct_get">>,
                     <<"args">> => [#{<<"arg">> => <<"row">>}],
@@ -73,7 +73,7 @@ simple_filter(_Config) ->
     SrcNode = hd([N || {_, N} <- Nodes, element(1, N#circuit_node.op) =:= source]),
     {source, <<"emp">>} = SrcNode#circuit_node.op,
     FilNode = hd([N || {_, N} <- Nodes, element(1, N#circuit_node.op) =:= filter]),
-    {filter, #{expr := {call, <<"gte">>, _, _}}} = FilNode#circuit_node.op,
+    {filter, #{expr := {call, <<">=">>, _, _}}} = FilNode#circuit_node.op,
     ok.
 
 simple_map(_Config) ->
@@ -162,7 +162,7 @@ plus_multi(_Config) ->
 incrementalize_filter(_Config) ->
     FnReg = #{
         <<"f">> =>
-            #{<<"call">> => <<"gte">>,
+            #{<<"call">> => <<">=">>,
               <<"args">> => [
                   #{<<"call">> => <<"std.struct_get">>,
                     <<"args">> => [#{<<"arg">> => <<"row">>}],

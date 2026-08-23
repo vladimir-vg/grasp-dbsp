@@ -1,0 +1,59 @@
+# Runtime stdlib implementation tests for bytes / bits / array / temporal
+# operators (§7.2 of function-semantics-robustness-plan.md).
+
+- description: "bytes concatenation"
+  source: |
+    src := source("data")
+    src :: stream(struct("a": bytes, "b": bytes))
+    concat := function((row) -> struct("c": row.a ++ row.b))
+    concat :: function((struct("a": bytes, "b": bytes)) -> struct("c": bytes))
+    out := map(src, concat)
+  input:
+    - data:
+        - [1, {a: {encoding: "base64", value: "AQI="}, b: {encoding: "base64", value: "AwQ="}}]
+  expected:
+    - out:
+        - [1, {c: {encoding: "base64", value: "AQIDBA=="}}]
+
+- description: "bits bitwise and"
+  source: |
+    src := source("data")
+    src :: stream(struct("a": bits, "b": bits))
+    masked := function((row) -> struct("c": row.a & row.b))
+    masked :: function((struct("a": bits, "b": bits)) -> struct("c": bits))
+    out := map(src, masked)
+  input:
+    - data:
+        - [1, {a: {encoding: "base64", value: "Dw=="}, b: {encoding: "base64", value: "PA=="}}]
+  expected:
+    - out:
+        - [1, {c: {encoding: "base64", value: "DA=="}}]
+
+- description: "array concatenation"
+  source: |
+    src := source("data")
+    src :: stream(struct("a": array(i64), "b": array(i64)))
+    concat := function((row) -> struct("c": row.a ++ row.b))
+    concat :: function((struct("a": array(i64), "b": array(i64))) -> struct("c": array(i64)))
+    out := map(src, concat)
+  input:
+    - data:
+        - [1, {a: ["1", "2"], b: ["3", "4"]}]
+  expected:
+    - out:
+        - [1, {c: ["1", "2", "3", "4"]}]
+
+- description: "interval addition (component-wise)"
+  source: |
+    src := source("data")
+    src :: stream(struct("a": interval, "b": interval))
+    total := function((row) -> struct("c": row.a + row.b))
+    total :: function((struct("a": interval, "b": interval)) -> struct("c": interval))
+    out := map(src, total)
+  input:
+    - data:
+        - [1, {a: {months: "1", days: "5", microseconds: "1000"},
+               b: {months: "2", days: "3", microseconds: "2000"}}]
+  expected:
+    - out:
+        - [1, {c: {months: "3", days: "8", microseconds: "3000"}}]

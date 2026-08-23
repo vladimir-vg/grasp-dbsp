@@ -326,3 +326,209 @@
   expected_errors:
     - class: compile_error
       message: "non_boolean_filter"   # TODO(impl): define exact error term
+
+# ── Function semantics robustness (§7.1) ──
+
+- description: "self-recursive inline function fails"
+  source: |
+    src := source("data")
+    src :: stream(struct("x": integer))
+    helper := function((row) -> helper(row))
+    helper :: function((struct("x": integer)) -> struct("x": integer))
+    out := map(src, helper)
+  expected_errors:
+    - class: compile_error
+      message: "recursive_function"
+
+- description: "mutually-recursive inline functions fail"
+  source: |
+    src := source("data")
+    src :: stream(struct("x": integer))
+    a := function((row) -> b(row))
+    a :: function((struct("x": integer)) -> struct("x": integer))
+    b := function((row) -> a(row))
+    b :: function((struct("x": integer)) -> struct("x": integer))
+    out := map(src, a)
+  expected_errors:
+    - class: compile_error
+      message: "recursive_function"
+
+- description: "extra keyword argument at call site fails"
+  source: |
+    src := source("data")
+    src :: stream(struct("x": integer))
+    double := function((n) -> n + n)
+    double :: function((integer) -> integer)
+    f := function((row) -> double(row.x, extra: 1))
+    f :: function((struct("x": integer)) -> integer)
+    out := map(src, f)
+  expected_errors:
+    - class: compile_error
+      message: "unexpected_kw_arg"
+
+- description: "non-unary map function fails"
+  source: |
+    src := source("data")
+    src :: stream(struct("x": integer))
+    f := function((a, b) -> a)
+    f :: function((struct("x": integer), struct("x": integer)) -> struct("x": integer))
+    out := map(src, f)
+  expected_errors:
+    - class: compile_error
+      message: "row_fn_arity"
+
+- description: "non-unary filter function fails"
+  source: |
+    src := source("data")
+    src :: stream(struct("x": integer))
+    f := function((a, b) -> a.x > 0)
+    f :: function((struct("x": integer), struct("x": integer)) -> enum("false","true"))
+    out := filter(src, f)
+  expected_errors:
+    - class: compile_error
+      message: "row_fn_arity"
+
+- description: "non-unary flat_map function fails"
+  source: |
+    src := source("data")
+    src :: stream(struct("name": string("UTF-8"), "vals": array(integer)))
+    unnest := function((row, extra) -> row.vals)
+    unnest :: function((struct("name": string("UTF-8"), "vals": array(integer)), struct("name": string("UTF-8"), "vals": array(integer))) -> array(integer))
+    expanded := flat_map(src, unnest)
+    expanded :: stream(struct("name": string("UTF-8"), "v": integer, "vals": array(integer)))
+  expected_errors:
+    - class: compile_error
+      message: "row_fn_arity"
+
+- description: "duplicate inline function definition fails"
+  source: |
+    src := source("data")
+    src :: stream(struct("x": integer))
+    f := function((row) -> row.x)
+    f := function((row) -> row.x + 1)
+    f :: function((struct("x": integer)) -> integer)
+    out := map(src, f)
+  expected_errors:
+    - class: compile_error
+      message: "duplicate_function"
+
+- description: "repeated identical typespec for one definition compiles"
+  source: |
+    src := source("data")
+    src :: stream(struct("x": integer))
+    f := function((row) -> row)
+    f :: function((struct("x": integer)) -> struct("x": integer))
+    f :: function((struct("x": integer)) -> struct("x": integer))
+    out := map(src, f)
+  input:
+    - data:
+        - [1, {x: "42"}]
+  expected:
+    - out:
+        - [1, {x: "42"}]
+
+- description: "inline function name colliding with stdlib fails"
+  source: |
+    src := source("data")
+    src :: stream(struct("x": integer))
+    std.concat_string := function((s) -> s)
+    std.concat_string :: function((string("UTF-8")) -> string("UTF-8"))
+    out := map(src, std.concat_string)
+  expected_errors:
+    - class: compile_error
+      message: "stdlib_collision"
+
+- description: "mismatched concrete argument fails"
+  source: |
+    src := source("data")
+    src :: stream(struct("x": i64))
+    f := function((row) -> std.string_upper(row.x))
+    f :: function((struct("x": i64)) -> string("UTF-8"))
+    out := map(src, f)
+  expected_errors:
+    - class: compile_error
+      message: "fn_lookup_error"
+
+- description: "dynamic argument into concrete parameter fails"
+  source: |
+    src := source("data")
+    src :: stream(struct("x": dynamic))
+    f := function((row) -> std.string_upper(row.x))
+    f :: function((struct("x": dynamic)) -> string("UTF-8"))
+    out := map(src, f)
+  expected_errors:
+    - class: compile_error
+      message: "fn_lookup_error"
+
+- description: "unary negation on integer"
+  source: |
+    src := source("data")
+    src :: stream(struct("x": integer))
+    neg := function((row) -> struct("v": -row.x))
+    neg :: function((struct("x": integer)) -> struct("v": integer))
+    out := map(src, neg)
+  input:
+    - data:
+        - [1, {x: "5"}]
+  expected:
+    - out:
+        - [1, {v: "-5"}]
+
+- description: "boolean and in filter"
+  source: |
+    src := source("data")
+    src :: stream(struct("x": integer))
+    in_range := function((row) -> row.x > 0 and row.x < 10)
+    in_range :: function((struct("x": integer)) -> enum("false","true"))
+    out := filter(src, in_range)
+  input:
+    - data:
+        - [1, {x: "0"}]
+        - [1, {x: "5"}]
+        - [1, {x: "15"}]
+  expected:
+    - out:
+        - [1, {x: "5"}]
+
+- description: "boolean or in filter"
+  source: |
+    src := source("data")
+    src :: stream(struct("x": integer))
+    extreme := function((row) -> row.x < 0 or row.x > 10)
+    extreme :: function((struct("x": integer)) -> enum("false","true"))
+    out := filter(src, extreme)
+  input:
+    - data:
+        - [1, {x: "-3"}]
+        - [1, {x: "5"}]
+        - [1, {x: "20"}]
+  expected:
+    - out:
+        - [1, {x: "-3"}]
+        - [1, {x: "20"}]
+
+- description: "boolean not in filter"
+  source: |
+    src := source("data")
+    src :: stream(struct("x": integer))
+    not_pos := function((row) -> not (row.x > 0))
+    not_pos :: function((struct("x": integer)) -> enum("false","true"))
+    out := filter(src, not_pos)
+  input:
+    - data:
+        - [1, {x: "-3"}]
+        - [1, {x: "5"}]
+  expected:
+    - out:
+        - [1, {x: "-3"}]
+
+- description: "boolean operator on non-boolean operands fails"
+  source: |
+    src := source("data")
+    src :: stream(struct("a": i64, "b": i64))
+    f := function((row) -> row.a and row.b)
+    f :: function((struct("a": i64, "b": i64)) -> enum("false","true"))
+    out := filter(src, f)
+  expected_errors:
+    - class: compile_error
+      message: "fn_lookup_error"

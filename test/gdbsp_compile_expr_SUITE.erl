@@ -31,7 +31,7 @@
          t28_check_all_roundtrip/1,
          t29_builtin_resolve_ops/1, t30_builtin_resolve_comparison/1,
          t31_builtin_resolve_logic/1, t32_builtin_binop_name/1,
-         t33_builtin_resolve_concat/1
+         t33_builtin_resolve_concat/1, t34_builtin_resolve_strict_dynamic/1
         ]).
 
 %%====================================================================
@@ -54,7 +54,7 @@ all() ->
      t28_check_all_roundtrip,
      t29_builtin_resolve_ops, t30_builtin_resolve_comparison,
      t31_builtin_resolve_logic, t32_builtin_binop_name,
-     t33_builtin_resolve_concat
+     t33_builtin_resolve_concat, t34_builtin_resolve_strict_dynamic
     ].
 
 %%====================================================================
@@ -382,6 +382,24 @@ t33_builtin_resolve_concat(_Config) ->
     {ok, {string, <<"UTF-8">>}, _} =
         gdbsp_builtins:resolve_call(<<"++">>, [{string, <<"UTF-8">>}, {string, <<"UTF-8">>}], [], Stdlib),
     {ok, bytes, _} = gdbsp_builtins:resolve_call(<<"++">>, [bytes, bytes], [], Stdlib),
+    ok.
+
+t34_builtin_resolve_strict_dynamic(_Config) ->
+    Stdlib = test_stdlib(),
+    %% dynamic args do not resolve a concrete-param function
+    {error, _} = gdbsp_builtins:resolve_call(
+        <<"std.string_upper">>, [dynamic], [], Stdlib),
+    {error, _} = gdbsp_builtins:resolve_call(
+        <<"std.string_upper">>, [{dynamic, string}], [], Stdlib),
+    %% wrapper semantics: two dynamics match regardless of inner type
+    true = gdbsp_builtins:exact_match(dynamic, dynamic),
+    true = gdbsp_builtins:exact_match({dynamic, string}, {dynamic, i64}),
+    %% concrete arg does not match a dynamic param
+    false = gdbsp_builtins:exact_match(dynamic, i64),
+    false = gdbsp_builtins:exact_match(i64, dynamic),
+    %% type variables remain the generic mechanism
+    true = gdbsp_builtins:exact_match({type_var, <<"T">>}, i64),
+    true = gdbsp_builtins:exact_match(i64, {type_var, <<"T">>}),
     ok.
 
 %%====================================================================

@@ -242,6 +242,7 @@ make_operator_lowered(G, Op, Args, InputIds, TS, FnReg, FnParams) ->
             {{neg}, []};
         map ->
             FnName = get_var_arg(Args, 2),
+            check_row_fn_arity(map, FnName, FnParams),
             {Expr, ArgName} = resolve_fn(FnName, FnReg, FnParams),
             RowType = get_input_row_type(InputIds, G),
             Spec = #{kind => expr, expr => Expr, row_type => RowType,
@@ -249,11 +250,13 @@ make_operator_lowered(G, Op, Args, InputIds, TS, FnReg, FnParams) ->
             {{map, Spec}, []};
         filter ->
             FnName = get_var_arg(Args, 2),
+            check_row_fn_arity(filter, FnName, FnParams),
             {Expr, ArgName} = resolve_fn(FnName, FnReg, FnParams),
             RowType = get_input_row_type(InputIds, G),
             {{filter, #{expr => Expr, row_type => RowType, arg_name => ArgName}}, []};
         flat_map ->
             FnName = get_var_arg(Args, 2),
+            check_row_fn_arity(flat_map, FnName, FnParams),
             {Expr, ArgName} = resolve_fn(FnName, FnReg, FnParams),
             RowType = get_input_row_type(InputIds, G),
             OutType = case TS of
@@ -288,6 +291,16 @@ make_operator_lowered(G, Op, Args, InputIds, TS, FnReg, FnParams) ->
 %%====================================================================
 %% Fixpoint construction from lowered metadata
 %%====================================================================
+
+check_row_fn_arity(Op, FnName, FnParams) ->
+    case maps:find(FnName, FnParams) of
+        {ok, #{pos := Pos}} when length(Pos) =:= 1 ->
+            ok;
+        {ok, #{pos := Pos}} ->
+            throw({compile_error, {row_fn_arity, Op, FnName, length(Pos)}});
+        error ->
+            ok
+    end.
 
 construct_fixpoints(G, Fixpoints, LnIdMap, CircuitFixpointInputs,
                      CircuitFixpointOutputs) ->
@@ -711,15 +724,20 @@ fn_arg_name(FnName, FnParams) ->
 beta_reduce({call, Name, PosArgs, KwArgs}, FnReg, FnParams, InProgress) ->
     RedPos = [beta_reduce(A, FnReg, FnParams, InProgress) || A <- PosArgs],
     RedKw = maps:map(fun(_K, V) -> beta_reduce(V, FnReg, FnParams, InProgress) end, KwArgs),
-    case maps:is_key(Name, FnReg) andalso not sets:is_element(Name, InProgress) of
+    case maps:is_key(Name, FnReg) of
         true ->
-            case gdbsp_expr:json_to_expr(maps:get(Name, FnReg)) of
-                {ok, CalleeExpr} ->
-                    CalleeRed = beta_reduce(CalleeExpr, FnReg, FnParams,
-                                            sets:add_element(Name, InProgress)),
-                    substitute(CalleeRed, RedPos, RedKw, Name, FnParams);
-                {error, _} ->
-                    {call, Name, RedPos, RedKw}
+            case sets:is_element(Name, InProgress) of
+                true ->
+                    throw({compile_error, {recursive_function, Name}});
+                false ->
+                    case gdbsp_expr:json_to_expr(maps:get(Name, FnReg)) of
+                        {ok, CalleeExpr} ->
+                            CalleeRed = beta_reduce(CalleeExpr, FnReg, FnParams,
+                                                    sets:add_element(Name, InProgress)),
+                            substitute(CalleeRed, RedPos, RedKw, Name, FnParams);
+                        {error, _} ->
+                            {call, Name, RedPos, RedKw}
+                    end
             end;
         false ->
             {call, Name, RedPos, RedKw}

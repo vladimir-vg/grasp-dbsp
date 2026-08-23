@@ -212,6 +212,8 @@ typespec_to_stmt(#gdbsp_typespec{name = N, spec = {Kind, PosParams, KwParams, Re
 
 norm_type(T) when is_binary(T) ->
     binary_to_atom(T, utf8);
+norm_type({type_var, Name}) ->
+    binary_to_atom(Name, utf8);
 norm_type({enum, Names}) ->
     Sorted = lists:sort(Names),
     #{enum => [b2a(N) || N <- Sorted]};

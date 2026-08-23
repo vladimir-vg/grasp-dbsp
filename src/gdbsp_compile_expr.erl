@@ -227,10 +227,19 @@ infer_expr_type({call, Name, PosArgs, KwArgs}, Env, Errors, StdlibMap) ->
         {error, Reason} ->
             {dynamic, [{fn_lookup_error, Name, Reason} | AllErrors]}
     end;
-infer_expr_type({get, _Obj, _Keys}, _Env, Errors, _StdlibMap) ->
-    {dynamic, Errors};
-infer_expr_type({slice, _Obj, _Start, _Stop, _Step}, _Env, Errors, _StdlibMap) ->
-    {dynamic, Errors};
+infer_expr_type({get, Obj, Keys}, Env, Errors, StdlibMap) ->
+    {ObjType, Errors1} = infer_expr_type(Obj, Env, Errors, StdlibMap),
+    {_KeyTypes, Errors2} = infer_arg_types(Keys, Env, Errors1, StdlibMap),
+    case infer_get_type(ObjType, Keys) of
+        {ok, T} -> {T, Errors2};
+        {error, Err} -> {dynamic, [Err | Errors2]}
+    end;
+infer_expr_type({slice, Obj, _Start, _Stop, _Step}, Env, Errors, StdlibMap) ->
+    {ObjType, Errors1} = infer_expr_type(Obj, Env, Errors, StdlibMap),
+    case infer_slice_type(ObjType) of
+        {ok, T} -> {T, Errors1};
+        {error, Err} -> {dynamic, [Err | Errors1]}
+    end;
 infer_expr_type({agg, _Name, _PosArgs, _KwArgs}, _Env, Errors, _StdlibMap) ->
     {dynamic, [aggregates_not_allowed_in_fn_body | Errors]}.
 
@@ -240,6 +249,54 @@ infer_arg_types([Arg | Rest], Env, Errors, StdlibMap) ->
     {T, Errors1} = infer_expr_type(Arg, Env, Errors, StdlibMap),
     {Ts, Errors2} = infer_arg_types(Rest, Env, Errors1, StdlibMap),
     {[T | Ts], Errors2}.
+
+%%====================================================================
+%% get / slice type inference
+%%====================================================================
+
+infer_get_type({array, T, _}, [Key | _]) ->
+    case is_integer_literal(Key) of
+        true -> {ok, T};
+        false -> {error, {array_index_not_integer}}
+    end;
+infer_get_type({map, K, V}, [Key | _]) ->
+    case Key of
+        {value, KT, _} ->
+            case gdbsp_builtins:exact_match(K, KT) of
+                true -> {ok, V};
+                false -> {error, {map_key_type_mismatch, KT, K}}
+            end;
+        _ -> {error, {map_key_not_literal}}
+    end;
+infer_get_type({struct, _Fields, _} = S, [Key | _]) ->
+    case Key of
+        {value, {string, _}, KeyStr} -> {ok, get_field_type(KeyStr, S)};
+        _ -> {error, {struct_key_not_literal}}
+    end;
+infer_get_type(dynamic, _) -> {ok, dynamic};
+infer_get_type({dynamic, _}, _) -> {ok, dynamic};
+infer_get_type(_Other, _) -> {error, {get_on_non_container}}.
+
+infer_slice_type({array, T, _}) -> {ok, {array, T, varsize}};
+infer_slice_type(string) -> {ok, string};
+infer_slice_type({string, _}) -> {ok, string};
+infer_slice_type(bytes) -> {ok, bytes};
+infer_slice_type({bytes, _}) -> {ok, bytes};
+infer_slice_type(dynamic) -> {ok, dynamic};
+infer_slice_type({dynamic, _}) -> {ok, dynamic};
+infer_slice_type(_Other) -> {error, {slice_on_non_sequence}}.
+
+is_integer_literal({value, T, N}) when is_integer(N) ->
+    T =:= integer orelse T =:= i64 orelse T =:= i32 orelse T =:= i16 orelse
+    T =:= i8 orelse T =:= u64 orelse T =:= u32 orelse T =:= u16 orelse T =:= u8;
+is_integer_literal(_) -> false.
+
+get_field_type(KeyStr, {struct, Fields, _}) ->
+    case maps:find(KeyStr, Fields) of
+        {ok, T} -> T;
+        error -> dynamic
+    end;
+get_field_type(_KeyStr, _) -> dynamic.
 
 infer_kw_types(KwMap, Env, Errors, StdlibMap) when is_map(KwMap) ->
     maps:fold(fun(K, V, {Pairs, E}) ->

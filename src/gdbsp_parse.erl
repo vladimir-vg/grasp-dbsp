@@ -522,7 +522,7 @@ parse_scalar_type(<<"interval">>, _) -> interval;
 parse_scalar_type(<<"string_with_encoding">>, _) -> string_with_encoding;
 parse_scalar_type(Name, Line) ->
     case is_type_var(Name) of
-        true -> Name;
+        true -> {type_var, Name};
         false ->
             throw({parse_error, Line,
                    iolist_to_binary(["unknown type: ", Name])})
@@ -719,7 +719,7 @@ parse_mul_rest(LHS, Rest) -> {LHS, Rest}.
 
 parse_prefix([{not_keyword, _} | Rest]) ->
     {E, Rest2} = parse_prefix(Rest),
-    {{unop, 0, not_op, E}, Rest2};
+    {{unop, 0, 'not', E}, Rest2};
 parse_prefix([{'-', _} | Rest]) ->
     {E, Rest2} = parse_prefix(Rest),
     {{unop, 0, '-', E}, Rest2};
