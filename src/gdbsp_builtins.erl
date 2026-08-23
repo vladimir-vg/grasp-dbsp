@@ -140,15 +140,15 @@ match_stdlib_ts_loop([], _PosTypes, _KwPairs) ->
     no_match;
 match_stdlib_ts_loop([#gdbsp_typespec{spec = {function, Pos, Kw, Ret}} | Rest],
                      PosTypes, KwPairs) ->
-    case match_pos(Pos, PosTypes) andalso match_kw(Kw, KwPairs) of
-        true -> {ok, Ret};
-        false -> match_stdlib_ts_loop(Rest, PosTypes, KwPairs)
+    case unify_signature(Pos, Kw, PosTypes, KwPairs) of
+        {ok, Subs} -> {ok, substitute(Subs, Ret)};
+        no_match -> match_stdlib_ts_loop(Rest, PosTypes, KwPairs)
     end;
 match_stdlib_ts_loop([#gdbsp_typespec{spec = {aggregate_function, Pos, Kw, Ret}} | Rest],
                      PosTypes, KwPairs) ->
-    case match_pos(Pos, PosTypes) andalso match_kw(Kw, KwPairs) of
-        true -> {ok, Ret};
-        false -> match_stdlib_ts_loop(Rest, PosTypes, KwPairs)
+    case unify_signature(Pos, Kw, PosTypes, KwPairs) of
+        {ok, Subs} -> {ok, substitute(Subs, Ret)};
+        no_match -> match_stdlib_ts_loop(Rest, PosTypes, KwPairs)
     end.
 
 undeclared_kwarg(TSpecs, KwPairs) ->
@@ -166,27 +166,40 @@ declared_kw_keys(_) -> [].
 %% Overload matching helpers
 %%====================================================================
 
-match_pos([], []) -> true;
-match_pos([PT | PRest], [AT | ARest]) ->
-    case exact_match(PT, AT) of
-        true -> match_pos(PRest, ARest);
-        false -> false
-    end;
-match_pos(_, _) -> false.
-
-match_kw(Kw, KwPairs) ->
-    case lists:any(fun({K, _}) -> not maps:is_key(K, Kw) end, KwPairs) of
-        true -> false;
-        false -> declared_kwargs_match(Kw, KwPairs)
+unify_signature(Pos, Kw, PosTypes, KwPairs) ->
+    case length(Pos) =:= length(PosTypes) of
+        false ->
+            no_match;
+        true ->
+            case [K || {K, _} <- KwPairs, not maps:is_key(K, Kw)] of
+                [_ | _] -> no_match;
+                [] ->
+                    case unify_pos(Pos, PosTypes, #{}) of
+                        {ok, Subs} -> unify_kw(Kw, KwPairs, Subs);
+                        {error, _} -> no_match
+                    end
+            end
     end.
 
-declared_kwargs_match(Kw, KwPairs) ->
-    maps:fold(fun(K, PT, true) ->
+unify_pos([], [], Subs) -> {ok, Subs};
+unify_pos([PT | PRest], [AT | ARest], Subs) ->
+    case unify(PT, AT, Subs) of
+        {ok, Subs1} -> unify_pos(PRest, ARest, Subs1);
+        {error, _} = E -> E
+    end;
+unify_pos(_, _, _) -> {error, length_mismatch}.
+
+unify_kw(Kw, KwPairs, Subs) ->
+    maps:fold(fun(K, PT, {ok, S}) ->
         case lists:keyfind(K, 1, KwPairs) of
-            {K, AT} -> exact_match(PT, AT);
-            false -> false
+            {K, AT} ->
+                case unify(PT, AT, S) of
+                    {ok, S1} -> {ok, S1};
+                    {error, _} = E -> E
+                end;
+            false -> {error, {missing_kw_arg, K}}
         end
-    end, true, Kw).
+    end, {ok, Subs}, Kw).
 
 exact_match(dynamic, dynamic) -> true;
 exact_match(dynamic, {dynamic, _}) -> true;
@@ -457,19 +470,68 @@ type_suffix(u64) -> <<"u64">>.
     {ok, #{{type_var, binary()} => gdbsp_column_type()}} | {error, term()}.
 unify_types([], [], Subs) ->
     {ok, Subs};
-unify_types([{type_var, N} | PRest], [AT | ARest], Subs) ->
-    case maps:find({type_var, N}, Subs) of
-        {ok, Existing} when Existing =:= AT ->
-            unify_types(PRest, ARest, Subs);
-        {ok, _} ->
-            {error, {type_var_conflict, N}};
-        error ->
-            unify_types(PRest, ARest, Subs#{{type_var, N} => AT})
+unify_types([PT | PRest], [AT | ARest], Subs) ->
+    case unify(PT, AT, Subs) of
+        {ok, Subs1} -> unify_types(PRest, ARest, Subs1);
+        {error, _} = E -> E
     end;
-unify_types([PT | PRest], [AT | ARest], Subs) when PT =:= AT ->
-    unify_types(PRest, ARest, Subs);
-unify_types([PT | _], [AT | _], _Subs) ->
-    {error, {type_mismatch, PT, AT}}.
+unify_types(_, _, _) ->
+    {error, length_mismatch}.
+
+%% Recursive single-type unification: binds {type_var, N} to the concrete
+%% argument type, recursing through the composite constructors that can carry
+%% type variables. Reuses exact_match as the compatibility oracle, so the
+%% strict dynamic semantics and the {type_var, _} wildcard behaviour are
+%% preserved exactly.
+unify({type_var, N}, A, Subs) ->
+    case maps:find({type_var, N}, Subs) of
+        {ok, Existing} ->
+            case exact_match(Existing, A) of
+                true -> {ok, Subs};
+                false -> {error, {type_var_conflict, N}}
+            end;
+        error ->
+            {ok, Subs#{{type_var, N} => A}}
+    end;
+unify(P, {type_var, _} = A, Subs) ->
+    unify(A, P, Subs);
+unify(P, A, Subs) ->
+    case exact_match(P, A) of
+        false -> {error, {type_mismatch, P, A}};
+        true -> unify_children(P, A, Subs)
+    end.
+
+unify_children({array, PT, _}, {array, AT, _}, Subs) -> unify(PT, AT, Subs);
+unify_children({map, PK, PV}, {map, AK, AV}, Subs) ->
+    case unify(PK, AK, Subs) of
+        {ok, Subs1} -> unify(PV, AV, Subs1);
+        {error, _} = E -> E
+    end;
+unify_children({optional, PT}, {optional, AT}, Subs) -> unify(PT, AT, Subs);
+unify_children({json, PT}, {json, AT}, Subs) -> unify(PT, AT, Subs);
+unify_children({dynamic, PT}, {dynamic, AT}, Subs) -> unify(PT, AT, Subs);
+unify_children(_P, _A, Subs) -> {ok, Subs}.
+
+%% Deep-substitute bound type variables in a (return) type. Leaves unbound
+%% variables untouched and recurses through a binding (which may itself carry
+%% further type variables).
+substitute(Subs, {type_var, N}) ->
+    case maps:find({type_var, N}, Subs) of
+        {ok, T} -> substitute(Subs, T);
+        error -> {type_var, N}
+    end;
+substitute(Subs, {array, T, D}) -> {array, substitute(Subs, T), D};
+substitute(Subs, {map, K, V}) -> {map, substitute(Subs, K), substitute(Subs, V)};
+substitute(Subs, {optional, T}) -> {optional, substitute(Subs, T)};
+substitute(Subs, {json, T}) -> {json, substitute(Subs, T)};
+substitute(Subs, {dynamic, T}) -> {dynamic, substitute(Subs, T)};
+substitute(Subs, {closure, Params, R}) ->
+    {closure, [{N, substitute(Subs, T)} || {N, T} <- Params], substitute(Subs, R)};
+substitute(Subs, {struct, Fields, Kind}) ->
+    {struct, maps:map(fun(_F, T) -> substitute(Subs, T) end, Fields), Kind};
+substitute(Subs, {type_predicate, N, Args}) ->
+    {type_predicate, N, [substitute(Subs, A) || A <- Args]};
+substitute(_Subs, T) -> T.
 
 %%--------------------------------------------------------------------
 %% Implementation lookup
