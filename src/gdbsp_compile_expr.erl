@@ -41,11 +41,8 @@ lower_expr({symbol, _Line, <<"null">>}, _Bindings) ->
     {value, {enum, [<<"null">>]}, <<"null">>};
 lower_expr({symbol, Line, Name}, _Bindings) ->
     throw({lower_error, Line, {unknown_symbol, Name}});
-lower_expr({var, Line, Name}, Bindings) ->
-    case Bindings of
-        #{Name := ArgName} -> {arg, ArgName};
-        _ -> throw({lower_error, Line, {unbound_var, Name}})
-    end;
+lower_expr({var, _Line, Name}, _Bindings) ->
+    {arg, Name};
 lower_expr({binop, _Line, Op, LHS, RHS}, Bindings) ->
     FnName = gdbsp_builtins:binop_fn_name(Op),
     L = lower_expr(LHS, Bindings),
@@ -195,6 +192,31 @@ infer_expr_type({call, <<"std.struct_get">>, PosArgs, KwArgs}, Env, Errors, _Std
         _ ->
             {dynamic, [{non_literal_struct_key} | AllErrors]}
     end;
+infer_expr_type({call, <<"struct">>, PosArgs, KwArgs}, Env, Errors, StdlibMap) ->
+    {_PosTypes, PosErrors} = infer_arg_types(PosArgs, Env, Errors, StdlibMap),
+    {FieldPairs, KwErrors} = infer_kw_types(KwArgs, Env, PosErrors, StdlibMap),
+    AllErrors = merge_pos_kw_errors(PosErrors, KwErrors),
+    {{struct, maps:from_list(FieldPairs), exact}, AllErrors};
+infer_expr_type({call, <<"array">>, PosArgs, _KwArgs}, Env, Errors, StdlibMap) ->
+    {PosTypes, PosErrors} = infer_arg_types(PosArgs, Env, Errors, StdlibMap),
+    ElemType = case lists:reverse(PosTypes) of
+        [T | _] -> T;
+        [] -> dynamic
+    end,
+    {{array, ElemType, varsize}, PosErrors};
+infer_expr_type({call, <<"map">>, _PosArgs, KwArgs}, Env, Errors, StdlibMap) ->
+    {Pairs, KwErrors} = infer_kw_types(KwArgs, Env, Errors, StdlibMap),
+    ValType = case lists:reverse([T || {_K, T} <- Pairs]) of
+        [T | _] -> T;
+        [] -> dynamic
+    end,
+    {{map, string, ValType}, KwErrors};
+infer_expr_type({call, <<"map_merge">>, PosArgs, _KwArgs}, Env, Errors, StdlibMap) ->
+    {PosTypes, PosErrors} = infer_arg_types(PosArgs, Env, Errors, StdlibMap),
+    case PosTypes of
+        [{map, K, V} | _] -> {{map, K, V}, PosErrors};
+        _ -> {dynamic, PosErrors}
+    end;
 infer_expr_type({call, Name, PosArgs, KwArgs}, Env, Errors, StdlibMap) ->
     {PosTypes, PosErrors} = infer_arg_types(PosArgs, Env, Errors, StdlibMap),
     {KwPairs, KwErrors} = infer_kw_types(KwArgs, Env, PosErrors, StdlibMap),
@@ -270,19 +292,24 @@ find_fn_typespec(Name, TSs) ->
         [TS | _] -> {ok, TS}
     end.
 
-check_single_fn(FnDef, #gdbsp_typespec{spec = {function, PosTypes, KwMap, RetType}},
+check_single_fn(FnDef, #gdbsp_typespec{spec = {function, PosTypes, KwMap, RetType}} = TS,
                 StdlibMap) ->
     Params = FnDef#gdbsp_fn_def.params,
     case validate_params(Params, PosTypes, KwMap) of
         ok ->
-            Body = lower_fn_body(FnDef, #gdbsp_typespec{spec = {function, PosTypes, KwMap, RetType}}),
-            TypeEnv = build_type_env(Params, PosTypes, KwMap),
-            case check_fn_body(Body, TypeEnv, RetType, StdlibMap) of
-                ok ->
-                    Json = gdbsp_expr:expr_to_json(Body),
-                    {ok, Json};
-                {error, Errors} ->
-                    {error, Errors}
+            try
+                Body = lower_fn_body(FnDef, TS),
+                TypeEnv = build_type_env(Params, PosTypes, KwMap),
+                case check_fn_body(Body, TypeEnv, RetType, StdlibMap) of
+                    ok ->
+                        Json = gdbsp_expr:expr_to_json(Body),
+                        {ok, Json};
+                    {error, Errors} ->
+                        {error, Errors}
+                end
+            catch
+                throw:{lower_error, Line, Reason} ->
+                    {error, [{Line, Reason}]}
             end;
         {error, _} = E -> E
     end.

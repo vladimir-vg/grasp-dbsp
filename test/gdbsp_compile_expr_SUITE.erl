@@ -18,7 +18,7 @@
 -export([all/0]).
 -export([t01_lower_integer/1, t02_lower_string/1, t03_lower_absent/1,
          t04_lower_true/1, t05_lower_null/1, t06_lower_var/1,
-         t07_lower_unbound_var/1, t08_lower_binop_add/1,
+         t07_lower_var_no_binding/1, t08_lower_binop_add/1,
          t09_lower_binop_operators/1, t10_lower_unop/1,
          t11_lower_dot_access/1, t12_lower_array/1,
          t13_lower_dict/1, t14_lower_call/1, t15_lower_call_kw/1,
@@ -41,7 +41,7 @@
 all() ->
     [t01_lower_integer, t02_lower_string, t03_lower_absent,
      t04_lower_true, t05_lower_null, t06_lower_var,
-     t07_lower_unbound_var, t08_lower_binop_add,
+     t07_lower_var_no_binding, t08_lower_binop_add,
      t09_lower_binop_operators, t10_lower_unop,
      t11_lower_dot_access, t12_lower_array,
      t13_lower_dict, t14_lower_call, t15_lower_call_kw,
@@ -91,14 +91,11 @@ t06_lower_var(_Config) ->
         {var, 1, <<"x">>}, #{<<"x">> => <<"x">>}),
     {arg, <<"x">>} = Result.
 
-t07_lower_unbound_var(_Config) ->
-    try gdbsp_compile_expr:lower_expr(
-        {var, 1, <<"y">>}, #{})
-    of
-        _ -> ct:fail("expected throw, got result")
-    catch
-        throw:{lower_error, _, {unbound_var, <<"y">>}} -> ok
-    end.
+t07_lower_var_no_binding(_Config) ->
+    %% Unbound variables are not rejected during lowering; they surface
+    %% as {unbound_var, Name} during type inference (see t21).
+    {arg, <<"y">>} = gdbsp_compile_expr:lower_expr(
+        {var, 1, <<"y">>}, #{}).
 
 t08_lower_binop_add(_Config) ->
     Result = gdbsp_compile_expr:lower_expr(

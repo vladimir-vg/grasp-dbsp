@@ -751,6 +751,11 @@ parse_atomic_core([{identifier, L, <<"null">>} | Rest]) ->
     {{symbol, L, <<"null">>}, Rest};
 parse_atomic_core([{identifier, L, <<"absent">>} | Rest]) ->
     {{const, L, absent, absent, undefined, undefined}, Rest};
+parse_atomic_core([{identifier, L, Name}, {dot, _} = DotTok | Rest]) ->
+    case try_parse_dotted_call(L, Name, Rest) of
+        {ok, CallExpr, Rest2} -> {CallExpr, Rest2};
+        not_call -> {{var, L, Name}, [DotTok | Rest]}
+    end;
 parse_atomic_core([{identifier, L, Name} | Rest]) ->
     {{var, L, Name}, Rest};
 parse_atomic_core([{integer_literal, L, Val} | Rest]) ->
@@ -773,6 +778,30 @@ parse_atomic_core(Tokens) ->
     throw({parse_error, token_line(hd(Tokens)),
            <<"expected expression">>}).
 
+%% ── Dotted function call (e.g. std.string_upper(...)) ───────────────
+%%
+%% A dotted identifier path immediately followed by '(' is a function
+%% call whose name is the dotted path. Otherwise the leading identifier
+%% is a variable and the dots are field accesses (handled by
+%% parse_dot_chain/2).
+
+try_parse_dotted_call(L, Name, Rest) ->
+    case Rest of
+        [{identifier, _, Seg} | More] ->
+            try_parse_dotted_call_cont(L, <<Name/binary, ".", Seg/binary>>, More);
+        _ ->
+            not_call
+    end.
+
+try_parse_dotted_call_cont(L, Dotted, [{dot, _}, {identifier, _, Seg} | More]) ->
+    try_parse_dotted_call_cont(L, <<Dotted/binary, ".", Seg/binary>>, More);
+try_parse_dotted_call_cont(L, Dotted, [{'(', _} | CallArgs]) ->
+    {Args, Rest2} = parse_fn_call_args(CallArgs, []),
+    {')', _} = expect(Rest2, ')'),
+    {ok, {call, L, Dotted, lists:reverse(Args)}, tl(Rest2)};
+try_parse_dotted_call_cont(_L, _Dotted, _More) ->
+    not_call.
+
 %% ── Function call arguments (mixed pos / kw) ────────────────────────
 
 parse_fn_call_args([{')', _} | _] = Tokens, Acc) ->
@@ -782,6 +811,9 @@ parse_fn_call_args(Tokens, Acc) ->
         [{',', _} | Rest] ->
             parse_fn_call_args(Rest, Acc);
         [{identifier, _, Key}, {':', _} | Rest] ->
+            {Val, Rest2} = parse_expr(Rest),
+            parse_fn_call_args(Rest2, [{kv, Key, Val} | Acc]);
+        [{string, _, Key}, {':', _} | Rest] ->
             {Val, Rest2} = parse_expr(Rest),
             parse_fn_call_args(Rest2, [{kv, Key, Val} | Acc]);
         _ ->

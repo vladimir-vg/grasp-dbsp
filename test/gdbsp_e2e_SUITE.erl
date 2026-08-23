@@ -161,15 +161,22 @@ run_one_fixture(Fixture, GroupName, Config) ->
     end.
 
 run_negative(Prog0, Functions, ExpectedErrors) ->
+    case try_compile_negative(Prog0, Functions) of
+        {failed, Normalized} ->
+            check_expected_errors(Normalized, ExpectedErrors);
+        compiled ->
+            ct:fail("expected compilation to fail but it succeeded")
+    end.
+
+try_compile_negative(Prog0, Functions) ->
     try
         %% Use a dummy output name — we expect compilation to fail,
         %% so this placeholder never actually runs.
         compile_to_plan(Prog0, Functions, [<<"dummy">>], true),
-        ct:fail("expected compilation to fail but it succeeded")
+        compiled
     catch
         Class:Reason:_Stacktrace ->
-            Normalized = normalize_compile_error(Class, Reason),
-            check_expected_errors(Normalized, ExpectedErrors)
+            {failed, normalize_compile_error(Class, Reason)}
     end.
 
 normalize_compile_error(throw, {fixpoint_error, {_Line, Msg}}) ->

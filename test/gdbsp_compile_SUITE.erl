@@ -16,7 +16,7 @@
          incrementalize_filter/1, incrementalize_join/1, cycle_error/1,
          missing_fn/1, duplicate_node/1,
          delay_inputs_not_empty_for_chain/1, delay_ordering_independent/1,
-         inline_fn_map/1, inline_fn_overrides_external/1,
+         inline_fn_map/1, inline_fn_duplicate_rejected/1,
          typespec_only_external_fn/1, typespec_only_no_external/1,
          stdlib_parse_ok/1, stdlib_has_arithmetic/1,
          stdlib_typespec_correct/1, stdlib_agg_overloads/1,
@@ -29,7 +29,7 @@ all() ->
      incrementalize_filter, incrementalize_join, cycle_error,
      missing_fn, duplicate_node,
      delay_inputs_not_empty_for_chain, delay_ordering_independent,
-     inline_fn_map, inline_fn_overrides_external,
+     inline_fn_map, inline_fn_duplicate_rejected,
      typespec_only_external_fn, typespec_only_no_external,
      stdlib_parse_ok, stdlib_has_arithmetic,
      stdlib_typespec_correct, stdlib_agg_overloads,
@@ -298,7 +298,7 @@ inline_fn_map(_Config) ->
     {map, #{expr := {arg, <<"row">>}}} = MapNode#circuit_node.op,
     ok.
 
-inline_fn_overrides_external(_Config) ->
+inline_fn_duplicate_rejected(_Config) ->
     ExternalBody = #{<<"call">> => <<"struct">>,
                      <<"kwargs">> =>
                          #{<<"x">> => #{<<"type">> => <<"i64">>, <<"value">> => <<"0">>}}},
@@ -310,13 +310,11 @@ inline_fn_overrides_external(_Config) ->
         "id :: function((struct(\"x\": i64)) -> struct(\"x\": i64))\n"
         "mapped := map(src, id)\n"
     ),
-    {ok, G} = gdbsp_compile:compile(Prog, #{fn_registry => FnReg,
-                                              incrementalize => false}),
-    Nodes = maps:to_list(G#circuit_graph.nodes),
-    MapNode = hd([N || {_, N} <- Nodes, element(1, N#circuit_node.op) =:= map]),
-    %% Inline body (identity) should win over external (struct)
-    {map, #{expr := {arg, <<"row">>}}} = MapNode#circuit_node.op,
-    ok.
+    %% An inline function colliding with an external registry entry is
+    %% a compile error, not a silent override.
+    {error, {duplicate_function, <<"id">>}} =
+        gdbsp_compile:compile(Prog, #{fn_registry => FnReg,
+                                      incrementalize => false}).
 
 typespec_only_external_fn(_Config) ->
     FnReg = #{

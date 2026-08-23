@@ -36,6 +36,10 @@ compile_with_names(Program, Options) ->
     try
         {ok, StdlibMap} = load_stdlib(),
         InlineFnReg = compile_inline_fns(Program, StdlibMap),
+        case duplicate_fn_names(ExternalFnReg, InlineFnReg) of
+            [] -> ok;
+            [Name | _] -> throw({compile_error, {duplicate_function, Name}})
+        end,
         FnReg = maps:merge(ExternalFnReg, InlineFnReg),
         TSMap = build_ts_map(Program#gdbsp_program.typespecs),
         case gdbsp_compile_lower:run(Program, #{}) of
@@ -80,6 +84,9 @@ compile_inline_fns(Program, StdlibMap) ->
         {error, ErrorMap} ->
             throw({compile_error, {inline_fn_errors, ErrorMap}})
     end.
+
+duplicate_fn_names(ExternalFnReg, InlineFnReg) ->
+    [Name || Name <- maps:keys(InlineFnReg), maps:is_key(Name, ExternalFnReg)].
 
 %%====================================================================
 %% stdlib loading

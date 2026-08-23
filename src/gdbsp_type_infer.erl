@@ -143,6 +143,12 @@ extract_string_literal(#{<<"type">> := <<"string">>, <<"value">> := Val}) when i
     {ok, Val};
 extract_string_literal(#{<<"type">> := <<"string">>, <<"value">> := Val}) when is_list(Val) ->
     {ok, list_to_binary(Val)};
+extract_string_literal(#{<<"type">> := #{<<"string">> := #{<<"encoding">> := _}},
+                         <<"value">> := Val}) when is_binary(Val) ->
+    {ok, Val};
+extract_string_literal(#{<<"type">> := #{<<"string">> := #{<<"encoding">> := _}},
+                         <<"value">> := Val}) when is_list(Val) ->
+    {ok, list_to_binary(Val)};
 extract_string_literal(_) -> false.
 
 %%====================================================================
@@ -378,6 +384,29 @@ infer_lnode_type(map, Args, InputIds, _Tags, TypeAcc, _TSMap, FnReg, StdlibMap) 
             error(#{<<"class">> => <<"missing_typespec">>,
                     <<"node">> => FnName,
                     <<"message">> => <<"map function not found">>})
+    end;
+
+infer_lnode_type(filter, Args, InputIds, _Tags, TypeAcc, _TSMap, FnReg, StdlibMap) ->
+    InputType = lowered_input_type(InputIds, TypeAcc),
+    {var, FnName} = lists:nth(2, Args),
+    case maps:find(FnName, FnReg) of
+        {ok, FnJson} ->
+            RetType = infer_expr_output_type(FnJson, InputType, StdlibMap),
+            case RetType of
+                {enum, [<<"false">>, <<"true">>]} -> InputType;
+                dynamic -> InputType;
+                {dynamic, _} -> InputType;
+                undefined -> InputType;
+                _ ->
+                    error(#{<<"class">> => <<"non_boolean_filter">>,
+                            <<"message">> => <<"filter function must return boolean">>,
+                            <<"node">> => FnName,
+                            <<"return_type">> => gdbsp_type:canonical_text(RetType)})
+            end;
+        error ->
+            error(#{<<"class">> => <<"missing_typespec">>,
+                    <<"node">> => FnName,
+                    <<"message">> => <<"filter function not found">>})
     end;
 
 infer_lnode_type(flat_map, Args, InputIds, _Tags, TypeAcc, _TSMap, FnReg, _StdlibMap) ->

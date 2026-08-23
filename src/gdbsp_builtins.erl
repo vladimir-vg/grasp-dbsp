@@ -459,14 +459,17 @@ fn_impl(<<"std.add_f64">>)      -> {ok, {gdbsp_math, math_add_f64_f64, 2}};
 fn_impl(<<"std.add_interval">>) -> {ok, {gdbsp_temporal, temporal_add_interval_interval, 2}};
 
 fn_impl(<<"std.sub_i64">>)      -> {ok, {gdbsp_math, math_sub_i64_i64, 2}};
+fn_impl(<<"std.sub_integer">>)  -> {ok, {gdbsp_math, math_sub_integer_integer, 2}};
 fn_impl(<<"std.sub_numeric">>)  -> {ok, {gdbsp_math, math_sub_numeric_numeric, 2}};
 fn_impl(<<"std.sub_f64">>)      -> {ok, {gdbsp_math, math_sub_f64_f64, 2}};
 
 fn_impl(<<"std.mul_i64">>)      -> {ok, {gdbsp_math, math_mul_i64_i64, 2}};
+fn_impl(<<"std.mul_integer">>)  -> {ok, {gdbsp_math, math_mul_integer_integer, 2}};
 fn_impl(<<"std.mul_numeric">>)  -> {ok, {gdbsp_math, math_mul_numeric_numeric, 2}};
 fn_impl(<<"std.mul_f64">>)      -> {ok, {gdbsp_math, math_mul_f64_f64, 2}};
 
 fn_impl(<<"std.div_i64">>)      -> {ok, {gdbsp_math, math_div_i64_i64, 2}};
+fn_impl(<<"std.div_integer">>)  -> {ok, {gdbsp_math, math_div_integer_integer, 2}};
 fn_impl(<<"std.div_numeric">>)  -> {ok, {gdbsp_math, math_div_numeric_numeric, 2}};
 fn_impl(<<"std.div_f64">>)      -> {ok, {gdbsp_math, math_div_f64_f64, 2}};
 
