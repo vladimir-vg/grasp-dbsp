@@ -1,7 +1,7 @@
 # Grasp DBSP — Compilation
 
-Date: 2026-07-29
-Status: draft
+Date: 2026-08-23
+Status: current
 
 ---
 

@@ -186,8 +186,9 @@ for aggregate functions and future work respectively.
 
 Inline function bodies currently require **exact (concrete) types** in the
 typespec. Generic functions with type variables must use externally-provided
-JSON bodies. Support for generic inline bodies will be added when
-`gdbsp_type.erl` gains unification.
+JSON bodies. Type-variable unification is implemented
+(`gdbsp_builtins:unify_types/3`) and used for operator/overload resolution,
+but it is not applied to inline function bodies.
 
 ### Usage
 

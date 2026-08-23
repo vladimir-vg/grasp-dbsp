@@ -1,7 +1,7 @@
 # Grasp DBSP — Type Inference
 
-Date: 2026-07-29
-Status: draft
+Date: 2026-08-23
+Status: current
 
 ---
 
@@ -144,16 +144,15 @@ is used, the return type is inferred from the input value type.
 
 | Aggregate | Input Type | Return Type | Rule |
 |-----------|-----------|-------------|------|
-| `agg:sum` | `i8`, `i16`, `i32`, `i64`, `u8`, `u16`, `u32`, `u64`, `integer` | `i64` | Integer sum narrows to `i64` |
-| `agg:sum` | `f32`, `f64` | `f64` | Float sum widens to `f64` |
-| `agg:sum` | `numeric` | `numeric` | Numeric sum preserves type |
-| `agg:count` | any | `i64` | Always `i64` |
-| `agg:avg` | `integer`, `f32`, `f64` | `f64` | Integer/float average → `f64` |
-| `agg:avg` | `numeric` | `numeric` | Numeric average preserves type |
-| `agg:min` | `T` | `T` | Preserves input type exactly |
-| `agg:max` | `T` | `T` | Preserves input type exactly |
-| `agg:first` | `T` | `T` | Preserves input type exactly |
-| `agg:last` | `T` | `T` | Preserves input type exactly |
+| `std.agg_sum_i64` | `i64` | `i64` | Sum over i64 |
+| `std.agg_sum_numeric` | `numeric` | `numeric` | Sum over numeric |
+| `std.agg_sum_f64` | `f64` | `f64` | Sum over f64 |
+| `std.agg_count` | any | `i64` | Always `i64` |
+| `std.agg_avg_i64` | `i64` | `f64` | Integer average → `f64` |
+| `std.agg_avg_numeric` | `numeric` | `numeric` | Numeric average preserved |
+| `std.agg_avg_f64` | `f64` | `f64` | Float average → `f64` |
+| `std.agg_min_i64` / `std.agg_min_numeric` / `std.agg_min_f64` | `i64` / `numeric` / `f64` | same as input | Minimum |
+| `std.agg_max_i64` / `std.agg_max_numeric` / `std.agg_max_f64` | `i64` / `numeric` / `f64` | same as input | Maximum |
 
 ---
 
@@ -166,10 +165,10 @@ JSON bodies:
 
 - **Arg reference** (`{"arg": N}`): output type is the declared parameter type from the function's typespec.
 - **Struct construction** (`{"call": "struct", "kwargs": {...}}`): output type is a struct with fields matching the kwargs, each typed by its expression.
-- **`struct:get`** (`{"call": "struct:get", "args": [expr], "kwargs": {"key": {...}}}`): when the key is a string literal, the output type is the specific field's type from the input struct schema; when computed at runtime, falls back to `dynamic`.
-- **`struct:set`** (`{"call": "struct:set", "args": [expr, value], "kwargs": {"key": ...}}`): output type is the input struct type with the specified field's type updated.
-- **Comparison functions** (`eq`, `lt`, `gt`, etc.): output type is `enum("false", "true")`.
-- **Other functions** (`add`, `string:upper`, etc.): output type follows the function's declared return type from `gdbsp_builtins`.
+- **`std.struct_get`** (`{"call": "std.struct_get", "args": [expr], "kwargs": {"key": {...}}}`): when the key is a string literal, the output type is the specific field's type from the input struct schema; when computed at runtime, falls back to `dynamic`.
+- **`struct:set`** (`{"call": "struct:set", "args": [expr, value], "kwargs": {"key": ...}}`): output type is the input struct type with the specified field's type updated. *Future work:* `struct:set` is currently a bare special-cased name; it will be migrated to `std.struct_set` to match the rest of the stdlib naming scheme.
+- **Comparison operators** (`=`, `!=`, `<`, `<=`, `>`, `>=`): resolve to `std.eq_*` / `std.neq_*` / `std.lt_*` / `std.lte_*` / `std.gt_*` / `std.gte_*`; output type is `enum("false", "true")`.
+- **Other functions** (`std.add_i64`, `std.string_upper`, etc.): output type follows the function's declared return type from stdlib.
 
 ---
 

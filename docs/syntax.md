@@ -1,7 +1,7 @@
 # Grasp DBSP — Syntax Specification
 
-Date: 2026-08-01
-Status: draft
+Date: 2026-08-23
+Status: current
 
 ---
 
@@ -62,8 +62,10 @@ identifier := LETTER (LETTER | DIGIT | "_")* (":" LETTER (LETTER | DIGIT | "_")*
 LETTER     := [a-zA-Z]
 ```
 
-Supports bare names (`x`, `my_func`) and namespaced names (`string:upper`,
-`math:add`, `struct:get`).
+Supports bare names (`x`, `my_func`) and dotted names (`std.add_i64`,
+`std.string_upper`, `std.struct_get`). Dotted names are parsed from
+`identifier` `.` `identifier` token sequences and joined into a single name
+by the parser (`parse_compound_name/2`).
 
 ---
 
@@ -228,8 +230,9 @@ add := function((x, y, d:, e:) -> x + y + d + e)
 Type variables in function typespecs (uppercase identifiers like `T`, `K`, `V`)
 are resolved at the call site by unification. Inline function bodies currently
 require **exact (concrete) types** in the typespec — generic functions with type
-variables in the typespec must use externally-provided JSON bodies. Support for
-generic inline bodies will be added when `gdbsp_type.erl` gains unification.
+variables in the typespec must use externally-provided JSON bodies. Type-variable
+unification is implemented (`gdbsp_builtins:unify_types/3`) and used for
+operator/overload resolution, but it is not applied to inline function bodies.
 
 ---
 
@@ -302,36 +305,41 @@ Positional arguments must precede keyword arguments.
 
 ### 6.5 Operator Desugaring
 
-Binary and unary operators are desugared to named function calls at compile
-time. Parse expressions (`parse_expr()`) preserve the operator AST. The
-desugaring happens during lowering to the runtime expression format.
+Binary and unary operators are desugared to function calls during lowering.
+Parse expressions (`parse_expr()`) preserve the operator AST; the desugaring
+happens during lowering to the runtime expression format. The desugared
+function name is the operator character itself (not a named alias): `+` lowers
+to a call to `+`, `&` to `&`, `not` to `not`, and so on. At type-check time
+each operator call is resolved to a concrete stdlib function (`std.add_i64`,
+`std.eq_string`, `std.bits_and`, …) based on operand types — see
+[stdlib.md](stdlib.md) §3.
 
 | Operator | Desugared function name |
 |----------|------------------------|
-| `+` | `add` |
-| `-` (binary) | `sub` |
-| `-` (unary) | `neg` |
-| `*` | `mul` |
-| `/` | `div` |
-| `%` | `mod` |
-| `=` | `eq` |
-| `!=` | `neq` |
-| `<` | `lt` |
-| `<=` | `lte` |
-| `>` | `gt` |
-| `>=` | `gte` |
+| `+` | `+` |
+| `-` (binary) | `-` |
+| `-` (unary) | `-` |
+| `*` | `*` |
+| `/` | `/` |
+| `%` | `%` |
+| `=` | `=` |
+| `!=` | `!=` |
+| `<` | `<` |
+| `<=` | `<=` |
+| `>` | `>` |
+| `>=` | `>=` |
 | `and` | `and` |
 | `or` | `or` |
 | `not` | `not` |
-| `++` | `concat` |
-| `\|` | `bits_or` |
-| `^` | `bits_xor` |
-| `&` | `bits_and` |
-| `<<` | `bits_shl` |
-| `>>` | `bits_shr` |
-| `<<<` | `bits_rotl` |
-| `>>>` | `bits_rotr` |
-| `~` | `bits_not` |
+| `++` | `++` |
+| `\|` | `\|` |
+| `^` | `^` |
+| `&` | `&` |
+| `<<` | `<<` |
+| `>>` | `>>` |
+| `<<<` | `<<<` |
+| `>>>` | `>>>` |
+| `~` | `~` |
 
 ### 6.6 Syntactic Desugaring
 
@@ -339,9 +347,12 @@ Some parse expression forms are desugared to function calls during lowering:
 
 | Parse expression | Runtime expression |
 |---|---|
-| `r.field` | `struct:get(r, key: "field")` |
+| `r.field` | `std.struct_get(r, key: "field")` |
 | `{k1: v1, k2: v2}` | `map(k1: v1, k2: v2)` |
 | `[e1, e2, e3]` | `array(e1, e2, e3)` |
+
+The `struct`, `array`, `map`, and `map_merge` constructors are special-cased
+during type inference and evaluation; they are not resolved through stdlib.
 
 ---
 

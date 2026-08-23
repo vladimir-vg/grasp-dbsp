@@ -1,7 +1,7 @@
 # Grasp DBSP — Standard Library
 
-Date: 2026-07-29
-Status: draft
+Date: 2026-08-23
+Status: current
 
 ---
 
@@ -58,36 +58,37 @@ Accessing `{"arg": "row"}` returns the complete row, enabling pass-through.
 {"arg": "row"}
 ```
 
-Individual fields are accessed via `struct:get` (see §1.4):
+Individual fields are accessed via `std.struct_get` (see §1.4):
 
 ```json
-{"call": "struct:get",
+{"call": "std.struct_get",
  "args": [{"arg": "row"}],
  "kwargs": {"key": {"type": "string", "value": "age"}}}
 ```
 
 ### 1.4 Call Node
 
-A function call. All operators are desugared to their stdlib equivalents
-(e.g. `+` → `integer:add`, `>` → `integer:gt`). See §3 for the function catalog.
+A function call. All operators are desugared to their operator-character
+name (`+`, `>`, `and`, …) and then resolved to a concrete stdlib function
+(e.g. `+` → `std.add_i64`, `>` → `std.gt_i64`). See §3 for the function catalog.
 
 ```json
-{"call": "string:upper", "args": [
-    {"call": "struct:get",
+{"call": "std.string_upper", "args": [
+    {"call": "std.struct_get",
      "args": [{"arg": "row"}],
      "kwargs": {"key": {"type": "string", "value": "name"}}}
 ]}
 
-{"call": "integer:add", "args": [
-    {"call": "struct:get",
+{"call": "std.add_i64", "args": [
+    {"call": "std.struct_get",
      "args": [{"arg": "row"}],
      "kwargs": {"key": {"type": "string", "value": "x"}}},
     {"type": "i64", "value": "1"}
 ]}
 
-{"call": "string:substring",
+{"call": "std.string_substring",
  "args": [
-    {"call": "struct:get",
+    {"call": "std.struct_get",
      "args": [{"arg": "row"}],
      "kwargs": {"key": {"type": "string", "value": "text"}}}
  ],
@@ -96,7 +97,7 @@ A function call. All operators are desugared to their stdlib equivalents
      "length": {"type": "i64", "value": "10"}
  }}
 
-{"call": "agg:count"}
+{"call": "std.agg_count"}
 ```
 
 - `"args"` — positional arguments. Omitted when empty.
@@ -109,21 +110,21 @@ An aggregate function call. Same structure as call but uses the
 in the function registry.
 
 ```json
-{"aggregate": "agg:sum", "args": [{"field": "amount"}]}
-{"aggregate": "agg:count"}
+{"aggregate": "std.agg_sum_i64", "args": [{"field": "amount"}]}
+{"aggregate": "std.agg_count"}
 ```
 
 ### 1.6 Conventions
 
 1. **Omit when empty.** `"args"` and `"kwargs"` are omitted from call and
    aggregate nodes when empty.
-2. **Desugared operators.** All infix operators use their stdlib function
-   names: `add` (not `+`), `gt` (not `>`), `and` (not `and` keyword).
-   Namespaced variants (`math:add`, `integer:gt`, `boolean:and`) remain
-   valid in externally-provided JSON for backward compatibility.
+2. **Desugared operators.** All infix operators desugar to their
+   operator-character name (`+` not `add`, `>` not `gt`, `and` not the `and`
+   keyword). At type-check time the operator is resolved to a concrete
+   `std.*` function (see §3).
 3. **Function arguments via `arg`.** `{"arg": "row"}` references the
    single function parameter (the input row). Individual fields are accessed
-   via `struct:get(arg: row, "col")`.
+   via `std.struct_get(arg: row, "col")`.
 4. **Value encoding.** Value leaf nodes use the encoding defined in §2:
    numbers as strings, temporal components as strings, etc.
 
@@ -317,149 +318,159 @@ vs JSON null. In summary:
 Functions are namespaced. Every function lives under a namespace prefix.
 No new names are added to the global scope.
 
-### 3.1 `agg:` — Aggregate Functions
+### 3.1 Aggregate Functions
 
 Aggregate functions reduce a set of rows to a single value. They are
 referenced in the `"aggregate"` discriminator in expression trees and
-declared in `.gdbsp` source via `:: aggregate_function(...)`.
+declared in `.gdbsp` source via `:: aggregate_function(...)`. Each concrete
+aggregate is a `std.agg_*` entry in `priv/stdlib.gdbsp`.
 
-| Function | Signatures | Return Type Rule |
+| Function | Signature | Return Type Rule |
 |----------|-----------|-----------------|
-| `agg:sum` | `(i8)→i64`, `(i16)→i64`, `(i32)→i64`, `(i64)→i64`, `(u8)→i64`, `(u16)→i64`, `(u32)→i64`, `(u64)→i64`, `(integer)→i64`, `(f32)→f64`, `(f64)→f64`, `(numeric)→numeric` | Integer inputs narrow to `i64`, float inputs widen to `f64`, numeric preserved |
-| `agg:count` | `() → i64` | Always `i64` |
-| `agg:avg` | `(integer)→f64`, `(f64)→f64`, `(numeric)→numeric` | Float/integer inputs → `f64`, numeric preserved |
-| `agg:min` | `(T) → T` (where T is integer/f64/numeric) | Preserves input type |
-| `agg:max` | `(T) → T` (where T is integer/f64/numeric) | Preserves input type |
-| `agg:first` | `(T) → T` | Preserves input type |
-| `agg:last` | `(T) → T` | Preserves input type |
+| `std.agg_sum_i64` | `(i64) → i64` | Sum over i64 |
+| `std.agg_sum_numeric` | `(numeric) → numeric` | Sum over numeric |
+| `std.agg_sum_f64` | `(f64) → f64` | Sum over f64 |
+| `std.agg_count` | `() → i64` | Always `i64` |
+| `std.agg_avg_i64` | `(i64) → f64` | Integer average → `f64` |
+| `std.agg_avg_numeric` | `(numeric) → numeric` | Numeric average preserved |
+| `std.agg_avg_f64` | `(f64) → f64` | Float average → `f64` |
+| `std.agg_min_i64` | `(i64) → i64` | Minimum |
+| `std.agg_min_numeric` | `(numeric) → numeric` | Minimum |
+| `std.agg_min_f64` | `(f64) → f64` | Minimum |
+| `std.agg_max_i64` | `(i64) → i64` | Maximum |
+| `std.agg_max_numeric` | `(numeric) → numeric` | Maximum |
+| `std.agg_max_f64` | `(f64) → f64` | Maximum |
+| `std.agg_xor_bytes` | `(bytes) → bytes` | Bitwise XOR fold over bytes |
 
 ### 3.2 Scalar Functions
 
 The following scalar functions are available for use in `"call"` nodes
-within expression trees. Only functions relevant to Grasp DBSP's current
-operator set (`map`, `filter`, `flat_map`) are documented. Additional
-functions may be added over time.
+within expression trees. They are declared as `std.*` typespecs in
+`priv/stdlib.gdbsp`. Here `string` is shorthand for `string("UTF-8")` and
+`boolean` for `enum("false", "true")`.
 
-Operators that desugar to scalar functions:
+Operators desugar to their operator-character name and are resolved to
+concrete `std.*` functions at type-check time:
 
-| Operator | Function |
-|----------|----------|
-| `+` | `add` |
-| `-` (binary) | `sub` |
-| `-` (unary) | `neg` |
-| `*` | `mul` |
-| `/` | `div` |
-| `%` | `mod` |
-| `>` | `gt` |
-| `<` | `lt` |
-| `>=` | `gte` |
-| `<=` | `lte` |
-| `=` | `eq` |
-| `!=` | `neq` |
-| `and` | `and` |
-| `or` | `or` |
-| `not` | `not` |
-| `++` | `concat` |
-| `\|` | `bits_or` |
-| `^` | `bits_xor` |
-| `&` | `bits_and` |
-| `<<` | `bits_shl` |
-| `>>` | `bits_shr` |
-| `<<<` | `bits_rotl` |
-| `>>>` | `bits_rotr` |
-| `~` | `bits_not` |
+| Operator | Concrete stdlib function |
+|----------|--------------------------|
+| `+` | `std.add_i8` … `std.add_u64`, `std.add_integer`, `std.add_numeric`, `std.add_f64`, `std.add_interval` |
+| `-` (binary) | `std.sub_*` (same set as `+`) |
+| `-` (unary) | `std.neg_i8` … `std.neg_u64`, `std.neg_integer`, `std.neg_f64`, `std.neg_numeric` |
+| `*` | `std.mul_i8` … `std.mul_u64`, `std.mul_integer`, `std.mul_numeric`, `std.mul_f64` |
+| `/` | `std.div_*` (same set as `*`) |
+| `%` | `std.mod_i8` … `std.mod_u64`, `std.mod_integer` |
+| `=` | `std.eq_i8` … `std.eq_u64`, `std.eq_integer`, `std.eq_f64`, `std.eq_string`, `std.eq_numeric`, `std.eq_boolean`, `std.eq_bytes`, `std.eq_bits`, `std.eq_date`, `std.eq_time`, `std.eq_timestamp`, `std.eq_interval` |
+| `!=` | `std.neq_*` (same set as `=`) |
+| `<`, `<=`, `>`, `>=` | `std.lt_*` / `std.lte_*` / `std.gt_*` / `std.gte_*` (same set as `=`) |
+| `and` | `std.and` |
+| `or` | `std.or` |
+| `not` | `std.not` |
+| `++` | `std.concat_string`, `std.concat_bytes`, `std.concat_bits`, `std.concat_array` |
+| `\|` | `std.bits_or` |
+| `^` | `std.bits_xor` |
+| `&` | `std.bits_and` |
+| `<<` | `std.bits_shl` |
+| `>>` | `std.bits_shr` |
+| `<<<` | `std.bits_rotl` |
+| `>>>` | `std.bits_rotr` |
+| `~` | `std.bits_not` |
 
-The runtime function registry resolves these names via overload matching
-against the argument types. Namespaced aliases (e.g. `math:add`, `boolean:and`)
-are also recognized for backward compatibility.
+The `*` suffix denotes a family of per-type entries. Each is resolved by
+`gdbsp_builtins:concrete_fn/3` from the operand types, then matched against
+the corresponding typespec in stdlib.
 
-#### `boolean:` — Logic
+#### Logic
 
 | Function | Signature |
 |----------|-----------|
-| `boolean:not` | `(boolean) → boolean` |
-| `boolean:and` | `(boolean, boolean) → boolean` |
-| `boolean:or` | `(boolean, boolean) → boolean` |
+| `std.not` | `(boolean) → boolean` |
+| `std.and` | `(boolean, boolean) → boolean` |
+| `std.or` | `(boolean, boolean) → boolean` |
 
-#### `string:` — Strings
+#### Strings
 
 Inspection:
 
 | Function | Signature |
 |----------|-----------|
-| `string:length` | `(string) → integer` |
-| `string:starts_with` | `(string, prefix: string) → boolean` |
-| `string:ends_with` | `(string, suffix: string) → boolean` |
-| `string:contains` | `(string, sub: string) → boolean` |
+| `std.string_length` | `(string) → integer` |
+| `std.string_starts_with` | `(string, prefix: string) → boolean` |
+| `std.string_ends_with` | `(string, suffix: string) → boolean` |
+| `std.string_contains` | `(string, sub: string) → boolean` |
 
 Case:
 
 | Function | Signature |
 |----------|-----------|
-| `string:upper` | `(string) → string` |
-| `string:lower` | `(string) → string` |
+| `std.string_upper` | `(string) → string` |
+| `std.string_lower` | `(string) → string` |
 
 Trimming:
 
 | Function | Signature |
 |----------|-----------|
-| `string:trim` | `(string) → string` |
-| `string:ltrim` | `(string) → string` |
-| `string:rtrim` | `(string) → string` |
+| `std.string_trim` | `(string) → string` |
+| `std.string_ltrim` | `(string) → string` |
+| `std.string_rtrim` | `(string) → string` |
 
 Manipulation:
 
 | Function | Signature |
 |----------|-----------|
-| `string:substring` | `(string, start: i64) → string` |
-| `string:substring` | `(string, start: i64, length: i64) → string` |
-| `string:replace` | `(string, from: string, to: string) → string` |
-| `string:split` | `(string, delimiter: string) → array(string)` |
-| `string:concat` | `(string, string) → string` |
+| `std.string_substring` | `(string, start: i64) → string` |
+| `std.string_substring` | `(string, start: i64, length: i64) → string` |
+| `std.string_replace` | `(string, from: string, to: string) → string` |
+| `std.string_split` | `(string, delimiter: string) → array(string)` |
+| `std.string_at` | `(string, i64) → string` |
+| `std.string_slice` | `(string, start: i64, stop: i64, step: i64) → string` |
 
 Comparison:
 
 | Function | Signature |
 |----------|-----------|
-| `string:eq` | `(string, string) → boolean` |
-| `string:neq` | `(string, string) → boolean` |
-| `string:lt` | `(string, string) → boolean` |
-| `string:gt` | `(string, string) → boolean` |
-| `string:lte` | `(string, string) → boolean` |
-| `string:gte` | `(string, string) → boolean` |
+| `std.string_eq` | `(string, string) → boolean` |
+| `std.string_neq` | `(string, string) → boolean` |
+| `std.string_lt` | `(string, string) → boolean` |
+| `std.string_gt` | `(string, string) → boolean` |
+| `std.string_lte` | `(string, string) → boolean` |
+| `std.string_gte` | `(string, string) → boolean` |
 
-#### Comparison (generic)
-
-Comparison operators use namespace-specific functions:
+#### Concat
 
 | Function | Signature |
 |----------|-----------|
-| `integer:eq`, `integer:neq`, `integer:lt`, `integer:gt`, `integer:lte`, `integer:gte` | `(i64, i64) → boolean` |
-| `float:eq`, `float:neq`, `float:lt`, `float:gt`, `float:lte`, `float:gte` | `(f64, f64) → boolean` |
-| `numeric:eq`, `numeric:neq`, `numeric:lt`, `numeric:gt`, `numeric:lte`, `numeric:gte` | `(numeric, numeric) → boolean` |
-| `integer:add`, `integer:sub`, `integer:mul`, `integer:div` | `(i64, i64) → i64` |
-| `float:add`, `float:sub`, `float:mul`, `float:div` | `(f64, f64) → f64` |
-| `numeric:add`, `numeric:sub`, `numeric:mul`, `numeric:div` | `(numeric, numeric) → numeric` |
+| `std.concat_string` | `(string, string) → string` |
+| `std.concat_bytes` | `(bytes, bytes) → bytes` |
+| `std.concat_bits` | `(bits, bits) → bits` |
+| `std.concat_array` | `(array(T), array(T)) → array(T)` |
 
 #### Arithmetic helpers
 
 | Function | Signature |
 |----------|-----------|
-| `integer:mod` | `(i64, i64) → i64` |
-| `integer:abs` | `(i64) → i64` |
-| `float:abs` | `(f64) → f64` |
-| `numeric:abs` | `(numeric) → numeric` |
+| `std.mod_integer` | `(integer, integer) → integer` |
+| `std.abs_i64` | `(i64) → i64` |
+| `std.abs_f64` | `(f64) → f64` |
+| `std.abs_numeric` | `(numeric) → numeric` |
 
-#### `struct:` — Struct Construction
+#### Struct access
+
+| Function | Signature |
+|----------|-----------|
+| `std.struct_get` | `(S, key: string) → V` — field access; `key` must be a string literal |
+
+#### Struct construction
+
+Struct construction uses the bare `"struct"` call node (special-cased, not a
+stdlib entry):
 
 | Function | Signature |
 |----------|-----------|
 | `struct` | Builds a struct from kwargs: `{"call": "struct", "kwargs": {"col1": ..., "col2": ...}}` |
 
-Struct construction via `call` uses `"struct"` without a namespace prefix
-(the bare name resolves to the struct constructor). Each keyword argument
-becomes a field in the output struct. The output type is inferred from the
-field types.
+Each keyword argument becomes a field in the output struct. The output type is
+inferred from the field types.
 
 ---
 
@@ -487,9 +498,9 @@ Example — external JSON registry entry:
 ```json
 {
     "salary_ge_150": {
-        "call": "gte",
+        "call": ">=",
         "args": [
-            {"call": "struct:get",
+            {"call": "std.struct_get",
              "args": [{"arg": "row"}],
              "kwargs": {"key": {"type": "string", "value": "sal"}}},
             {"type": "i64", "value": "50000"}
@@ -509,10 +520,10 @@ Struct constructor functions use the `call` node with `"struct"`:
     "rename_fn": {
         "call": "struct",
         "kwargs": {
-            "x": {"call": "struct:get",
+            "x": {"call": "std.struct_get",
                   "args": [{"arg": "row"}],
                   "kwargs": {"key": {"type": "string", "value": "a"}}},
-            "y": {"call": "struct:get",
+            "y": {"call": "std.struct_get",
                   "args": [{"arg": "row"}],
                   "kwargs": {"key": {"type": "string", "value": "b"}}}
         }
@@ -520,12 +531,12 @@ Struct constructor functions use the `call` node with `"struct"`:
 }
 ```
 
-Flat-map expansion functions use `"call": "struct:get"` to reference the column to unnest:
+Flat-map expansion functions use `"call": "std.struct_get"` to reference the column to unnest:
 
 ```json
 {
     "unnest_vals": {
-        "call": "struct:get",
+        "call": "std.struct_get",
         "args": [{"arg": "row"}],
         "kwargs": {"key": {"type": "string", "value": "vals"}}
     }
@@ -540,7 +551,7 @@ pointing to a built-in aggregate name:
 ```json
 {
     "sum_sal": {
-        "aggregate": "agg:sum"
+        "aggregate": "std.agg_sum_i64"
     }
 }
 ```
@@ -548,7 +559,7 @@ pointing to a built-in aggregate name:
 ```json
 {
     "cnt": {
-        "aggregate": "agg:count"
+        "aggregate": "std.agg_count"
     }
 }
 ```
