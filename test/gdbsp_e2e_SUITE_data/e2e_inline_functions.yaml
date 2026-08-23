@@ -1,0 +1,328 @@
+# Inline (custom-defined) function end-to-end tests.
+# All integer columns use the `integer` type (not fixed-width).
+
+- description: "identity inline function via map"
+  source: |
+    src := source("data")
+    src :: stream(struct("x": integer, "y": integer))
+    id := function((row) -> row)
+    id :: function((struct("x": integer, "y": integer)) -> struct("x": integer, "y": integer))
+    out := map(src, id)
+  input:
+    - data:
+        - [1, {x: "10", y: "20"}]
+    - data:
+        - [1, {x: "30", y: "40"}]
+  expected:
+    - out:
+        - [1, {x: "10", y: "20"}]
+    - out:
+        - [1, {x: "30", y: "40"}]
+
+- description: "inline struct construction with dot access (rename)"
+  source: |
+    src := source("data")
+    src :: stream(struct("a": integer, "b": integer))
+    rename := function((row) -> struct("x": row.a, "y": row.b))
+    rename :: function((struct("a": integer, "b": integer)) -> struct("x": integer, "y": integer))
+    out := map(src, rename)
+  input:
+    - data:
+        - [1, {a: "100", b: "200"}]
+  expected:
+    - out:
+        - [1, {x: "100", y: "200"}]
+
+- description: "inline integer addition field to field"
+  source: |
+    src := source("data")
+    src :: stream(struct("a": integer, "b": integer))
+    total := function((row) -> struct("s": row.a + row.b))
+    total :: function((struct("a": integer, "b": integer)) -> struct("s": integer))
+    out := map(src, total)
+  input:
+    - data:
+        - [1, {a: "10", b: "20"}]
+  expected:
+    - out:
+        - [1, {s: "30"}]
+
+- description: "inline integer literal arithmetic"
+  source: |
+    src := source("data")
+    src :: stream(struct("x": integer))
+    inc := function((row) -> struct("v": row.x + 1))
+    inc :: function((struct("x": integer)) -> struct("v": integer))
+    out := map(src, inc)
+  input:
+    - data:
+        - [1, {x: "41"}]
+  expected:
+    - out:
+        - [1, {v: "42"}]
+
+- description: "inline filter field-vs-field comparison"
+  source: |
+    src := source("data")
+    src :: stream(struct("x": integer, "y": integer))
+    big := function((row) -> row.x > row.y)
+    big :: function((struct("x": integer, "y": integer)) -> enum("false","true"))
+    out := filter(src, big)
+  input:
+    - data:
+        - [1, {x: "10", y: "5"}]
+        - [1, {x: "2", y: "9"}]
+  expected:
+    - out:
+        - [1, {x: "10", y: "5"}]
+
+- description: "inline filter literal comparison"
+  source: |
+    src := source("data")
+    src :: stream(struct("x": integer))
+    ge5 := function((row) -> row.x > 5)
+    ge5 :: function((struct("x": integer)) -> enum("false","true"))
+    out := filter(src, ge5)
+  input:
+    - data:
+        - [1, {x: "3"}]
+        - [1, {x: "8"}]
+  expected:
+    - out:
+        - [1, {x: "8"}]
+
+- description: "inline flat_map unnest via dot access"
+  source: |
+    src := source("data")
+    src :: stream(struct("name": string("UTF-8"), "vals": array(integer)))
+    unnest := function((row) -> row.vals)
+    unnest :: function((struct("name": string("UTF-8"), "vals": array(integer))) -> array(integer))
+    expanded := flat_map(src, unnest)
+    expanded :: stream(struct("name": string("UTF-8"), "v": integer, "vals": array(integer)))
+  input:
+    - data:
+        - [1, {name: "Alice", vals: ["10", "20"]}]
+        - [1, {name: "Bob", vals: ["30"]}]
+  expected:
+    - expanded:
+        - [1, {name: "Alice", v: "10", vals: ["10", "20"]}]
+        - [1, {name: "Alice", v: "20", vals: ["10", "20"]}]
+        - [1, {name: "Bob", v: "30", vals: ["30"]}]
+
+- description: "inline map preserves retractions"
+  source: |
+    src := source("data")
+    src :: stream(struct("x": integer))
+    inc := function((row) -> struct("v": row.x + 1))
+    inc :: function((struct("x": integer)) -> struct("v": integer))
+    out := map(src, inc)
+  input:
+    - data:
+        - [1, {x: "10"}]
+    - data:
+        - [-1, {x: "10"}]
+  expected:
+    - out:
+        - [1, {v: "11"}]
+    - out:
+        - [-1, {v: "11"}]
+
+# ── Semantic-correctness (currently expected to fail; drives impl) ──
+
+- description: "inline function with non-row parameter name"
+  source: |
+    src := source("data")
+    src :: stream(struct("a": integer, "b": integer))
+    total := function((r) -> struct("s": r.a + r.b))
+    total :: function((struct("a": integer, "b": integer)) -> struct("s": integer))
+    out := map(src, total)
+  input:
+    - data:
+        - [1, {a: "10", b: "20"}]
+  expected:
+    - out:
+        - [1, {s: "30"}]
+
+- description: "inline integer subtraction multiplication division modulo"
+  source: |
+    src := source("data")
+    src :: stream(struct("a": integer, "b": integer))
+    arith := function((row) -> struct("d": row.a - row.b, "p": row.a * row.b, "q": row.a / row.b, "m": row.a % row.b))
+    arith :: function((struct("a": integer, "b": integer)) -> struct("d": integer, "p": integer, "q": integer, "m": integer))
+    out := map(src, arith)
+  input:
+    - data:
+        - [1, {a: "10", b: "3"}]
+  expected:
+    - out:
+        - [1, {d: "7", p: "30", q: "3", m: "1"}]
+
+- description: "inline string concat"
+  source: |
+    src := source("data")
+    src :: stream(struct("first": string("UTF-8"), "last": string("UTF-8")))
+    full := function((row) -> struct("name": row.first ++ row.last))
+    full :: function((struct("first": string("UTF-8"), "last": string("UTF-8"))) -> struct("name": string("UTF-8")))
+    out := map(src, full)
+  input:
+    - data:
+        - [1, {first: "Ada", last: "Lovelace"}]
+  expected:
+    - out:
+        - [1, {name: "AdaLovelace"}]
+
+- description: "inline body calls dotted stdlib function (struct_get, impl exists)"
+  source: |
+    src := source("data")
+    src :: stream(struct("x": integer))
+    getx := function((row) -> struct("v": std.struct_get(row, key: "x")))
+    getx :: function((struct("x": integer)) -> struct("v": integer))
+    out := map(src, getx)
+  input:
+    - data:
+        - [1, {x: "42"}]
+  expected:
+    - out:
+        - [1, {v: "42"}]
+
+- description: "inline body calls dotted stdlib function (string_upper)"
+  source: |
+    src := source("data")
+    src :: stream(struct("name": string("UTF-8")))
+    up := function((row) -> struct("u": std.string_upper(row.name)))
+    up :: function((struct("name": string("UTF-8"))) -> struct("u": string("UTF-8")))
+    out := map(src, up)
+  input:
+    - data:
+        - [1, {name: "ada"}]
+  expected:
+    - out:
+        - [1, {u: "ADA"}]
+
+- description: "inline body calls dotted stdlib function (string_length, integer return)"
+  source: |
+    src := source("data")
+    src :: stream(struct("name": string("UTF-8")))
+    len := function((row) -> struct("n": std.string_length(row.name)))
+    len :: function((struct("name": string("UTF-8"))) -> struct("n": integer))
+    out := map(src, len)
+  input:
+    - data:
+        - [1, {name: "ada"}]
+  expected:
+    - out:
+        - [1, {n: "3"}]
+
+- description: "inline function calls another inline function"
+  source: |
+    src := source("data")
+    src :: stream(struct("x": integer))
+    double := function((n) -> n + n)
+    double :: function((integer) -> integer)
+    f := function((row) -> struct("v": double(row.x)))
+    f :: function((struct("x": integer)) -> struct("v": integer))
+    out := map(src, f)
+  input:
+    - data:
+        - [1, {x: "21"}]
+  expected:
+    - out:
+        - [1, {v: "42"}]
+
+# ── Negative / validation ──
+
+- description: "inline function without matching typespec fails"
+  source: |
+    src := source("data")
+    src :: stream(struct("x": integer))
+    f := function((row) -> row.x + 1)
+    out := map(src, f)
+  expected_errors:
+    - class: compile_error
+      message: "missing_typespec"
+
+- description: "inline function return type mismatch fails"
+  source: |
+    src := source("data")
+    src :: stream(struct("x": integer))
+    f := function((row) -> row.x + 1)
+    f :: function((struct("x": integer)) -> string("UTF-8"))
+    out := map(src, f)
+  expected_errors:
+    - class: compile_error
+      message: "return_type_mismatch"
+
+- description: "inline function positional param count mismatch fails"
+  source: |
+    src := source("data")
+    src :: stream(struct("x": integer))
+    f := function((row) -> row.x)
+    f :: function((struct("x": integer), integer) -> integer)
+    out := map(src, f)
+  expected_errors:
+    - class: compile_error
+      message: "param_count_mismatch"
+
+- description: "inline function keyword param mismatch fails"
+  source: |
+    src := source("data")
+    src :: stream(struct("x": integer))
+    f := function((row, extra:) -> row.x + extra)
+    f :: function((struct("x": integer), "d": integer) -> integer)
+    out := map(src, f)
+  expected_errors:
+    - class: compile_error
+      message: "kw_param_mismatch"
+
+- description: "inline function unbound variable fails"
+  source: |
+    src := source("data")
+    src :: stream(struct("x": integer))
+    f := function((row) -> row.x + unknown)
+    f :: function((struct("x": integer)) -> integer)
+    out := map(src, f)
+  expected_errors:
+    - class: compile_error
+      message: "unbound_var"
+
+- description: "inline function calling unknown function fails"
+  source: |
+    src := source("data")
+    src :: stream(struct("x": integer))
+    f := function((row) -> nonexistent(row.x))
+    f :: function((struct("x": integer)) -> integer)
+    out := map(src, f)
+  expected_errors:
+    - class: compile_error
+      message: "fn_lookup_error"
+
+- description: "inline function colliding with external registry entry fails"
+  source: |
+    src := source("data")
+    src :: stream(struct("x": integer))
+    f := function((row) -> row.x)
+    f :: function((struct("x": integer)) -> integer)
+    out := map(src, f)
+  functions:
+    f:
+      call: "std.struct_get"
+      args:
+        - arg: row
+      kwargs:
+        key:
+          type: string
+          value: "x"
+  expected_errors:
+    - class: compile_error
+      message: "duplicate_function"   # TODO(impl): define exact error term
+
+- description: "filter function returning non-boolean fails"
+  source: |
+    src := source("data")
+    src :: stream(struct("x": integer))
+    f := function((row) -> row.x + 1)
+    f :: function((struct("x": integer)) -> integer)
+    out := filter(src, f)
+  expected_errors:
+    - class: compile_error
+      message: "non_boolean_filter"   # TODO(impl): define exact error term

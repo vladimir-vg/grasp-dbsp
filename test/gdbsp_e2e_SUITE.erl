@@ -177,8 +177,9 @@ normalize_compile_error(throw, {fixpoint_error, {_Line, Msg}}) ->
 normalize_compile_error(throw, {fixpoint_error, {_Line, Msg, _Args}}) ->
     #{<<"class">> => <<"fixpoint_error">>, <<"message">> => iolist_to_binary(Msg)};
 normalize_compile_error(throw, {compile_error, _} = Reason) ->
-    #{<<"class">> => <<"compile_error">>, <<"detail">> =>
-          list_to_binary(io_lib:format("~p", [Reason]))};
+    Detail = list_to_binary(io_lib:format("~p", [Reason])),
+    #{<<"class">> => <<"compile_error">>, <<"detail">> => Detail,
+      <<"message">> => Detail};
 normalize_compile_error(error, Reason) when is_map(Reason) ->
     Reason;
 normalize_compile_error(_Class, Reason) ->
