@@ -2,9 +2,9 @@
 %%% @doc Grasp DBSP end-to-end test suite — YAML fixture-driven.
 %%%
 %%% Each YAML file in gdbsp_e2e_SUITE_data/ contains a list of test
-%%% cases. Each case provides .gdbsp source, optional function
-%%% definitions, multi-epoch input deltas, and per-epoch expected
-%%% output.
+%%% cases. Each case provides .gdbsp source (functions are defined
+%%% inline in the source), multi-epoch input deltas, and per-epoch
+%%% expected output.
 %%%
 %%% Two matching modes:
 %%%   expected:        subset matching — every expected row must be
@@ -133,10 +133,6 @@ fixture_test(Config) ->
 
 run_one_fixture(Fixture, GroupName, Config) ->
     Source = maybe_to_bin(maps:get(<<"source">>, Fixture)),
-    Functions = maps:fold(
-        fun(K, V, Acc) ->
-            Acc#{K => deep_binify_vals(V)}
-        end, #{}, maps:get(<<"functions">>, Fixture, #{})),
     InputEpochs = maybe_deep_binify(maps:get(<<"input">>, Fixture, [])),
     ExpectedEpochs = maybe_deep_binify(maps:get(<<"expected">>, Fixture, [])),
     ExpectedExactEpochs = maybe_deep_binify(maps:get(<<"expected_exact">>, Fixture, [])),
@@ -146,33 +142,33 @@ run_one_fixture(Fixture, GroupName, Config) ->
     case maps:find(<<"expected_errors">>, Fixture) of
         {ok, ExpectedErrorsRaw} ->
             ExpectedErrors = deep_binify_vals(ExpectedErrorsRaw),
-            run_negative(Prog0, Functions, ExpectedErrors);
+            run_negative(Prog0, ExpectedErrors);
         error ->
             EnsureMatchesIncr = maps:get(
                 <<"ensure_matches_incremental">>, Fixture, false),
             case EnsureMatchesIncr of
                 true ->
-                    run_dual(Prog0, GroupName, Functions, InputEpochs,
+                    run_dual(Prog0, GroupName, InputEpochs,
                              ExpectedEpochs, ExpectedExactEpochs, Config);
                 _ ->
-                    run_positive(Prog0, GroupName, Functions, InputEpochs,
+                    run_positive(Prog0, GroupName, InputEpochs,
                                  ExpectedEpochs, ExpectedExactEpochs, Config)
             end
     end.
 
-run_negative(Prog0, Functions, ExpectedErrors) ->
-    case try_compile_negative(Prog0, Functions) of
+run_negative(Prog0, ExpectedErrors) ->
+    case try_compile_negative(Prog0) of
         {failed, Normalized} ->
             check_expected_errors(Normalized, ExpectedErrors);
         compiled ->
             ct:fail("expected compilation to fail but it succeeded")
     end.
 
-try_compile_negative(Prog0, Functions) ->
+try_compile_negative(Prog0) ->
     try
         %% Use a dummy output name — we expect compilation to fail,
         %% so this placeholder never actually runs.
-        compile_to_plan(Prog0, Functions, [<<"dummy">>], true),
+        compile_to_plan(Prog0, [<<"dummy">>], true),
         compiled
     catch
         Class:Reason:_Stacktrace ->
@@ -231,7 +227,7 @@ matches(_Key, Exp, Act) when is_list(Exp), is_list(Act) ->
 matches(_Key, Exp, Act) ->
     Exp =:= Act.
 
-run_positive(Prog0, GroupName, Functions, InputEpochs, ExpectedEpochs, ExpectedExactEpochs, Config) ->
+run_positive(Prog0, GroupName, InputEpochs, ExpectedEpochs, ExpectedExactEpochs, Config) ->
     {MatchMode, EpochExpected} = case {ExpectedEpochs, ExpectedExactEpochs} of
         {[], []} -> {subset, []};
         {[_ | _], []} -> {subset, ExpectedEpochs};
@@ -246,10 +242,10 @@ run_positive(Prog0, GroupName, Functions, InputEpochs, ExpectedEpochs, ExpectedE
         end, EpochExpected)),
 
     %% Generate lowered graph DOT
-    write_e2e_lowered_dot(Prog0, Functions, GroupName, Config),
+    write_e2e_lowered_dot(Prog0, GroupName, Config),
 
     {Plan, SourceTypeMap, OutputTypes, Graph1} =
-        compile_to_plan(Prog0, Functions, OutputNames, true),
+        compile_to_plan(Prog0, OutputNames, true),
 
     %% Generate circuit graph DOT
     write_dot_file("e2e", GroupName, "circuit",
@@ -278,7 +274,7 @@ run_positive(Prog0, GroupName, Functions, InputEpochs, ExpectedEpochs, ExpectedE
 %% Dual-run (incrementalization comparison)
 %%====================================================================
 
-run_dual(Prog0, GroupName, Functions, InputEpochs, ExpectedEpochs,
+run_dual(Prog0, GroupName, InputEpochs, ExpectedEpochs,
          ExpectedExactEpochs, Config) ->
     {MatchMode, EpochExpected} = case {ExpectedEpochs, ExpectedExactEpochs} of
         {[], []} -> {subset, []};
@@ -294,15 +290,15 @@ run_dual(Prog0, GroupName, Functions, InputEpochs, ExpectedEpochs,
         end, EpochExpected)),
 
     %% Generate lowered graph DOT once
-    write_e2e_lowered_dot(Prog0, Functions, GroupName, Config),
+    write_e2e_lowered_dot(Prog0, GroupName, Config),
 
     ct:pal("=== Dual-run: incrementalize=false ===", []),
-    {GotNoIncr, OutputTypes} = run_one_incr_mode(Prog0, GroupName, Functions,
+    {GotNoIncr, OutputTypes} = run_one_incr_mode(Prog0, GroupName,
                                                   InputEpochs, OutputNames,
                                                   Config, false),
 
     ct:pal("=== Dual-run: incrementalize=true ===", []),
-    {GotWithIncr, _} = run_one_incr_mode(Prog0, GroupName, Functions, InputEpochs,
+    {GotWithIncr, _} = run_one_incr_mode(Prog0, GroupName, InputEpochs,
                                           OutputNames, Config, true),
 
     ct:pal("=== Dual-run: comparing results ===", []),
@@ -311,9 +307,9 @@ run_dual(Prog0, GroupName, Functions, InputEpochs, ExpectedEpochs,
     ct:pal("=== Dual-run: asserting against expected ===", []),
     ok = assert_epochs(GotNoIncr, EpochExpected, OutputTypes, MatchMode).
 
-run_one_incr_mode(Prog0, GroupName, Functions, InputEpochs, OutputNames, Config, Incr) ->
+run_one_incr_mode(Prog0, GroupName, InputEpochs, OutputNames, Config, Incr) ->
     {Plan, SourceTypeMap, OutputTypes, Graph1} =
-        compile_to_plan(Prog0, Functions, OutputNames, Incr),
+        compile_to_plan(Prog0, OutputNames, Incr),
 
     %% Generate circuit graph DOT for the incr=true run only
     write_dot_file("e2e", GroupName, "circuit",
@@ -405,11 +401,11 @@ assert_epochs(_Got, [], _OutputTypes, _MatchMode) -> ok.
 %% Compilation
 %%====================================================================
 
-compile_to_plan(Prog0, Functions, OutputNames, Incr) ->
+compile_to_plan(Prog0, OutputNames, Incr) ->
     SourceTypeMap = build_source_type_map(Prog0),
 
     case gdbsp_compile:compile_with_names(
-           Prog0, #{fn_registry => Functions, incrementalize => false}) of
+           Prog0, #{incrementalize => false}) of
         {ok, Graph0, NameToId} ->
             Graph1 = add_output_nodes(Graph0, OutputNames, NameToId),
             OutTypes = output_types_from_graph(Graph1, NameToId,
@@ -742,19 +738,12 @@ to_map_val(V) -> V.
 %% DOT file generation
 %%====================================================================
 
-write_e2e_lowered_dot(Prog0, Functions, GroupName, Config) ->
-    {ok, StdlibMap} = gdbsp_builtins:load_stdlib(),
-    TSMap = e2e_build_ts_map(Prog0#gdbsp_program.typespecs),
-    case gdbsp_compile_lower:run(Prog0, #{}) of
-        {ok, Lowered0} ->
-            case gdbsp_type_infer:infer_lowered(Lowered0, TSMap, Functions, #{}, StdlibMap) of
-                {ok, Lowered} ->
-                    write_dot_file("e2e", GroupName, "lowered",
-                                   gdbsp_graphviz:lowered_to_dot(Lowered),
-                                   Config);
-                {error, _Err} ->
-                    ok
-            end;
+write_e2e_lowered_dot(Prog0, GroupName, Config) ->
+    case gdbsp_compile:infer(Prog0) of
+        {ok, Lowered, _FnReg, _FnParams} ->
+            write_dot_file("e2e", GroupName, "lowered",
+                           gdbsp_graphviz:lowered_to_dot(Lowered),
+                           Config);
         {error, _Err} ->
             ok
     end.
@@ -802,13 +791,3 @@ maybe_render_png(DotPath) ->
 project_root() ->
     lists:foldl(fun(_, Acc) -> filename:dirname(Acc) end,
                 code:lib_dir(grasp_dbsp), [1,2,3,4]).
-
-e2e_build_ts_map(Typespecs) ->
-    lists:foldl(
-        fun(#gdbsp_typespec{name = N, spec = {type, {stream, Inner}}}, Acc) ->
-                Acc#{N => Inner};
-           (#gdbsp_typespec{name = N, spec = {type, T}}, Acc) ->
-                Acc#{N => T};
-           (_TS, Acc) ->
-                Acc
-        end, #{}, Typespecs).

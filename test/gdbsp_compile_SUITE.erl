@@ -16,8 +16,7 @@
          incrementalize_filter/1, incrementalize_join/1, cycle_error/1,
          missing_fn/1, duplicate_node/1,
          delay_inputs_not_empty_for_chain/1, delay_ordering_independent/1,
-         inline_fn_map/1, inline_fn_duplicate_rejected/1,
-         typespec_only_external_fn/1, typespec_only_no_external/1,
+         inline_fn_map/1,
          stdlib_parse_ok/1, stdlib_has_arithmetic/1,
          stdlib_typespec_correct/1, stdlib_agg_overloads/1,
          stdlib_missing_file/1, stdlib_operator_tvar/1]).
@@ -29,8 +28,7 @@ all() ->
      incrementalize_filter, incrementalize_join, cycle_error,
      missing_fn, duplicate_node,
      delay_inputs_not_empty_for_chain, delay_ordering_independent,
-     inline_fn_map, inline_fn_duplicate_rejected,
-     typespec_only_external_fn, typespec_only_no_external,
+     inline_fn_map,
      stdlib_parse_ok, stdlib_has_arithmetic,
      stdlib_typespec_correct, stdlib_agg_overloads,
      stdlib_missing_file, stdlib_operator_tvar].
@@ -49,24 +47,14 @@ end_per_suite(_Config) ->
 %%--------------------------------------------------------------------
 
 simple_filter(_Config) ->
-    FnReg = #{
-        <<"salary_ge_150">> =>
-            #{<<"call">> => <<">=">>,
-              <<"args">> => [
-                  #{<<"call">> => <<"std.struct_get">>,
-                    <<"args">> => [#{<<"arg">> => <<"row">>}],
-                    <<"kwargs">> => #{<<"key">> => #{<<"type">> => <<"string">>,
-                                                      <<"value">> => <<"sal">>}}},
-                  #{<<"type">> => <<"i64">>, <<"value">> => <<"150">>}
-              ]}
-    },
     {ok, Prog} = parse_prog(
         "emp_src := source(\"emp\")\n"
-        "emp_src :: stream(struct(\"name\": string(\"UTF-8\"), \"dept\": i64, \"sal\": i64))\n"
+        "emp_src :: stream(struct(\"name\": string(\"UTF-8\"), \"dept\": integer, \"sal\": integer))\n"
+        "salary_ge_150 := function((row) -> row.sal >= 150)\n"
+        "salary_ge_150 :: function((struct(\"name\": string(\"UTF-8\"), \"dept\": integer, \"sal\": integer)) -> enum(\"false\",\"true\"))\n"
         "filtered := filter(emp_src, salary_ge_150)\n"
     ),
-    {ok, G} = gdbsp_compile:compile(Prog, #{fn_registry => FnReg,
-                                              incrementalize => false}),
+    {ok, G} = gdbsp_compile:compile(Prog, #{incrementalize => false}),
     Nodes = maps:to_list(G#circuit_graph.nodes),
     2 = length(Nodes),
     %% Verify source node exists
@@ -77,26 +65,14 @@ simple_filter(_Config) ->
     ok.
 
 simple_map(_Config) ->
-    FnReg = #{
-        <<"passthrough">> =>
-            #{<<"call">> => <<"struct">>,
-              <<"kwargs">> =>
-                  #{<<"x">> => #{<<"call">> => <<"std.struct_get">>,
-                                 <<"args">> => [#{<<"arg">> => <<"row">>}],
-                                 <<"kwargs">> => #{<<"key">> => #{<<"type">> => <<"string">>,
-                                                                   <<"value">> => <<"a">>}}},
-                    <<"y">> => #{<<"call">> => <<"std.struct_get">>,
-                                 <<"args">> => [#{<<"arg">> => <<"row">>}],
-                                 <<"kwargs">> => #{<<"key">> => #{<<"type">> => <<"string">>,
-                                                                   <<"value">> => <<"b">>}}}}}
-    },
     {ok, Prog} = parse_prog(
         "src := source(\"t\")\n"
         "src :: stream(struct(\"a\": i64, \"b\": i64))\n"
+        "passthrough := function((row) -> struct(\"x\": row.a, \"y\": row.b))\n"
+        "passthrough :: function((struct(\"a\": i64, \"b\": i64)) -> struct(\"x\": i64, \"y\": i64))\n"
         "mapped := map(src, passthrough)\n"
     ),
-    {ok, G} = gdbsp_compile:compile(Prog, #{fn_registry => FnReg,
-                                              incrementalize => false}),
+    {ok, G} = gdbsp_compile:compile(Prog, #{incrementalize => false}),
     Nodes = maps:to_list(G#circuit_graph.nodes),
     2 = length(Nodes),
     MapNode = hd([N || {_, N} <- Nodes, element(1, N#circuit_node.op) =:= map]),
@@ -111,8 +87,7 @@ join(_Config) ->
         "right :: stream(struct(\"k\": i64, \"b\": i64))\n"
         "joined := join(left, right, on: [\"k\"])\n"
     ),
-    {ok, G} = gdbsp_compile:compile(Prog, #{fn_registry => #{},
-                                              incrementalize => false}),
+    {ok, G} = gdbsp_compile:compile(Prog, #{incrementalize => false}),
     Nodes = maps:to_list(G#circuit_graph.nodes),
     5 = length(Nodes),
     %% Verify both map_index sub-nodes exist (one per join input)
@@ -124,17 +99,12 @@ join(_Config) ->
     ok.
 
 aggregate(_Config) ->
-    FnReg = #{
-        <<"sum_sal">> =>
-            #{<<"aggregate">> => <<"std.agg_sum_i64">>}
-    },
     {ok, Prog} = parse_prog(
         "emp_src := source(\"emp\")\n"
         "emp_src :: stream(struct(\"dept\": i64, \"sal\": i64))\n"
-        "agg := aggregate(emp_src, sum_sal, by: [\"dept\"], value: \"sal\", as: \"total\")\n"
+        "agg := aggregate(emp_src, std.agg_sum_i64, by: [\"dept\"], value: \"sal\", as: \"total\")\n"
     ),
-    {ok, G} = gdbsp_compile:compile(Prog, #{fn_registry => FnReg,
-                                              incrementalize => false}),
+    {ok, G} = gdbsp_compile:compile(Prog, #{incrementalize => false}),
     Nodes = maps:to_list(G#circuit_graph.nodes),
     4 = length(Nodes),
     AggSchema = maps:get(4, G#circuit_graph.schemas),
@@ -151,8 +121,7 @@ plus_multi(_Config) ->
         "c :: stream(struct(\"x\": i64))\n"
         "merged := plus(a, b, c)\n"
     ),
-    {ok, G} = gdbsp_compile:compile(Prog, #{fn_registry => #{},
-                                              incrementalize => false}),
+    {ok, G} = gdbsp_compile:compile(Prog, #{incrementalize => false}),
     Nodes = maps:to_list(G#circuit_graph.nodes),
     4 = length(Nodes),
     PlusNode = hd([N || {_, N} <- Nodes, element(1, N#circuit_node.op) =:= plus]),
@@ -160,24 +129,14 @@ plus_multi(_Config) ->
     ok.
 
 incrementalize_filter(_Config) ->
-    FnReg = #{
-        <<"f">> =>
-            #{<<"call">> => <<">=">>,
-              <<"args">> => [
-                  #{<<"call">> => <<"std.struct_get">>,
-                    <<"args">> => [#{<<"arg">> => <<"row">>}],
-                    <<"kwargs">> => #{<<"key">> => #{<<"type">> => <<"string">>,
-                                                      <<"value">> => <<"sal">>}}},
-                  #{<<"type">> => <<"i64">>, <<"value">> => <<"100">>}
-              ]}
-    },
     {ok, Prog} = parse_prog(
         "src := source(\"t\")\n"
-        "src :: stream(struct(\"sal\": i64))\n"
+        "src :: stream(struct(\"sal\": integer))\n"
+        "f := function((row) -> row.sal >= 100)\n"
+        "f :: function((struct(\"sal\": integer)) -> enum(\"false\",\"true\"))\n"
         "filtered := filter(src, f)\n"
     ),
-    {ok, G} = gdbsp_compile:compile(Prog, #{fn_registry => FnReg,
-                                              incrementalize => true}),
+    {ok, G} = gdbsp_compile:compile(Prog, #{incrementalize => true}),
     Nodes = maps:to_list(G#circuit_graph.nodes),
     2 = length(Nodes),
     ok.
@@ -190,8 +149,7 @@ incrementalize_join(_Config) ->
         "right :: stream(struct(\"k\": i64, \"b\": i64))\n"
         "joined := join(left, right, on: [\"k\"])\n"
     ),
-    {ok, G} = gdbsp_compile:compile(Prog, #{fn_registry => #{},
-                                              incrementalize => true}),
+    {ok, G} = gdbsp_compile:compile(Prog, #{incrementalize => true}),
     Nodes = maps:to_list(G#circuit_graph.nodes),
     true = (length(Nodes) >= 5),
     ok.
@@ -203,17 +161,7 @@ cycle_error(_Config) ->
         "b := map(a, f)\n"
         "a := map(b, g)\n"
     ),
-    FnReg = #{
-        <<"f">> => #{<<"call">> => <<"std.struct_get">>,
-                      <<"args">> => [#{<<"arg">> => <<"row">>}],
-                      <<"kwargs">> => #{<<"key">> => #{<<"type">> => <<"string">>,
-                                                        <<"value">> => <<"x">>}}},
-        <<"g">> => #{<<"call">> => <<"std.struct_get">>,
-                      <<"args">> => [#{<<"arg">> => <<"row">>}],
-                      <<"kwargs">> => #{<<"key">> => #{<<"type">> => <<"string">>,
-                                                        <<"value">> => <<"x">>}}}
-    },
-    case gdbsp_compile:compile(Prog, #{fn_registry => FnReg, incrementalize => false}) of
+    case gdbsp_compile:compile(Prog, #{incrementalize => false}) of
         {error, cycle_in_graph} -> ok;
         {error, {duplicate_node, _}} -> ok;
         {error, duplicate_node} -> ok;
@@ -226,7 +174,7 @@ missing_fn(_Config) ->
         "src :: stream(struct(\"x\": i64))\n"
         "mapped := map(src, nonexistent)\n"
     ),
-    case gdbsp_compile:compile(Prog, #{fn_registry => #{}, incrementalize => false}) of
+    case gdbsp_compile:compile(Prog, #{incrementalize => false}) of
         {error, _} -> ok;
         Other -> ct:fail("expected error, got ~p", [Other])
     end.
@@ -238,8 +186,7 @@ duplicate_node(_Config) ->
                "a :: stream(struct(\"x\": i64))\n"
                "a := source(\"s\")\n"), #{}) of
         {ok, Prog} ->
-            case gdbsp_compile:compile(Prog, #{fn_registry => #{},
-                                                incrementalize => false}) of
+            case gdbsp_compile:compile(Prog, #{incrementalize => false}) of
                 {error, {duplicate_node, _}} -> ok;
                 {error, duplicate_node} -> ok;
                 Other -> ct:fail("expected duplicate error, got ~p", [Other])
@@ -253,8 +200,7 @@ delay_inputs_not_empty_for_chain(_Config) ->
         "s :: stream(struct(\"x\": i64))\n"
         "d := delay(s)\n"
     ),
-    {ok, G} = gdbsp_compile:compile(Prog, #{fn_registry => #{},
-                                              incrementalize => false}),
+    {ok, G} = gdbsp_compile:compile(Prog, #{incrementalize => false}),
     Nodes = G#circuit_graph.nodes,
     DelayNode = hd([N || {_, N} <- maps:to_list(Nodes),
                           element(1, N#circuit_node.op) =:= delay]),
@@ -267,8 +213,7 @@ delay_ordering_independent(_Config) ->
         "zzz := source(\"t\")\n"
         "zzz :: stream(struct(\"x\": i64))\n"
     ),
-    {ok, G} = gdbsp_compile:compile(Prog, #{fn_registry => #{},
-                                              incrementalize => false}),
+    {ok, G} = gdbsp_compile:compile(Prog, #{incrementalize => false}),
     Nodes = G#circuit_graph.nodes,
     SourceId = hd([Id || {Id, N} <- maps:to_list(Nodes),
                           element(1, N#circuit_node.op) =:= source]),
@@ -289,70 +234,13 @@ inline_fn_map(_Config) ->
         "id :: function((struct(\"x\": i64)) -> struct(\"x\": i64))\n"
         "mapped := map(src, id)\n"
     ),
-    {ok, G} = gdbsp_compile:compile(Prog, #{fn_registry => #{},
-                                              incrementalize => false}),
+    {ok, G} = gdbsp_compile:compile(Prog, #{incrementalize => false}),
     Nodes = maps:to_list(G#circuit_graph.nodes),
     2 = length(Nodes),
     MapNode = hd([N || {_, N} <- Nodes, element(1, N#circuit_node.op) =:= map]),
     %% Identity function body is just the arg reference
     {map, #{expr := {arg, <<"row">>}}} = MapNode#circuit_node.op,
     ok.
-
-inline_fn_duplicate_rejected(_Config) ->
-    ExternalBody = #{<<"call">> => <<"struct">>,
-                     <<"kwargs">> =>
-                         #{<<"x">> => #{<<"type">> => <<"i64">>, <<"value">> => <<"0">>}}},
-    FnReg = #{<<"id">> => ExternalBody},
-    {ok, Prog} = parse_prog(
-        "src := source(\"t\")\n"
-        "src :: stream(struct(\"x\": i64))\n"
-        "id := function((row) -> row)\n"
-        "id :: function((struct(\"x\": i64)) -> struct(\"x\": i64))\n"
-        "mapped := map(src, id)\n"
-    ),
-    %% An inline function colliding with an external registry entry is
-    %% a compile error, not a silent override.
-    {error, {duplicate_function, <<"id">>}} =
-        gdbsp_compile:compile(Prog, #{fn_registry => FnReg,
-                                      incrementalize => false}).
-
-typespec_only_external_fn(_Config) ->
-    FnReg = #{
-        <<"inc">> =>
-            #{<<"call">> => <<"+">>,
-              <<"args">> => [
-                  #{<<"call">> => <<"std.struct_get">>,
-                    <<"args">> => [#{<<"arg">> => <<"row">>}],
-                    <<"kwargs">> => #{<<"key">> => #{<<"type">> => <<"string">>,
-                                                      <<"value">> => <<"x">>}}},
-                  #{<<"type">> => <<"i64">>, <<"value">> => <<"1">>}
-              ]}
-    },
-    {ok, Prog} = parse_prog(
-        "src := source(\"t\")\n"
-        "src :: stream(struct(\"x\": i64))\n"
-        "inc :: function((struct(\"x\": i64)) -> i64)\n"
-        "mapped := map(src, inc)\n"
-    ),
-    {ok, G} = gdbsp_compile:compile(Prog, #{fn_registry => FnReg,
-                                              incrementalize => false}),
-    Nodes = maps:to_list(G#circuit_graph.nodes),
-    MapNode = hd([N || {_, N} <- Nodes, element(1, N#circuit_node.op) =:= map]),
-    {map, #{expr := {call, <<"+">>, _, _}}} = MapNode#circuit_node.op,
-    ok.
-
-typespec_only_no_external(_Config) ->
-    {ok, Prog} = parse_prog(
-        "src := source(\"t\")\n"
-        "src :: stream(struct(\"x\": i64))\n"
-        "inc :: function((struct(\"x\": i64)) -> i64)\n"
-        "mapped := map(src, inc)\n"
-    ),
-    case gdbsp_compile:compile(Prog, #{fn_registry => #{},
-                                         incrementalize => false}) of
-        {error, _} -> ok;
-        Other -> ct:fail("expected error, got ~p", [Other])
-    end.
 
 %%--------------------------------------------------------------------
 %% stdlib loading tests (Phase A)

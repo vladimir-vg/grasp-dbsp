@@ -62,26 +62,13 @@
         result := distinct(combined)
 
     src := source("data")
-    src :: stream(struct("v": i64))
+    src :: stream(struct("v": integer))
+
+    is_even := function((row) -> row.v % 2 = 0)
+    is_even :: function((struct("v": integer)) -> enum("false","true"))
 
     fp := fixpoint(filter_loop(base: src, result: src))
     out := fp.result
-
-  functions:
-    is_even:
-      call: "="
-      args:
-        - call: "%"
-          args:
-            - call: "std.struct_get"
-              args:
-                - arg: row
-              kwargs:
-                key:
-                  type: string
-                  value: "v"
-            - {type: "i64", value: "2"}
-        - {type: "i64", value: "0"}
 
   ensure_matches_incremental: true
 

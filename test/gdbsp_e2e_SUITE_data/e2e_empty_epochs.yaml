@@ -1,21 +1,10 @@
 - source: |
     src := source("data")
-    src :: stream(struct("id": i64, "val": i64))
+    src :: stream(struct("id": integer, "val": integer))
+    nonzero_val := function((row) -> row.val != 0)
+    nonzero_val :: function((struct("id": integer, "val": integer)) -> enum("false","true"))
     zero_check := filter(src, nonzero_val)
     out := distinct(zero_check)
-
-  functions:
-    nonzero_val:
-      call: "!="
-      args:
-        - call: "std.struct_get"
-          args:
-            - arg: row
-          kwargs:
-            key:
-              type: string
-              value: "val"
-        - {type: "i64", value: "0"}
 
   input:
     - data: []
@@ -48,22 +37,11 @@
 
 - source: |
     src := source("data")
-    src :: stream(struct("id": i64, "val": i64))
+    src :: stream(struct("id": integer, "val": integer))
+    gt_0 := function((row) -> row.val >= 0)
+    gt_0 :: function((struct("id": integer, "val": integer)) -> enum("false","true"))
     f := filter(src, gt_0)
     out := distinct(f)
-
-  functions:
-    gt_0:
-      call: ">="
-      args:
-        - call: "std.struct_get"
-          args:
-            - arg: row
-          kwargs:
-            key:
-              type: string
-              value: "val"
-        - {type: "i64", value: "0"}
 
   input:
     - data:

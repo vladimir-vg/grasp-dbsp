@@ -2,8 +2,8 @@
 %%% @doc Type inference test suite — YAML fixture-driven.
 %%%
 %%% Each YAML file in gdbsp_type_infer_SUITE_data/ contains a list of
-%%% test cases. Each case provides .gdbsp source, optional function
-%%% definitions, and expected types for tagged node names.
+%%% test cases. Each case provides .gdbsp source (functions are defined
+%%% inline in the source) and expected types for tagged node names.
 %%%
 %%% Type inference runs on the lowered graph (after lowering).
 %%% Assertions use tag names which correspond to original source
@@ -133,20 +133,19 @@ fixture_test(Config) ->
 run_one_fixture(Fixture, GroupName, Config) ->
     FixtureMap = deep_binify_vals(Fixture),
     Source = maybe_to_bin(maps:get(<<"source">>, FixtureMap)),
-    Functions = maps:get(<<"functions">>, FixtureMap, #{}),
 
     {ok, Prog} = gdbsp_parse:parse_string(Source, #{}),
 
     case maps:find(<<"expected">>, FixtureMap) of
         {ok, ExpectedRaw} ->
-            run_positive(Prog, Functions, ExpectedRaw, GroupName, Config);
+            run_positive(Prog, ExpectedRaw, GroupName, Config);
         error ->
             ExpectedErrorsRaw = maps:get(<<"expected_errors">>, FixtureMap),
-            run_negative(Prog, Functions, ExpectedErrorsRaw)
+            run_negative(Prog, ExpectedErrorsRaw)
     end.
 
-run_positive(Prog, Functions, ExpectedRaw, GroupName, Config) ->
-    Lowered = case gdbsp_compile:infer(Prog, Functions) of
+run_positive(Prog, ExpectedRaw, GroupName, Config) ->
+    Lowered = case gdbsp_compile:infer(Prog) of
         {ok, L, _FnReg, _FnParams} -> L;
         {error, Reason} ->
             ct:pal("Inference failed: ~p", [Reason]),
@@ -176,8 +175,8 @@ run_positive(Prog, Functions, ExpectedRaw, GroupName, Config) ->
         ExpectedRaw),
     ok.
 
-run_negative(Prog, Functions, ExpectedErrorsRaw) ->
-    case gdbsp_compile:infer(Prog, Functions) of
+run_negative(Prog, ExpectedErrorsRaw) ->
+    case gdbsp_compile:infer(Prog) of
         {ok, _Lowered, _FnReg, _FnParams} ->
             ct:fail("expected error but infer succeeded");
         {error, Reason} ->

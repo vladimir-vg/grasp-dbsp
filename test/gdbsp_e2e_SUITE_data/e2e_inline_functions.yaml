@@ -296,26 +296,6 @@
     - class: compile_error
       message: "fn_lookup_error"
 
-- description: "inline function colliding with external registry entry fails"
-  source: |
-    src := source("data")
-    src :: stream(struct("x": integer))
-    f := function((row) -> row.x)
-    f :: function((struct("x": integer)) -> integer)
-    out := map(src, f)
-  functions:
-    f:
-      call: "std.struct_get"
-      args:
-        - arg: row
-      kwargs:
-        key:
-          type: string
-          value: "x"
-  expected_errors:
-    - class: compile_error
-      message: "duplicate_function"   # TODO(impl): define exact error term
-
 - description: "filter function returning non-boolean fails"
   source: |
     src := source("data")

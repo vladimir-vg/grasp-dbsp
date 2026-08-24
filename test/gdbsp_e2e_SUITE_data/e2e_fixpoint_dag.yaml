@@ -34,7 +34,20 @@
         result := distinct(combined)
 
     src := source("data")
-    src :: stream(struct("v": i64))
+    src :: stream(struct("v": integer))
+
+    gt_zero := function((row) -> row.v > 0)
+    gt_zero :: function((struct("v": integer)) -> enum("false","true"))
+    dec_fn := function((row) -> struct("v": row.v - 1))
+    dec_fn :: function((struct("v": integer)) -> struct("v": integer))
+    mult_two := function((row) -> struct("v": row.v * 2))
+    mult_two :: function((struct("v": integer)) -> struct("v": integer))
+    mult_three := function((row) -> struct("v": row.v * 3))
+    mult_three :: function((struct("v": integer)) -> struct("v": integer))
+    lt_20 := function((row) -> row.v < 20)
+    lt_20 :: function((struct("v": integer)) -> enum("false","true"))
+    lt_50 := function((row) -> row.v < 50)
+    lt_50 :: function((struct("v": integer)) -> enum("false","true"))
 
     fp_ct := fixpoint(countdown(base: src, result: src))
     fp_double := fixpoint(double_lt_20(base: fp_ct.result, result: fp_ct.result))
@@ -45,83 +58,6 @@
     out_double := fp_double.result
     out_triple := fp_triple.result
     out_merge := fp_merge.result
-
-  functions:
-    gt_zero:
-      call: ">"
-      args:
-        - call: "std.struct_get"
-          args:
-            - arg: row
-          kwargs:
-            key:
-              type: string
-              value: "v"
-        - {type: "i64", value: "0"}
-    dec_fn:
-      call: "struct"
-      kwargs:
-        v:
-          call: "-"
-          args:
-            - call: "std.struct_get"
-              args:
-                - arg: row
-              kwargs:
-                key:
-                  type: string
-                  value: "v"
-            - {type: "i64", value: "1"}
-    mult_two:
-      call: "struct"
-      kwargs:
-        v:
-          call: "*"
-          args:
-            - call: "std.struct_get"
-              args:
-                - arg: row
-              kwargs:
-                key:
-                  type: string
-                  value: "v"
-            - {type: "i64", value: "2"}
-    mult_three:
-      call: "struct"
-      kwargs:
-        v:
-          call: "*"
-          args:
-            - call: "std.struct_get"
-              args:
-                - arg: row
-              kwargs:
-                key:
-                  type: string
-                  value: "v"
-            - {type: "i64", value: "3"}
-    lt_20:
-      call: "<"
-      args:
-        - call: "std.struct_get"
-          args:
-            - arg: row
-          kwargs:
-            key:
-              type: string
-              value: "v"
-        - {type: "i64", value: "20"}
-    lt_50:
-      call: "<"
-      args:
-        - call: "std.struct_get"
-          args:
-            - arg: row
-          kwargs:
-            key:
-              type: string
-              value: "v"
-        - {type: "i64", value: "50"}
 
   input:
     - data:
@@ -256,9 +192,14 @@
         result := distinct(combined)
 
     src_a := source("data_a")
-    src_a :: stream(struct("v": i64))
+    src_a :: stream(struct("v": integer))
     src_b := source("data_b")
-    src_b :: stream(struct("v": i64))
+    src_b :: stream(struct("v": integer))
+
+    gt_zero := function((row) -> row.v > 0)
+    gt_zero :: function((struct("v": integer)) -> enum("false","true"))
+    dec_fn := function((row) -> struct("v": row.v - 1))
+    dec_fn :: function((struct("v": integer)) -> struct("v": integer))
 
     fp_ct_a := fixpoint(countdown(base: src_a, result: src_a))
     fp_ct_b := fixpoint(countdown(base: src_b, result: src_b))
@@ -267,33 +208,6 @@
     out_a := fp_ct_a.result
     out_b := fp_ct_b.result
     out_merge := fp_merge.result
-
-  functions:
-    gt_zero:
-      call: ">"
-      args:
-        - call: "std.struct_get"
-          args:
-            - arg: row
-          kwargs:
-            key:
-              type: string
-              value: "v"
-        - {type: "i64", value: "0"}
-    dec_fn:
-      call: "struct"
-      kwargs:
-        v:
-          call: "-"
-          args:
-            - call: "std.struct_get"
-              args:
-                - arg: row
-              kwargs:
-                key:
-                  type: string
-                  value: "v"
-            - {type: "i64", value: "1"}
 
   input:
     - data_a:
@@ -364,7 +278,20 @@
         result := distinct(combined)
 
     src := source("data")
-    src :: stream(struct("v": i64))
+    src :: stream(struct("v": integer))
+
+    gt_zero := function((row) -> row.v > 0)
+    gt_zero :: function((struct("v": integer)) -> enum("false","true"))
+    dec_fn := function((row) -> struct("v": row.v - 1))
+    dec_fn :: function((struct("v": integer)) -> struct("v": integer))
+    mult_two := function((row) -> struct("v": row.v * 2))
+    mult_two :: function((struct("v": integer)) -> struct("v": integer))
+    lt_20 := function((row) -> row.v < 20)
+    lt_20 :: function((struct("v": integer)) -> enum("false","true"))
+    div_two := function((row) -> struct("v": row.v / 2))
+    div_two :: function((struct("v": integer)) -> struct("v": integer))
+    ge_1 := function((row) -> row.v >= 1)
+    ge_1 :: function((struct("v": integer)) -> enum("false","true"))
 
     fp_ct := fixpoint(countdown(base: src, result: src))
     fp_double := fixpoint(double_lt_20(base: fp_ct.result, result: fp_ct.result))
@@ -373,83 +300,6 @@
     out_ct := fp_ct.result
     out_double := fp_double.result
     out_halve := fp_halve.result
-
-  functions:
-    gt_zero:
-      call: ">"
-      args:
-        - call: "std.struct_get"
-          args:
-            - arg: row
-          kwargs:
-            key:
-              type: string
-              value: "v"
-        - {type: "i64", value: "0"}
-    dec_fn:
-      call: "struct"
-      kwargs:
-        v:
-          call: "-"
-          args:
-            - call: "std.struct_get"
-              args:
-                - arg: row
-              kwargs:
-                key:
-                  type: string
-                  value: "v"
-            - {type: "i64", value: "1"}
-    mult_two:
-      call: "struct"
-      kwargs:
-        v:
-          call: "*"
-          args:
-            - call: "std.struct_get"
-              args:
-                - arg: row
-              kwargs:
-                key:
-                  type: string
-                  value: "v"
-            - {type: "i64", value: "2"}
-    lt_20:
-      call: "<"
-      args:
-        - call: "std.struct_get"
-          args:
-            - arg: row
-          kwargs:
-            key:
-              type: string
-              value: "v"
-        - {type: "i64", value: "20"}
-    div_two:
-      call: "struct"
-      kwargs:
-        v:
-          call: "/"
-          args:
-            - call: "std.struct_get"
-              args:
-                - arg: row
-              kwargs:
-                key:
-                  type: string
-                  value: "v"
-            - {type: "i64", value: "2"}
-    ge_1:
-      call: ">="
-      args:
-        - call: "std.struct_get"
-          args:
-            - arg: row
-          kwargs:
-            key:
-              type: string
-              value: "v"
-        - {type: "i64", value: "1"}
 
   input:
     - data:
@@ -539,9 +389,14 @@
         result := distinct(combined)
 
     src_a := source("data_a")
-    src_a :: stream(struct("v": i64))
+    src_a :: stream(struct("v": integer))
     src_b := source("data_b")
-    src_b :: stream(struct("v": i64))
+    src_b :: stream(struct("v": integer))
+
+    gt_zero := function((row) -> row.v > 0)
+    gt_zero :: function((struct("v": integer)) -> enum("false","true"))
+    dec_fn := function((row) -> struct("v": row.v - 1))
+    dec_fn :: function((struct("v": integer)) -> struct("v": integer))
 
     fp_ct_a := fixpoint(countdown(base: src_a, result: src_a))
     fp_ct_b := fixpoint(countdown(base: src_b, result: src_b))
@@ -550,33 +405,6 @@
     out_a := fp_ct_a.result
     out_b := fp_ct_b.result
     out_merge := fp_merge.result
-
-  functions:
-    gt_zero:
-      call: ">"
-      args:
-        - call: "std.struct_get"
-          args:
-            - arg: row
-          kwargs:
-            key:
-              type: string
-              value: "v"
-        - {type: "i64", value: "0"}
-    dec_fn:
-      call: "struct"
-      kwargs:
-        v:
-          call: "-"
-          args:
-            - call: "std.struct_get"
-              args:
-                - arg: row
-              kwargs:
-                key:
-                  type: string
-                  value: "v"
-            - {type: "i64", value: "1"}
 
   input:
     - data_a:

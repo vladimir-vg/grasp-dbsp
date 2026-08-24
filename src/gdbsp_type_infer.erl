@@ -231,13 +231,6 @@ infer_lnode_type(join, Args, InputIds, _Tags, TypeAcc, _TSMap, _FnReg, _FnParams
 infer_lnode_type(aggregate, Args, InputIds, _Tags, TypeAcc, _TSMap, FnReg, _FnParams, StdlibMap) ->
     InputType = lowered_input_type(InputIds, TypeAcc),
     FnRef = get_var_arg(Args, 2),
-    _ = case maps:find(FnRef, FnReg) of
-        {ok, _} -> ok;
-        error ->
-            error(#{<<"class">> => <<"missing_typespec">>,
-                    <<"node">> => FnRef,
-                    <<"message">> => <<"aggregate function not found">>})
-    end,
     {by, ByFields} = get_kw_arg(Args, by, []),
     {value, ValField} = get_kw_arg(Args, value, <<>>),
     {as, AsField} = get_kw_arg(Args, 'as', <<>>),

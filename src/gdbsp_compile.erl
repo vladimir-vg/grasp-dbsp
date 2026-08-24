@@ -7,15 +7,14 @@
 %%%-------------------------------------------------------------------
 -module(gdbsp_compile).
 
--export([compile/2, compile_with_names/2, infer/2]).
+-export([compile/2, compile_with_names/2, infer/1]).
 
 -include("gdbsp_parse.hrl").
 -include("gdbsp_circuit.hrl").
 -include("gdbsp_lowered.hrl").
 
 -type options() :: #{
-    incrementalize => boolean(),
-    fn_registry => #{binary() := jsx:json_term()}
+    incrementalize => boolean()
 }.
 
 -type fn_params() :: #{binary() => #{pos := [binary()], kw := [{binary(), binary()}]}}.
@@ -32,9 +31,8 @@ compile(Program, Options) ->
 -spec compile_with_names(#gdbsp_program{}, options()) ->
     {ok, #circuit_graph{}, #{binary() => node_id()}} | {error, term()}.
 compile_with_names(Program, Options) ->
-    ExternalFnReg = maps:get(fn_registry, Options, #{}),
     Incr = maps:get(incrementalize, Options, false),
-    case infer(Program, ExternalFnReg) of
+    case infer(Program) of
         {ok, Lowered, FnReg, FnParams} ->
             try
                 {ok, StdlibMap} = gdbsp_builtins:load_stdlib(),
@@ -55,26 +53,21 @@ compile_with_names(Program, Options) ->
         {error, _} = Err -> Err
     end.
 
--spec infer(#gdbsp_program{}, #{binary() => jsx:json_term()}) ->
+-spec infer(#gdbsp_program{}) ->
     {ok, #lowered_graph{}, #{binary() => jsx:json_term()}, fn_params()} |
     {error, term()}.
-infer(Program, ExternalFnReg) ->
+infer(Program) ->
     try
         {ok, StdlibMap} = gdbsp_builtins:load_stdlib(),
         {InlineFnReg, FnParams} = compile_inline_fns(Program, StdlibMap),
-        case duplicate_fn_names(ExternalFnReg, InlineFnReg) of
-            [] -> ok;
-            [Name | _] -> throw({compile_error, {duplicate_function, Name}})
-        end,
-        FnReg = maps:merge(ExternalFnReg, InlineFnReg),
         CallableMap = gdbsp_compile_expr:merge_callable_maps(
             StdlibMap,
             gdbsp_compile_expr:inline_sig_map(Program#gdbsp_program.typespecs)),
         TSMap = build_ts_map(Program#gdbsp_program.typespecs),
         case gdbsp_compile_lower:run(Program, #{}) of
             {ok, Lowered0} ->
-                case gdbsp_type_infer:infer_lowered(Lowered0, TSMap, FnReg, FnParams, CallableMap) of
-                    {ok, Lowered} -> {ok, Lowered, FnReg, FnParams};
+                case gdbsp_type_infer:infer_lowered(Lowered0, TSMap, InlineFnReg, FnParams, CallableMap) of
+                    {ok, Lowered} -> {ok, Lowered, InlineFnReg, FnParams};
                     {error, _} = E -> E
                 end;
             {error, _} = E -> E
@@ -112,9 +105,6 @@ compile_inline_fns(Program, StdlibMap) ->
         {error, ErrorMap} ->
             throw({compile_error, {inline_fn_errors, ErrorMap}})
     end.
-
-duplicate_fn_names(ExternalFnReg, InlineFnReg) ->
-    [Name || Name <- maps:keys(InlineFnReg), maps:is_key(Name, ExternalFnReg)].
 
 duplicate_inline_names(FnDefs) ->
     Names = [N || #gdbsp_fn_def{name = N} <- FnDefs],

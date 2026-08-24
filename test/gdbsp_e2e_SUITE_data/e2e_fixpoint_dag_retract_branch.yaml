@@ -20,42 +20,20 @@
         result := distinct(combined)
 
     src_a := source("data_a")
-    src_a :: stream(struct("v": i64))
+    src_a :: stream(struct("v": integer))
     src_b := source("data_b")
-    src_b :: stream(struct("v": i64))
+    src_b :: stream(struct("v": integer))
+
+    gt_zero := function((row) -> row.v > 0)
+    gt_zero :: function((struct("v": integer)) -> enum("false","true"))
+    dec_fn := function((row) -> struct("v": row.v - 1))
+    dec_fn :: function((struct("v": integer)) -> struct("v": integer))
 
     fp_a := fixpoint(countdown(base: src_a, result: src_a))
     fp_b := fixpoint(countdown(base: src_b, result: src_b))
     fp_m := fixpoint(merge_two(base1: fp_a.result, base2: fp_b.result, result: fp_a.result))
 
     out_m := fp_m.result
-
-  functions:
-    gt_zero:
-      call: ">"
-      args:
-        - call: "std.struct_get"
-          args:
-            - arg: row
-          kwargs:
-            key:
-              type: string
-              value: "v"
-        - {type: "i64", value: "0"}
-    dec_fn:
-      call: "struct"
-      kwargs:
-        v:
-          call: "-"
-          args:
-            - call: "std.struct_get"
-              args:
-                - arg: row
-              kwargs:
-                key:
-                  type: string
-                  value: "v"
-            - {type: "i64", value: "1"}
 
   input:
     - data_a:

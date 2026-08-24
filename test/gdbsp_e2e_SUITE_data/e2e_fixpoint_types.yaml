@@ -126,32 +126,11 @@
     src := source("data")
     src :: stream(struct("id": i64, "val": i64))
 
+    add_status := function((row) -> struct("id": row.id, "val": row.val, "status": "active"))
+    add_status :: function((struct("id": i64, "val": i64)) -> struct("id": i64, "val": i64, "status": string("UTF-8")))
+
     fp := fixpoint(add_label(base: src, result: src))
     out := fp.result
-
-  functions:
-    add_status:
-      call: "struct"
-      kwargs:
-        id:
-          call: "std.struct_get"
-          args:
-            - arg: row
-          kwargs:
-            key:
-              type: string
-              value: "id"
-        val:
-          call: "std.struct_get"
-          args:
-            - arg: row
-          kwargs:
-            key:
-              type: string
-              value: "val"
-        status:
-          type: "string"
-          value: "active"
 
   input:
     - data:
@@ -193,29 +172,11 @@
     src := source("data")
     src :: stream(struct("a": i64, "b": string("UTF-8")))
 
+    swap := function((row) -> struct("x": row.a, "y": row.b))
+    swap :: function((struct("a": i64, "b": string("UTF-8"))) -> struct("x": i64, "y": string("UTF-8")))
+
     fp := fixpoint(rename_fields(x: src))
     out := fp.result
-
-  functions:
-    swap:
-      call: "struct"
-      kwargs:
-        x:
-          call: "std.struct_get"
-          args:
-            - arg: row
-          kwargs:
-            key:
-              type: string
-              value: "a"
-        y:
-          call: "std.struct_get"
-          args:
-            - arg: row
-          kwargs:
-            key:
-              type: string
-              value: "b"
 
   input:
     - data:

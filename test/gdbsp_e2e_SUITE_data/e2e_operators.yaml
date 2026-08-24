@@ -14,28 +14,9 @@
 - source: |
     src := source("data")
     src :: stream(struct("id": i64, "a": i64, "b": i64))
+    rename_fn := function((row) -> struct("x": row.a, "y": row.b))
+    rename_fn :: function((struct("id": i64, "a": i64, "b": i64)) -> struct("x": i64, "y": i64))
     out := map(src, rename_fn)
-
-  functions:
-    rename_fn:
-      call: "struct"
-      kwargs:
-        x:
-          call: "std.struct_get"
-          args:
-            - arg: row
-          kwargs:
-            key:
-              type: string
-              value: "a"
-        y:
-          call: "std.struct_get"
-          args:
-            - arg: row
-          kwargs:
-            key:
-              type: string
-              value: "b"
 
   input:
     - data:
@@ -51,21 +32,10 @@
 
 - source: |
     src := source("data")
-    src :: stream(struct("name": string("UTF-8"), "dept": i64, "sal": i64))
+    src :: stream(struct("name": string("UTF-8"), "dept": integer, "sal": integer))
+    salary_ge_50k := function((row) -> row.sal >= 50000)
+    salary_ge_50k :: function((struct("name": string("UTF-8"), "dept": integer, "sal": integer)) -> enum("false","true"))
     high_sal := filter(src, salary_ge_50k)
-
-  functions:
-    salary_ge_50k:
-      call: ">="
-      args:
-        - call: "std.struct_get"
-          args:
-            - arg: row
-          kwargs:
-            key:
-              type: string
-              value: "sal"
-        - {type: "i64", value: "50000"}
 
   input:
     - data:
@@ -100,18 +70,10 @@
 - source: |
     src := source("data")
     src :: stream(struct("name": string("UTF-8"), "vals": array(struct("x": i64))))
+    unnest_vals := function((row) -> row.vals)
+    unnest_vals :: function((struct("name": string("UTF-8"), "vals": array(struct("x": i64)))) -> array(struct("x": i64)))
     expanded := flat_map(src, unnest_vals)
     expanded :: stream(struct("x": i64))
-
-  functions:
-    unnest_vals:
-      call: "std.struct_get"
-      args:
-        - arg: row
-      kwargs:
-        key:
-          type: string
-          value: "vals"
 
   input:
     - data:
@@ -250,33 +212,13 @@
 
 - source: |
     src := source("data")
-    src :: stream(struct("x": i64, "y": i64))
+    src :: stream(struct("x": integer, "y": integer))
+    ge_10 := function((row) -> row.x >= 10)
+    ge_10 :: function((struct("x": integer, "y": integer)) -> enum("false","true"))
+    lt_100_on_y := function((row) -> row.y < 100)
+    lt_100_on_y :: function((struct("x": integer, "y": integer)) -> enum("false","true"))
     f1 := filter(src, ge_10)
     f2 := filter(f1, lt_100_on_y)
-
-  functions:
-    ge_10:
-      call: ">="
-      args:
-        - call: "std.struct_get"
-          args:
-            - arg: row
-          kwargs:
-            key:
-              type: string
-              value: "x"
-        - {type: "i64", value: "10"}
-    lt_100_on_y:
-      call: "<"
-      args:
-        - call: "std.struct_get"
-          args:
-            - arg: row
-          kwargs:
-            key:
-              type: string
-              value: "y"
-        - {type: "i64", value: "100"}
 
   input:
     - data:

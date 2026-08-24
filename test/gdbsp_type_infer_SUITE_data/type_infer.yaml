@@ -11,30 +11,19 @@
 - description: "filter inherits input type (std.struct_get on arg)"
   source: |
     src := source("data")
-    src :: stream(struct("x": i64, "y": i64))
+    src :: stream(struct("x": integer, "y": integer))
+    my_fn := function((row) -> row.x >= 0)
+    my_fn :: function((struct("x": integer, "y": integer)) -> enum("false","true"))
     out := filter(src, my_fn)
-  functions:
-    my_fn:
-      call: ">="
-      args:
-        - call: "std.struct_get"
-          args:
-            - arg: row
-          kwargs:
-            key:
-              type: string
-              value: "x"
-        - type: i64
-          value: "0"
   expected:
     src:
       struct:
-        x: i64
-        y: i64
+        x: integer
+        y: integer
     out:
       struct:
-        x: i64
-        y: i64
+        x: integer
+        y: integer
 
 - description: "distinct inherits input type"
   source: |
@@ -112,27 +101,9 @@
   source: |
     src := source("data")
     src :: stream(struct("id": i64, "a": i64, "b": i64))
+    rename_fn := function((row) -> struct("x": row.a, "y": row.b))
+    rename_fn :: function((struct("id": i64, "a": i64, "b": i64)) -> struct("x": i64, "y": i64))
     out := map(src, rename_fn)
-  functions:
-    rename_fn:
-      call: struct
-      kwargs:
-        x:
-          call: "std.struct_get"
-          args:
-            - arg: row
-          kwargs:
-            key:
-              type: string
-              value: "a"
-        y:
-          call: "std.struct_get"
-          args:
-            - arg: row
-          kwargs:
-            key:
-              type: string
-              value: "b"
   expected:
     src:
       struct:
@@ -148,16 +119,9 @@
   source: |
     src := source("data")
     src :: stream(struct("x": i64, "y": string("UTF-8")))
+    pick_x := function((row) -> row.x)
+    pick_x :: function((struct("x": i64, "y": string("UTF-8"))) -> i64)
     out := map(src, pick_x)
-  functions:
-    pick_x:
-      call: "std.struct_get"
-      args:
-        - arg: row
-      kwargs:
-        key:
-          type: string
-          value: "x"
   expected:
     src:
       struct:
@@ -171,10 +135,9 @@
   source: |
     src := source("data")
     src :: stream(struct("a": i64, "b": i64))
+    passthrough := function((row) -> row)
+    passthrough :: function((struct("a": i64, "b": i64)) -> struct("a": i64, "b": i64))
     out := map(src, passthrough)
-  functions:
-    passthrough:
-      arg: row
   expected:
     out:
       struct:
@@ -207,10 +170,7 @@
   source: |
     src := source("data")
     src :: stream(struct("dept": i64, "sal": i64))
-    agg := aggregate(src, sum_sal, by: ["dept"], value: "sal", as: "total")
-  functions:
-    sum_sal:
-      aggregate: "std.agg_sum_i64"
+    agg := aggregate(src, std.agg_sum_i64, by: ["dept"], value: "sal", as: "total")
   expected:
     src:
       struct:
@@ -225,10 +185,7 @@
   source: |
     src := source("data")
     src :: stream(struct("dept": i64, "x": string("UTF-8")))
-    agg := aggregate(src, cnt, by: ["dept"], value: "x", as: "cnt")
-  functions:
-    cnt:
-      aggregate: "std.agg_count"
+    agg := aggregate(src, std.agg_count, by: ["dept"], value: "x", as: "cnt")
   expected:
     src:
       struct:
@@ -244,35 +201,24 @@
 - description: "chained filter -> distinct preserves type"
   source: |
     src := source("data")
-    src :: stream(struct("x": i64, "y": i64))
+    src :: stream(struct("x": integer, "y": integer))
+    my_fn := function((row) -> row.x >= 0)
+    my_fn :: function((struct("x": integer, "y": integer)) -> enum("false","true"))
     f := filter(src, my_fn)
     out := distinct(f)
-  functions:
-    my_fn:
-      call: ">="
-      args:
-        - call: "std.struct_get"
-          args:
-            - arg: row
-          kwargs:
-            key:
-              type: string
-              value: "x"
-        - type: i64
-          value: "0"
   expected:
     src:
       struct:
-        x: i64
-        y: i64
+        x: integer
+        y: integer
     f:
       struct:
-        x: i64
-        y: i64
+        x: integer
+        y: integer
     out:
       struct:
-        x: i64
-        y: i64
+        x: integer
+        y: integer
 
 - description: "neg -> plus chain"
   source: |
@@ -329,21 +275,9 @@
   source: |
     src := source("data")
     src :: stream(struct("x": i64, "y": i64))
+    expand_fn := function((row) -> [struct("x": row.x)])
+    expand_fn :: function((struct("x": i64, "y": i64)) -> array(struct("x": i64)))
     f := flat_map(src, expand_fn)
-  functions:
-    expand_fn:
-      call: array
-      args:
-        - call: struct
-          kwargs:
-            x:
-              call: "std.struct_get"
-              args:
-                - arg: row
-              kwargs:
-                key:
-                  type: string
-                  value: "x"
   expected:
     f:
       struct:
@@ -365,21 +299,10 @@
 - description: "map with gte call infers boolean return (std.struct_get from arg)"
   source: |
     src := source("data")
-    src :: stream(struct("x": i64))
+    src :: stream(struct("x": integer))
+    is_pos := function((row) -> row.x >= 0)
+    is_pos :: function((struct("x": integer)) -> enum("false","true"))
     out := map(src, is_pos)
-  functions:
-    is_pos:
-      call: ">="
-      args:
-        - call: "std.struct_get"
-          args:
-            - arg: row
-          kwargs:
-            key:
-              type: string
-              value: "x"
-        - type: i64
-          value: "0"
   expected:
     out: boolean
 
@@ -387,18 +310,9 @@
   source: |
     src := source("data")
     src :: stream(struct("name": string("UTF-8")))
+    up := function((row) -> std.string_upper(row.name))
+    up :: function((struct("name": string("UTF-8"))) -> string("UTF-8"))
     out := map(src, up)
-  functions:
-    up:
-      call: "std.string_upper"
-      args:
-        - call: "std.struct_get"
-          args:
-            - arg: row
-          kwargs:
-            key:
-              type: string
-              value: "name"
   expected:
     out:
       string:
@@ -470,43 +384,6 @@
         a: i64
         b: i64
 
-- description: "map with type+value literal infers the literal type"
-  source: |
-    src := source("data")
-    src :: stream(struct("x": i64))
-    out := map(src, const_fn)
-  functions:
-    const_fn:
-      type: string
-      value: "hello"
-  expected:
-    out: string
-
-- description: "map with unrecognized expression shape fails"
-  source: |
-    src := source("data")
-    src :: stream(struct("x": i64, "y": i64))
-    out := map(src, unknown_shape)
-  functions:
-    unknown_shape:
-      some_unknown_key: 42
-  expected_errors:
-    - class: invalid_fn_expr
-
-- description: "map struct constructor with unrecognized sub-expr fails"
-  source: |
-    src := source("data")
-    src :: stream(struct("a": i64, "b": i64))
-    out := map(src, weird_struct)
-  functions:
-    weird_struct:
-      call: struct
-      kwargs:
-        x:
-          garbage: true
-  expected_errors:
-    - class: invalid_fn_expr
-
 - description: "flat_map with unknown function fails"
   source: |
     src := source("data")
@@ -519,19 +396,9 @@
   source: |
     src := source("data")
     src :: stream(struct("id": i64, "name": string("UTF-8")))
+    fix_name := function((row) -> std.struct_set(row, key: "name", value: "fixed"))
+    fix_name :: function((struct("id": i64, "name": string("UTF-8"))) -> struct("id": i64, "name": string("UTF-8")))
     out := map(src, fix_name)
-  functions:
-    fix_name:
-      call: "std.struct_set"
-      args:
-        - arg: row
-      kwargs:
-        key:
-          type: string
-          value: "name"
-        value:
-          type: string
-          value: "fixed"
   expected:
     out:
       struct:
@@ -544,19 +411,9 @@
   source: |
     src := source("data")
     src :: stream(struct("id": i64, "name": string("UTF-8")))
+    add_field := function((row) -> std.struct_set(row, key: "nope", value: 1))
+    add_field :: function((struct("id": i64, "name": string("UTF-8"))) -> struct("id": i64, "name": string("UTF-8")))
     out := map(src, add_field)
-  functions:
-    add_field:
-      call: "std.struct_set"
-      args:
-        - arg: row
-      kwargs:
-        key:
-          type: string
-          value: "nope"
-        value:
-          type: i64
-          value: "1"
   expected_errors:
     - class: missing_field
 
@@ -564,43 +421,11 @@
   source: |
     src := source("data")
     src :: stream(struct("id": i64, "name": string("UTF-8")))
+    fix_name := function((row) -> std.struct_set(row, key: "name", value: 1))
+    fix_name :: function((struct("id": i64, "name": string("UTF-8"))) -> struct("id": i64, "name": string("UTF-8")))
     out := map(src, fix_name)
-  functions:
-    fix_name:
-      call: "std.struct_set"
-      args:
-        - arg: row
-      kwargs:
-        key:
-          type: string
-          value: "name"
-        value:
-          type: i64
-          value: "1"
   expected_errors:
     - class: type_conflict
-
-- description: "std.struct_get with non-constant key fails"
-  source: |
-    src := source("data")
-    src :: stream(struct("key": string("UTF-8"), "a": i64, "b": i64))
-    out := map(src, get_by_key)
-  functions:
-    get_by_key:
-      call: "std.struct_get"
-      args:
-        - arg: row
-      kwargs:
-        key:
-          call: "std.struct_get"
-          args:
-            - arg: row
-          kwargs:
-            key:
-              type: string
-              value: "key"
-  expected_errors:
-    - class: non_literal_key
 
 - description: "inline std.struct_get with non-constant key fails"
   source: |

@@ -3,22 +3,13 @@
         result := filter(v, gt_zero)
 
     src := source("data")
-    src :: stream(struct("val": i64))
+    src :: stream(struct("val": integer))
+
+    gt_zero := function((row) -> row.val > 0)
+    gt_zero :: function((struct("val": integer)) -> enum("false","true"))
+
     fp := fixpoint(pass_pos(x: src))
     out := fp.result
-
-  functions:
-    gt_zero:
-      call: ">"
-      args:
-        - call: "std.struct_get"
-          args:
-            - arg: row
-          kwargs:
-            key:
-              type: string
-              value: "val"
-        - {type: "i64", value: "0"}
 
   input:
     - data:

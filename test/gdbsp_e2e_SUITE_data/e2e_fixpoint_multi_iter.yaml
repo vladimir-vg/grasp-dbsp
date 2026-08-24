@@ -6,36 +6,15 @@
         result := distinct(combined)
 
     src := source("data")
-    src :: stream(struct("v": i64))
+    src :: stream(struct("v": integer))
+
+    gt_zero := function((row) -> row.v > 0)
+    gt_zero :: function((struct("v": integer)) -> enum("false","true"))
+    dec_fn := function((row) -> struct("v": row.v - 1))
+    dec_fn :: function((struct("v": integer)) -> struct("v": integer))
+
     fp := fixpoint(countdown(base: src, result: src))
     out := fp.result
-
-  functions:
-    gt_zero:
-      call: ">"
-      args:
-        - call: "std.struct_get"
-          args:
-            - arg: row
-          kwargs:
-            key:
-              type: string
-              value: "v"
-        - {type: "i64", value: "0"}
-    dec_fn:
-      call: "struct"
-      kwargs:
-        v:
-          call: "-"
-          args:
-            - call: "std.struct_get"
-              args:
-                - arg: row
-              kwargs:
-                key:
-                  type: string
-                  value: "v"
-            - {type: "i64", value: "1"}
 
   input:
     - data:

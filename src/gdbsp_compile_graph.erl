@@ -796,7 +796,7 @@ resolve_agg_fn_name(FnName, FnReg) ->
         {ok, _} ->
             throw({compile_error, {invalid_agg_fn, FnName}});
         error ->
-            throw({compile_error, {missing_function, FnName}})
+            FnName
     end.
 
 inherit_schema([Id | _], G) -> get_schema(G, Id);

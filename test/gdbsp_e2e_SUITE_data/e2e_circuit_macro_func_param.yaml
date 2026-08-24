@@ -5,26 +5,13 @@
         mapped := map(val, fn)
 
     src := source("data")
-    src :: stream(struct("v": i64))
+    src :: stream(struct("v": integer))
+
+    dec_fn := function((row) -> struct("v": row.v - 1))
+    dec_fn :: function((struct("v": integer)) -> struct("v": integer))
 
     t := transform(i: src, f: dec_fn)
     out := t.mapped
-
-  functions:
-    dec_fn:
-      call: "struct"
-      kwargs:
-        v:
-          call: "-"
-          args:
-            - call: "std.struct_get"
-              args:
-                - arg: row
-              kwargs:
-                key:
-                  type: string
-                  value: "v"
-            - {type: i64, value: "1"}
 
   input:
     - data:

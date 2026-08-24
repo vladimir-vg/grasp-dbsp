@@ -8,21 +8,11 @@
     src := source("data")
     src :: stream(struct("v": i64))
 
+    identity := function((row) -> struct("v": row.v))
+    identity :: function((struct("v": i64)) -> struct("v": i64))
+
     n := normalize(s: src)
     out := n.deduped
-
-  functions:
-    identity:
-      call: "struct"
-      kwargs:
-        v:
-          call: "std.struct_get"
-          args:
-            - arg: row
-          kwargs:
-            key:
-              type: string
-              value: "v"
 
   input:
     - data:
