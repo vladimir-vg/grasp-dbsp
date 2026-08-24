@@ -48,12 +48,10 @@ before the lowering stage runs:
    calls. Dot access, array/map literals, and subscripts are desugared to
    their runtime equivalents.
 
-3. **JSON-encode** the lowered expression tree and insert it into the function
-   registry. If an external function registry was supplied, inline definitions
-   override external ones. Typespec-only functions (no `:= function(...)` line)
-   use the external body as before.
+3. **JSON-encode** the lowered expression tree and insert it into the inline
+   function registry, keyed by the function name.
 
-This happens before the lowering stage so that the merged function registry
+This happens before the lowering stage so that the inline function registry
 is available for type inference.
 
 ---
@@ -88,12 +86,16 @@ least one parameter maps to a body node, creating a feedback loop).
   construction stage to create `rec` / `rec_output` operators with proper
   iteration barriers. Self-referential nodes must be wrapped in `distinct`.
 
-### 3.3 Circuit Access Resolution
+### 3.3 Member Access Resolution
 
-Dot-notation access (`fp.output`) to fixpoint results is resolved by
-looking up the prefixed tag in the lowered graph's tag map. The access
-produces a `plus` node that wires the resolved body output to the
-consumer.
+Dot-notation access (`target.member`) resolves either a module member or a
+circuit-instance output:
+
+- **Module members** (`std.agg_sum_i64`, and future `std.*` circuits) are
+  resolved to a qualified name looked up in the stdlib.
+- **Circuit-instance outputs** (`fp.output`) are resolved by looking up the
+  prefixed tag in the lowered graph's tag map; the access produces a `plus`
+  node that wires the resolved body output to the consumer.
 
 ### 3.4 Body Validation
 
@@ -188,11 +190,9 @@ IDs after all nodes are placed. References to nodes not yet defined
 ### 5.7 Function Resolution
 
 Operators that reference functions (`map`, `filter`, `flat_map`,
-`aggregate`) look up the function name in the **function registry**
-(see [stdlib.md](stdlib.md) §4). The registry merges inline function
-definitions (compiled from `.gdbsp` source) with externally-provided
-JSON bodies. A missing function is a compile error:
-`missing_function`.
+`aggregate`) resolve the function name against the inline function registry
+first, then against the stdlib (see [stdlib.md](stdlib.md) §4). A missing
+function is a compile error: `missing_function`.
 
 ---
 

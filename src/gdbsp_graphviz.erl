@@ -188,7 +188,7 @@ lowered_node_color(antijoin) -> "lightsteelblue";
 lowered_node_color(project) -> "lightgrey";
 lowered_node_color(fixpoint_input) -> "lightblue";
 lowered_node_color(fixpoint_output) -> "lightsalmon";
-lowered_node_color(circuit_access) -> "lightcyan";
+lowered_node_color(member_access) -> "lightcyan";
 lowered_node_color(_) -> "white".
 
 %%--------------------------------------------------------------------

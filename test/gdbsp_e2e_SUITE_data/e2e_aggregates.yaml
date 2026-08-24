@@ -1,7 +1,7 @@
 - source: |
     src := source("data")
     src :: stream(struct("dept": i64, "sal": i64))
-    agg := aggregate(src, std.agg_sum_i64, by: ["dept"], value: "sal", as: "total")
+    agg := aggregate(src, std.agg_sum_integer, by: ["dept"], value: "sal", as: "total")
 
   input:
     - data:
@@ -33,7 +33,7 @@
 - source: |
     src := source("data")
     src :: stream(struct("dept": i64, "sal": i64))
-    agg := aggregate(src, std.agg_sum_i64, by: ["dept"], value: "sal", as: "total")
+    agg := aggregate(src, std.agg_sum_integer, by: ["dept"], value: "sal", as: "total")
 
   input:
     - data:
@@ -53,7 +53,7 @@
 - source: |
     src := source("data")
     src :: stream(struct("dept": i64, "city": string("UTF-8"), "sal": i64))
-    agg := aggregate(src, std.agg_sum_i64, by: ["dept", "city"], value: "sal", as: "total")
+    agg := aggregate(src, std.agg_sum_integer, by: ["dept", "city"], value: "sal", as: "total")
 
   input:
     - data:

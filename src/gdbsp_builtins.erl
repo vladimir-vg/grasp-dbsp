@@ -12,7 +12,7 @@
 -export([operand_types/1, is_valid_operand/2, concrete_fn/3]).
 -export([unify_types/3, fn_impl/1, agg_impl/1]).
 -export([exact_match/2]).
--export([load_stdlib/0, build_stdlib_map/1, build_kwarg_order/1]).
+-export([load_stdlib/0, build_stdlib_map/1, build_kwarg_order/1, module_members/1]).
 
 -include("gdbsp_type.hrl").
 -include("gdbsp_parse.hrl").
@@ -79,6 +79,26 @@ build_stdlib_map(Typespecs) ->
             Existing = maps:get(N, Acc, []),
             Acc#{N => [TS | Existing]}
         end, #{}, Typespecs).
+
+%% Derive the module registry from the stdlib: `#{Module => #{MemberName => kind}}`
+%% where kind ∈ function | aggregate_function. All stdlib names are `std.*`, so
+%% `std` is the only module for now (circuits as module members are future work).
+-spec module_members(stdlib_map()) -> #{binary() => #{binary() => atom()}}.
+module_members(StdlibMap) ->
+    maps:fold(
+        fun(Name, TSpecs, Acc) ->
+            case binary:split(Name, <<".">>) of
+                [Module, Member] ->
+                    Kind = case TSpecs of
+                        [#gdbsp_typespec{spec = {K, _, _, _}} | _] -> K;
+                        [] -> function
+                    end,
+                    Members = maps:get(Module, Acc, #{}),
+                    Acc#{Module => Members#{Member => Kind}};
+                _ ->
+                    Acc
+            end
+        end, #{}, StdlibMap).
 
 %% Derive `#{Name => [KwNames]}` for functions whose declared kwarg order is
 %% unambiguous (a single distinct non-empty kwarg-name set). Overloaded names
@@ -682,6 +702,7 @@ fn_impl(_) -> {error, unknown_impl}.
           {module(), atom(), arity()},
           {module(), atom(), arity()}}} | {error, term()}.
 agg_impl(<<"std.agg_sum_i64">>)      -> {ok, mfa_triple(gdbsp_agg, agg_op_sum)};
+agg_impl(<<"std.agg_sum_integer">>)  -> {ok, mfa_triple(gdbsp_agg, agg_op_sum)};
 agg_impl(<<"std.agg_sum_numeric">>)  -> {ok, mfa_triple(gdbsp_agg, agg_op_sum)};
 agg_impl(<<"std.agg_sum_f64">>)      -> {ok, mfa_triple(gdbsp_agg, agg_op_sum)};
 agg_impl(<<"std.agg_count">>)         -> {ok, mfa_triple(gdbsp_agg, agg_op_count)};
@@ -689,9 +710,11 @@ agg_impl(<<"std.agg_avg_i64">>)      -> {ok, mfa_triple(gdbsp_agg, agg_op_sum)};
 agg_impl(<<"std.agg_avg_numeric">>)  -> {ok, mfa_triple(gdbsp_agg, agg_op_sum)};
 agg_impl(<<"std.agg_avg_f64">>)      -> {ok, mfa_triple(gdbsp_agg, agg_op_sum)};
 agg_impl(<<"std.agg_min_i64">>)      -> {ok, mfa_triple(gdbsp_agg, agg_op_min)};
+agg_impl(<<"std.agg_min_integer">>)  -> {ok, mfa_triple(gdbsp_agg, agg_op_min)};
 agg_impl(<<"std.agg_min_numeric">>)  -> {ok, mfa_triple(gdbsp_agg, agg_op_min)};
 agg_impl(<<"std.agg_min_f64">>)      -> {ok, mfa_triple(gdbsp_agg, agg_op_min)};
 agg_impl(<<"std.agg_max_i64">>)      -> {ok, mfa_triple(gdbsp_agg, agg_op_max)};
+agg_impl(<<"std.agg_max_integer">>)  -> {ok, mfa_triple(gdbsp_agg, agg_op_max)};
 agg_impl(<<"std.agg_max_numeric">>)  -> {ok, mfa_triple(gdbsp_agg, agg_op_max)};
 agg_impl(<<"std.agg_max_f64">>)      -> {ok, mfa_triple(gdbsp_agg, agg_op_max)};
 agg_impl(<<"std.agg_xor_bytes">>)    -> {ok, mfa_triple(gdbsp_agg, agg_op_xor)};

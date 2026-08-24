@@ -8,15 +8,10 @@ Status: current
 ## 1. Expression JSON Format
 
 Function bodies for `map`, `filter`, and `flat_map` operators are defined
-as JSON expression trees. Bodies can be authored in two ways:
-
-- **Inline** in `.gdbsp` source using Grasp expression syntax (see
-  [grasp-dbsp.md](grasp-dbsp.md) and [syntax.md](syntax.md) §6). The compiler
-  desugars and lowers inline expressions to the JSON format described here.
-- **Externally** via the function registry (see §4), as JSON objects.
-
-The runtime sees no difference between the two — all function bodies are
-JSON expression trees by the time they reach the circuit graph.
+as JSON expression trees. Bodies are authored **inline** in `.gdbsp` source
+using Grasp expression syntax (see [grasp-dbsp.md](grasp-dbsp.md) and
+[syntax.md](syntax.md) §6). The compiler desugars and lowers inline expressions
+to the JSON format described here, which is the runtime representation.
 
 An expression tree is a recursive JSON structure. Each node is a JSON
 object identified by a unique **discriminator key**.
@@ -106,8 +101,8 @@ name (`+`, `>`, `and`, …) and then resolved to a concrete stdlib function
 ### 1.5 Aggregate Node
 
 An aggregate function call. Same structure as call but uses the
-`"aggregate"` discriminator. Used when registering aggregate functions
-in the function registry.
+`"aggregate"` discriminator. Used for the internal representation of
+aggregate references.
 
 ```json
 {"aggregate": "std.agg_sum_i64", "args": [{"field": "amount"}]}
@@ -480,24 +475,19 @@ inferred from the field types.
 
 ## 4. Function Registry
 
-Functions and aggregates are registered externally and referenced by
-bare identifier in `.gdbsp` source. The registry is a map from function
-name to definition.
+Functions are authored inline in `.gdbsp` source (`fn := function(...)`) and
+referenced by bare identifier in `map` / `filter` / `flat_map` operators. The
+registry is a map from function name to the compiled (JSON-encoded) expression
+body, produced by the compiler from inline definitions.
 
 ### 4.1 Regular Functions
 
-Regular functions used by `map`, `filter`, and `flat_map` may be registered
-in two ways:
+Regular functions used by `map`, `filter`, and `flat_map` are authored inline
+in `.gdbsp` source using Grasp expression syntax (see
+[grasp-dbsp.md](grasp-dbsp.md)). The compiler lowers the inline expression to
+the JSON expression format below, which is also the runtime representation.
 
-- **Inline** — the function body is authored in `.gdbsp` source using
-  Grasp expression syntax (see [grasp-dbsp.md](grasp-dbsp.md)). The compiler
-  lowers the inline expression to the JSON format below.
-- **Externally** — the function body is provided as a JSON expression tree
-  in the function registry.
-
-Inline definitions override external ones when both exist for the same name.
-
-Example — external JSON registry entry:
+Example — lowered JSON body:
 
 ```json
 {
@@ -514,8 +504,9 @@ Example — external JSON registry entry:
 ```
 
 The expression tree follows the format in §1. When a function name is
-referenced in a `map`, `filter`, or `flat_map` operator, the runtime
-looks it up in the registry.
+referenced in a `map`, `filter`, or `flat_map` operator, the compiler looks
+up the name in the inline function registry, falling back to a stdlib scalar
+function for `std.*` names.
 
 Struct constructor functions use the `call` node with `"struct"`:
 
@@ -554,25 +545,12 @@ stream's element type is that `struct(...)`.
 
 ### 4.2 Aggregate Functions
 
-Aggregate functions are registered with the `"aggregate"` discriminator
-pointing to a built-in aggregate name:
+Aggregate functions are referenced directly by their stdlib name in the
+`aggregate` operator:
 
-```json
-{
-    "sum_sal": {
-        "aggregate": "std.agg_sum_i64"
-    }
-}
+```
+agg := aggregate(src, std.agg_sum_i64, by: ["dept"], value: "sal", as: "total")
 ```
 
-```json
-{
-    "cnt": {
-        "aggregate": "std.agg_count"
-    }
-}
-```
-
-The `"aggregate"` key maps the declared name (used in `.gdbsp` source) to
-the internal aggregate implementation. Built-in aggregate names are listed
-in §3.1.
+Built-in aggregate names are listed in §2 (e.g. `std.agg_sum_integer`,
+`std.agg_count`, `std.agg_avg_f64`).

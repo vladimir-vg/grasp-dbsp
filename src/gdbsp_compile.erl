@@ -37,7 +37,8 @@ compile_with_names(Program, Options) ->
             try
                 {ok, StdlibMap} = gdbsp_builtins:load_stdlib(),
                 KwargOrder = gdbsp_builtins:build_kwarg_order(StdlibMap),
-                case gdbsp_compile_graph:build_from_lowered(Lowered, FnReg, FnParams, KwargOrder) of
+                case gdbsp_compile_graph:build_from_lowered(Lowered, FnReg, FnParams,
+                                                            KwargOrder, StdlibMap) of
                     {ok, Graph, NameToId} ->
                         Graph2 = case Incr of
                             true  -> gdbsp_compile_incremental:run(Graph);
@@ -64,7 +65,8 @@ infer(Program) ->
             StdlibMap,
             gdbsp_compile_expr:inline_sig_map(Program#gdbsp_program.typespecs)),
         TSMap = build_ts_map(Program#gdbsp_program.typespecs),
-        case gdbsp_compile_lower:run(Program, #{}) of
+        case gdbsp_compile_lower:run(Program, #{},
+                                     gdbsp_builtins:module_members(StdlibMap)) of
             {ok, Lowered0} ->
                 case gdbsp_type_infer:infer_lowered(Lowered0, TSMap, InlineFnReg, FnParams, CallableMap) of
                     {ok, Lowered} -> {ok, Lowered, InlineFnReg, FnParams};

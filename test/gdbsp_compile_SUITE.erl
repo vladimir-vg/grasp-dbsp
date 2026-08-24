@@ -102,7 +102,7 @@ aggregate(_Config) ->
     {ok, Prog} = parse_prog(
         "emp_src := source(\"emp\")\n"
         "emp_src :: stream(struct(\"dept\": i64, \"sal\": i64))\n"
-        "agg := aggregate(emp_src, std.agg_sum_i64, by: [\"dept\"], value: \"sal\", as: \"total\")\n"
+        "agg := aggregate(emp_src, std.agg_sum_integer, by: [\"dept\"], value: \"sal\", as: \"total\")\n"
     ),
     {ok, G} = gdbsp_compile:compile(Prog, #{incrementalize => false}),
     Nodes = maps:to_list(G#circuit_graph.nodes),
@@ -273,6 +273,12 @@ stdlib_agg_overloads(_Config) ->
         fun(#gdbsp_typespec{spec = {aggregate_function, [i64], #{}, i64}}) -> true;
            (_) -> false
         end, TSListI64),
+    TSListInteger = maps:get(<<"std.agg_sum_integer">>, StdlibMap),
+    true = (length(TSListInteger) >= 1),
+    true = lists:any(
+        fun(#gdbsp_typespec{spec = {aggregate_function, [integer], #{}, integer}}) -> true;
+           (_) -> false
+        end, TSListInteger),
     TSListNumeric = maps:get(<<"std.agg_sum_numeric">>, StdlibMap),
     true = (length(TSListNumeric) >= 1),
     true = lists:any(

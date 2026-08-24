@@ -6,13 +6,13 @@
 %%% Handles:
 %%%   - Node deduplication (content-addressing via sorted inputs)
 %%%   - Fixpoint circuit expansion (trivial → inline; self-ref → boundary markers)
-%%%   - circuit_access resolution (dot notation)
+%%%   - member_access resolution (dot notation)
 %%%   - Fixpoint body operator validation
 %%% @end
 %%%-------------------------------------------------------------------
 -module(gdbsp_compile_lower).
 
--export([run/2]).
+-export([run/3]).
 
 -include("gdbsp_parse.hrl").
 -include("gdbsp_lowered.hrl").
@@ -24,9 +24,10 @@
 %% Public API
 %%====================================================================
 
--spec run(#gdbsp_program{}, #{binary() => gdbsp_column_type()}) ->
+-spec run(#gdbsp_program{}, #{binary() => gdbsp_column_type()},
+          #{binary() => #{binary() => atom()}}) ->
     {ok, #lowered_graph{}} | {error, term()}.
-run(Prog, TypeMap) ->
+run(Prog, TypeMap, ModuleEnv) ->
     try
         #gdbsp_program{nodes = Nodes, typespecs = TSs, circuits = Circuits} = Prog,
         ok = validate_circuit_bodies(Circuits),
@@ -35,7 +36,7 @@ run(Prog, TypeMap) ->
             {ok, NameTable} ->
                 case topo_sort(NameTable) of
                     {ok, Order} ->
-                        {ok, lower_nodes(NameTable, Order, CircuitMap, new_lg())};
+                        {ok, lower_nodes(NameTable, Order, CircuitMap, ModuleEnv, new_lg())};
                     {error, _} = Err -> Err
                 end;
             {error, _} = Err -> Err
@@ -140,11 +141,11 @@ node_refs_from_args(Args, NameTable) ->
     lists:filtermap(fun
         ({var, Name}) when is_binary(Name) ->
             case maps:is_key(Name, NameTable) of true -> {true, Name}; false -> false end;
-        ({circuit_access, Var, _Field}) when is_binary(Var) ->
+        ({member_access, Var, _Field}) when is_binary(Var) ->
             case maps:is_key(Var, NameTable) of true -> {true, Var}; false -> false end;
         ({_Kw, {var, Name}}) when is_binary(Name) ->
             case maps:is_key(Name, NameTable) of true -> {true, Name}; false -> false end;
-        ({_Kw, {circuit_access, Var, _Field}}) ->
+        ({_Kw, {member_access, Var, _Field}}) ->
             case maps:is_key(Var, NameTable) of true -> {true, Var}; false -> false end;
         (_) -> false
     end, Args).
@@ -176,10 +177,10 @@ topo_loop(Queue, InDeg, Consumers, NameTable, Acc) ->
 
 new_lg() -> #lowered_graph{}.
 
-lower_nodes(NameTable, Order, CircuitMap, LG0) ->
-    lower_nodes(NameTable, Order, CircuitMap, LG0, []).
+lower_nodes(NameTable, Order, CircuitMap, ModuleEnv, LG0) ->
+    lower_nodes(NameTable, Order, CircuitMap, ModuleEnv, LG0, []).
 
-lower_nodes(NameTable, Order, CircuitMap, LG0, ExpansionStack) ->
+lower_nodes(NameTable, Order, CircuitMap, ModuleEnv, LG0, ExpansionStack) ->
     lists:foldl(
         fun(Name, LG) ->
             Info = maps:get(Name, NameTable),
@@ -187,12 +188,12 @@ lower_nodes(NameTable, Order, CircuitMap, LG0, ExpansionStack) ->
                 fixpoint ->
                     expand_fixpoint(Name, Info, CircuitMap, LG, NameTable,
                                     ExpansionStack);
-                circuit_access ->
-                    resolve_circuit_access(Name, Info, LG);
+                member_access ->
+                    resolve_member_access(Name, Info, LG);
                 circuit_call ->
                     expand_circuit_call(Name, Info, CircuitMap, LG, ExpansionStack);
                 _ ->
-                    lower_regular_node(Name, Info, LG)
+                    lower_regular_node(Name, Info, ModuleEnv, LG)
             end
         end,
         LG0,
@@ -202,17 +203,18 @@ lower_nodes(NameTable, Order, CircuitMap, LG0, ExpansionStack) ->
 %% Regular node lowering
 %%--------------------------------------------------------------------
 
-lower_regular_node(Name, Info, LG) ->
-    #node_info{op = Op, args = Args, typespec = TS} = Info,
-    Inputs = resolve_inputs(Args, LG#lowered_graph.tag_map),
-    {NewLG, _NodeId} = add_node(Op, Inputs, Args, [Name], TS, LG),
+lower_regular_node(Name, Info, ModuleEnv, LG) ->
+    #node_info{op = Op, args = Args, typespec = TS, line = Line} = Info,
+    Args2 = resolve_module_members(Args, ModuleEnv, Line),
+    Inputs = resolve_inputs(Args2, LG#lowered_graph.tag_map),
+    {NewLG, _NodeId} = add_node(Op, Inputs, Args2, [Name], TS, LG),
     NewLG.
 
 %%--------------------------------------------------------------------
-%% circuit_access resolution
+%% member_access resolution
 %%--------------------------------------------------------------------
 
-resolve_circuit_access(Name, Info, LG) ->
+resolve_member_access(Name, Info, LG) ->
     #node_info{args = Args, typespec = TS} = Info,
     case Args of
         [{var, Var}, {var, Field}] ->
@@ -228,7 +230,37 @@ resolve_circuit_access(Name, Info, LG) ->
             end;
         _ ->
             throw_lower_error(Info#node_info.line,
-                "invalid circuit_access args")
+                "invalid member_access args")
+    end.
+
+%%--------------------------------------------------------------------
+%% Module member resolution
+%%--------------------------------------------------------------------
+
+%% Rewrite `{member_access, Mod, Member}` args that target a module into
+%% `{var, <<Mod, ".", Member>>}`. Non-module targets are left untouched so
+%% they continue to resolve as circuit-instance output operators.
+resolve_module_members(Args, ModuleEnv, Line) ->
+    lists:map(
+        fun({member_access, Mod, Member}) ->
+                resolve_module_member(Mod, Member, ModuleEnv, Line);
+           ({Kw, {member_access, Mod, Member}}) ->
+                {Kw, resolve_module_member(Mod, Member, ModuleEnv, Line)};
+           (Other) -> Other
+        end, Args).
+
+resolve_module_member(Mod, Member, ModuleEnv, Line) ->
+    case maps:find(Mod, ModuleEnv) of
+        {ok, Members} ->
+            case maps:is_key(Member, Members) of
+                true -> {var, <<Mod/binary, ".", Member/binary>>};
+                false ->
+                    throw_lower_error(Line,
+                        io_lib:format("unknown member ~s in module ~s",
+                                      [Member, Mod]))
+            end;
+        error ->
+            {member_access, Mod, Member}
     end.
 
 %%--------------------------------------------------------------------
@@ -304,8 +336,8 @@ expand_trivial(FpName, BodyNodes, Params, KwMap, CircuitMap,
                         InternalToArg, CircuitMap, _ExpansionStack,
                         <<BodyName/binary, ".">>, _Line, LG),
                     NewLG;
-                circuit_access ->
-                    resolve_fp_body_circuit_access(BodyName, BodyArgs,
+                member_access ->
+                    resolve_fp_body_member_access(BodyName, BodyArgs,
                         <<BodyName/binary, ".">>, LG);
                 _ ->
                     Tag = <<Prefix/binary, BodyName/binary>>,
@@ -352,8 +384,8 @@ expand_selfref(_FpName, NodeName, CircuitName, Params, BodyNodes,
                         BN, BArgs, InternalNameMap, CircuitMap, _ExpansionStack,
                         <<BN/binary, ".">>, Line, LG),
                     {NewLG, BIds};
-                circuit_access ->
-                    {NewLG, NodeId} = resolve_fp_body_circuit_access(
+                member_access ->
+                    {NewLG, NodeId} = resolve_fp_body_member_access(
                         BN, BArgs, <<BN/binary, ".">>, LG),
                     {NewLG, BIds#{BN => NodeId}};
                 _ ->
@@ -410,7 +442,7 @@ create_fixpoint_inputs(Params, KwMap, FpHmac, LG, Line) ->
                 {ok, {var, ExtName}} ->
                     resolve_fixpoint_input(ExtName, KwBin, FpHmac, Internal,
                                            LGAcc, AccById, Line);
-                {ok, {circuit_access, Var, Field}} ->
+                {ok, {member_access, Var, Field}} ->
                     ExtName = <<Var/binary, ".", Field/binary>>,
                     resolve_fixpoint_input(ExtName, KwBin, FpHmac, Internal,
                                            LGAcc, AccById, Line);
@@ -551,7 +583,7 @@ expand_body_nodes([#gdbsp_node_def{name = BodyName, op = BodyOp,
                                       NestedToArg, NestedPrefix, NestedStack,
                                       CircuitMap, Line, LG0)
             end;
-        circuit_access ->
+        member_access ->
             %% Resolve directly: look up Var.Field tag, create plus alias
             case SubstArgs of
                 [{var, Var}, {var, Field}] ->
@@ -569,7 +601,7 @@ expand_body_nodes([#gdbsp_node_def{name = BodyName, op = BodyOp,
                                                [Var, Field]))
                     end;
                 _ ->
-                    throw_lower_error(Line, "invalid circuit_access in circuit body")
+                    throw_lower_error(Line, "invalid member_access in circuit body")
             end;
         fixpoint ->
             Info = #node_info{
@@ -591,7 +623,7 @@ expand_body_nodes([#gdbsp_node_def{name = BodyName, op = BodyOp,
                       CircuitMap, Line, LG1).
 
 %%--------------------------------------------------------------------
-%% Fixpoint body circuit_call / circuit_access expansion
+%% Fixpoint body circuit_call / member_access expansion
 %%--------------------------------------------------------------------
 
 expand_fp_body_circuit_call(_BN, BArgs, SubMap, CircuitMap, Stack0,
@@ -617,7 +649,7 @@ expand_fp_body_circuit_call(_BN, BArgs, SubMap, CircuitMap, Stack0,
                               CircuitMap, Line, LG)
     end.
 
-resolve_fp_body_circuit_access(BN, BArgs, Prefix, LG) ->
+resolve_fp_body_member_access(BN, BArgs, Prefix, LG) ->
     case BArgs of
         [{var, Var}, {var, Field}] ->
             AccessTag = <<Prefix/binary, Var/binary, ".", Field/binary>>,
@@ -634,7 +666,7 @@ resolve_fp_body_circuit_access(BN, BArgs, Prefix, LG) ->
                                        [Var, Field]))
             end;
         _ ->
-            throw_lower_error(-1, "invalid circuit_access in fixpoint body")
+            throw_lower_error(-1, "invalid member_access in fixpoint body")
     end.
 
 validate_circuit_args(Params, KwMap, CircuitName, Line) ->
@@ -754,7 +786,7 @@ resolve_inputs(Args, TagMap) ->
                 {ok, Id} -> {true, Id};
                 error -> false
             end;
-        ({circuit_access, Var, Field}) ->
+        ({member_access, Var, Field}) ->
             Tag = <<Var/binary, ".", Field/binary>>,
             case maps:find(Tag, TagMap) of
                 {ok, Id} -> {true, Id};
@@ -765,7 +797,7 @@ resolve_inputs(Args, TagMap) ->
                 {ok, Id} -> {true, Id};
                 error -> false
             end;
-        ({_Kw, {circuit_access, Var, Field}}) ->
+        ({_Kw, {member_access, Var, Field}}) ->
             Tag = <<Var/binary, ".", Field/binary>>,
             case maps:find(Tag, TagMap) of
                 {ok, Id} -> {true, Id};
@@ -778,7 +810,7 @@ nonnode_args_for_hash(Args, TagMap) ->
     lists:filter(fun
         ({var, Name}) ->
             not maps:is_key(Name, TagMap);
-        ({circuit_access, Var, Field}) ->
+        ({member_access, Var, Field}) ->
             Tag = <<Var/binary, ".", Field/binary>>,
             not maps:is_key(Tag, TagMap);
         ({_Kw, {var, _Name}}) -> false;
@@ -864,22 +896,22 @@ substitute_params(Args, SubMap) ->
                 {ok, Replacement} -> Replacement;
                 error -> {var, Name}
             end;
-           ({circuit_access, Var, Field}) ->
+           ({member_access, Var, Field}) ->
             Tag = <<Var/binary, ".", Field/binary>>,
             case maps:find(Tag, SubMap) of
                 {ok, Replacement} -> Replacement;
-                error -> {circuit_access, Var, Field}
+                error -> {member_access, Var, Field}
             end;
            ({Kw, {var, Name}}) ->
             case maps:find(Name, SubMap) of
                 {ok, Replacement} -> {Kw, Replacement};
                 error -> {Kw, {var, Name}}
             end;
-           ({Kw, {circuit_access, Var, Field}}) ->
+           ({Kw, {member_access, Var, Field}}) ->
             Tag = <<Var/binary, ".", Field/binary>>,
             case maps:find(Tag, SubMap) of
                 {ok, Replacement} -> {Kw, Replacement};
-                error -> {Kw, {circuit_access, Var, Field}}
+                error -> {Kw, {member_access, Var, Field}}
             end;
            (Other) -> Other
         end,
@@ -890,11 +922,11 @@ substitute_param_val({var, Name}, SubMap) ->
         {ok, Replacement} -> Replacement;
         error -> {var, Name}
     end;
-substitute_param_val({circuit_access, Var, Field}, SubMap) ->
+substitute_param_val({member_access, Var, Field}, SubMap) ->
     Tag = <<Var/binary, ".", Field/binary>>,
     case maps:find(Tag, SubMap) of
         {ok, Replacement} -> Replacement;
-        error -> {circuit_access, Var, Field}
+        error -> {member_access, Var, Field}
     end;
 substitute_param_val(Other, _SubMap) -> Other.
 

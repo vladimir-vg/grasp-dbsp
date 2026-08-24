@@ -187,8 +187,9 @@ the function definition — they come exclusively from the matching `.gdbsp`
 typespec. The body `expr` is a full expression (see §6).
 
 A function must have a matching `:: function(...)` typespec. The typespec
-and definition may appear in any order. A typespec without a definition
-is allowed — the body is sourced from the external JSON function registry.
+and definition may appear in any order. A typespec without a definition is
+a signature-only declaration (available for type inference, but with no
+runtime body).
 
 ### 5.1 Parameter Shorthand
 
@@ -229,10 +230,9 @@ add := function((x, y, d:, e:) -> x + y + d + e)
 
 Type variables in function typespecs (uppercase identifiers like `T`, `K`, `V`)
 are resolved at the call site by unification. Inline function bodies currently
-require **exact (concrete) types** in the typespec — generic functions with type
-variables in the typespec must use externally-provided JSON bodies. Type-variable
-unification is implemented (`gdbsp_builtins:unify_types/3`) and used for
-operator/overload resolution, but it is not applied to inline function bodies.
+require **exact (concrete) types** in the typespec. Type-variable unification is
+implemented (`gdbsp_builtins:unify_types/3`) and used for operator/overload
+resolution, but it is not applied to inline function bodies.
 
 ---
 

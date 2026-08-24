@@ -22,7 +22,7 @@ repeat identically (no-op); a conflicting repeat is an error.
 - Node definitions: `name := operator(args...)`
 - Type annotations: `name :: stream(type)` (mandatory for all source nodes)
 - Function declarations: `fn :: function((params) -> ret)`
-- Function definitions: `fn := function((params) -> body_expr)` (optional — body may also be provided externally via the function registry)
+- Function definitions: `fn := function((params) -> body_expr)`
 - Aggregate function declarations: `fn :: aggregate_function((val) -> ret)`
 - Circuit definitions: `circuit name(key: internal, ...): ...` (see [circuits.md](circuits.md))
 - Fixpoint instantiation: `fp := fixpoint(name(key: expr, ...))` (see [fixpoint-circuits.md](fixpoint-circuits.md))
@@ -90,7 +90,7 @@ through the circuit.
 | 5 | `distinct` | `node` | Collapse opposite-weight pairs within a batch. |
 | 6 | `plus` | `node, node, ...` | Merge N streams by summing weights of identical rows. |
 | 7 | `neg` | `node` | Invert weight sign (+1 ↔ −1). |
-| 8 | `map` | `node, fn` | 1→1 row transform via external function. |
+| 8 | `map` | `node, fn` | 1→1 row transform via a function. |
 | 9 | `flat_map` | `node, fn` | 1→N row expansion. Function returns `array(row)`. |
 | 10 | `join` | `left, right, on: ["f1", ...]` | Equi-join. Key fields must have the same name on both sides. Non-key fields are merged flat into the output. |
 | 11 | `aggregate` | `node, fn, by: ["g1", ...], value: "v", as: "r"` | Group by `by` fields, fold `value` field via `fn`, name result `as` in output. |
@@ -175,18 +175,17 @@ boolean logic, function calls, struct construction, array/map literals, dot
 access, and subscripts. See [syntax.md](syntax.md) §6 for the full expression
 grammar.
 
-The typespec and definition may appear in any order. If a typespec has no
-matching `:= function(...)` definition, the function body is sourced from the
-external JSON function registry (see [stdlib.md](stdlib.md) §4). If both an
-inline definition and an external body exist, the inline definition wins.
+The typespec and definition may appear in any order. A typespec with no
+matching `:= function(...)` definition is a signature-only declaration: it is
+available for type inference of other function bodies but has no runtime body,
+so it cannot be used as a `map` / `filter` / `flat_map` function.
 
 Aggregate expressions (`count<>`, `sum<col>`) and closure expressions
 (`closure(...)`) are not allowed in regular function bodies — they are reserved
 for aggregate functions and future work respectively.
 
 Inline function bodies currently require **exact (concrete) types** in the
-typespec. Generic functions with type variables must use externally-provided
-JSON bodies. Type-variable unification is implemented
+typespec. Type-variable unification is implemented
 (`gdbsp_builtins:unify_types/3`) and used for operator/overload resolution,
 but it is not applied to inline function bodies.
 
@@ -200,7 +199,7 @@ but it is not applied to inline function bodies.
 
 ### Examples
 
-Typespec-only (body from external registry):
+Typespec-only (signature-only, no inline body):
 
 ```
 passthrough :: function((struct("from": i64, "to": i64)) -> struct("from": i64, "to": i64))
@@ -226,7 +225,7 @@ fn_name :: aggregate_function((pos_type, ..., "key": kw_type, ...) -> result_typ
 
 Used with `aggregate`. The `value_type` is the type of the `value:` field in the
 aggregate input struct. The runtime resolves the declared name to a built-in
-aggregate via the function registry (see [stdlib.md](stdlib.md) §4.2).
+stdlib aggregate (see [stdlib.md](stdlib.md) §4.2).
 
 Examples:
 

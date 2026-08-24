@@ -8,7 +8,7 @@
 %%%-------------------------------------------------------------------
 -module(gdbsp_compile_graph).
 
--export([build_from_lowered/4]).
+-export([build_from_lowered/5]).
 
 -include("gdbsp_circuit.hrl").
 -include("gdbsp_lowered.hrl").
@@ -22,15 +22,18 @@
 -type fn_params() :: #{binary() => #{pos := [binary()], kw := [{binary(), binary()}]}}.
 -type kwarg_order() :: #{binary() => [binary()]}.
 
--spec build_from_lowered(#lowered_graph{}, fn_registry(), fn_params(), kwarg_order()) ->
+-spec build_from_lowered(#lowered_graph{}, fn_registry(), fn_params(), kwarg_order(),
+                         gdbsp_builtins:stdlib_map()) ->
     {ok, #circuit_graph{}, #{binary() => node_id()}} | {error, term()}.
 build_from_lowered(#lowered_graph{nodes = LNodes, tag_map = TagMap,
-                                  fixpoints = Fixpoints}, FnReg, FnParams, KwargOrder) ->
+                                  fixpoints = Fixpoints}, FnReg, FnParams, KwargOrder,
+                   StdlibMap) ->
     NodeList = maps:to_list(LNodes),
     case lowered_topo_sort(NodeList) of
         {ok, Order} ->
             {Graph0, LnIdMap, CircuitFixpointInputs, CircuitFixpointOutputs} =
-                construct_from_lowered(NodeList, Order, FnReg, FnParams, KwargOrder),
+                construct_from_lowered(NodeList, Order, FnReg, FnParams, KwargOrder,
+                                       StdlibMap),
             {Graph1, RecOutputTags} = construct_fixpoints(Graph0, Fixpoints, LnIdMap,
                                           CircuitFixpointInputs, CircuitFixpointOutputs),
             ok = validate_rec_source_inputs(Graph1),
@@ -93,7 +96,7 @@ lowered_topo_loop(Q, InDeg, Consumers, Total, Acc) ->
 %% Circuit graph construction from lowered nodes
 %%====================================================================
 
-construct_from_lowered(NodeList, Order, FnReg, FnParams, KwargOrder) ->
+construct_from_lowered(NodeList, Order, FnReg, FnParams, KwargOrder, StdlibMap) ->
     LNodeById = maps:from_list(NodeList),
     {G, LnIdMap, FixInMap, FixOutMap} = lists:foldl(
         fun(LId, {GAcc, IdMapAcc, FIMAcc, FOMAcc}) ->
@@ -136,7 +139,8 @@ construct_from_lowered(NodeList, Order, FnReg, FnParams, KwargOrder) ->
                     {G4, IdMapAcc#{LId => NodeId}, FIMAcc, FOMAcc};
                 _ ->
                     {OpTuple, SubNodes} = make_operator_lowered(
-                        GAcc, Op, Args, CInputIds, Type, FnReg, FnParams, KwargOrder),
+                        GAcc, Op, Args, CInputIds, Type, FnReg, FnParams, KwargOrder,
+                        StdlibMap),
                     {G2, FinalId} = add_with_sub_nodes(GAcc, OpTuple, CInputIds, SubNodes),
                     Schema = compute_schema_lowered(Op, Args, CInputIds, Type, G2),
                     G3 = set_schema(G2, FinalId, Schema),
@@ -224,7 +228,7 @@ build_aggregate_graph_lowered(G, Args, InputIds, FnReg) ->
 %% Operator mapping from lowered args
 %%--------------------------------------------------------------------
 
-make_operator_lowered(G, Op, Args, InputIds, _TS, FnReg, FnParams, KwargOrder) ->
+make_operator_lowered(G, Op, Args, InputIds, _TS, FnReg, FnParams, KwargOrder, StdlibMap) ->
     case Op of
         source ->
             TableName = get_string_arg(Args, 1),
@@ -244,7 +248,7 @@ make_operator_lowered(G, Op, Args, InputIds, _TS, FnReg, FnParams, KwargOrder) -
         map ->
             FnName = get_var_arg(Args, 2),
             check_row_fn_arity(map, FnName, FnParams),
-            {Expr, ArgName} = resolve_fn(FnName, FnReg, FnParams),
+            {Expr, ArgName} = resolve_fn(FnName, FnReg, FnParams, StdlibMap),
             RowType = get_input_row_type(InputIds, G),
             Spec = #{kind => expr, expr => Expr, row_type => RowType,
                      arg_name => ArgName, kwarg_order => KwargOrder},
@@ -252,14 +256,14 @@ make_operator_lowered(G, Op, Args, InputIds, _TS, FnReg, FnParams, KwargOrder) -
         filter ->
             FnName = get_var_arg(Args, 2),
             check_row_fn_arity(filter, FnName, FnParams),
-            {Expr, ArgName} = resolve_fn(FnName, FnReg, FnParams),
+            {Expr, ArgName} = resolve_fn(FnName, FnReg, FnParams, StdlibMap),
             RowType = get_input_row_type(InputIds, G),
             {{filter, #{expr => Expr, row_type => RowType, arg_name => ArgName,
                         kwarg_order => KwargOrder}}, []};
         flat_map ->
             FnName = get_var_arg(Args, 2),
             check_row_fn_arity(flat_map, FnName, FnParams),
-            {Expr, ArgName} = resolve_fn(FnName, FnReg, FnParams),
+            {Expr, ArgName} = resolve_fn(FnName, FnReg, FnParams, StdlibMap),
             RowType = get_input_row_type(InputIds, G),
             {{flat_map, #{expr => Expr, row_type => RowType, arg_name => ArgName,
                           kwarg_order => KwargOrder}}, []};
@@ -278,8 +282,8 @@ make_operator_lowered(G, Op, Args, InputIds, _TS, FnReg, FnParams, KwargOrder) -
             {{antijoin, SharedVars, LeftVal}, []};
         circuit_call ->
             error({unlowered_circuit_call, Args});
-        circuit_access ->
-            error({unlowered_circuit_access, Args})
+        member_access ->
+            error({unlowered_member_access, Args})
     end.
 
 %%====================================================================
@@ -691,7 +695,7 @@ build_consumer_index(Nodes) ->
 
 %%====================================================================
 
-resolve_fn(FnName, FnReg, FnParams) ->
+resolve_fn(FnName, FnReg, FnParams, StdlibMap) ->
     case maps:find(FnName, FnReg) of
         {ok, ExprJson} ->
             case gdbsp_expr:json_to_expr(ExprJson) of
@@ -701,6 +705,17 @@ resolve_fn(FnName, FnReg, FnParams) ->
                     {Reduced, fn_arg_name(FnName, FnParams)};
                 {error, _} = Err -> throw({compile_error, {invalid_fn_expr, FnName, Err}})
             end;
+        error ->
+            resolve_stdlib_fn(FnName, StdlibMap)
+    end.
+
+%% A stdlib scalar function used directly as a row function: emit a plain
+%% call expression resolved at runtime. Inline (beta-reduced) bodies are the
+%% preferred path; this fallback handles `std.*` members.
+resolve_stdlib_fn(FnName, StdlibMap) ->
+    case maps:find(FnName, StdlibMap) of
+        {ok, [_ | _]} ->
+            {{call, FnName, [{arg, <<"row">>}], []}, <<"row">>};
         error ->
             throw({compile_error, {missing_function, FnName}})
     end.
@@ -791,8 +806,6 @@ do_substitute_opt(E, PB, KB) -> do_substitute(E, PB, KB).
 
 resolve_agg_fn_name(FnName, FnReg) ->
     case maps:find(FnName, FnReg) of
-        {ok, #{<<"aggregate">> := AggName}} when is_binary(AggName) ->
-            AggName;
         {ok, _} ->
             throw({compile_error, {invalid_agg_fn, FnName}});
         error ->
@@ -850,15 +863,11 @@ get_input_row_type([Id | _], G) ->
     %% In a full implementation, this would carry types through the graph.
     Cols = get_schema(G, Id),
     case Cols of
-        [] -> undefined;
-        _ ->
-            FieldMap = maps:from_list([{C, dynamic} || C <- Cols]),
-            {struct, FieldMap, exact}
+         [] -> undefined;
+         _ ->
+             FieldMap = maps:from_list([{C, dynamic} || C <- Cols]),
+             {struct, FieldMap, exact}
     end.
-
-
-struct_field_names({struct, Fields, _}) -> maps:keys(Fields);
-struct_field_names(_) -> [].
 
 build_merged_fields(Shared, LeftVal, RightVal, LType, RType) ->
     KeyFields = get_fields(LType, Shared),

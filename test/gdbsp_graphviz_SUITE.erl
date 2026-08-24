@@ -282,12 +282,12 @@ cg_nodes_have_labels(_Config) ->
 
 lower(Source) ->
     {ok, Prog} = gdbsp_parse:parse_string(Source, #{}),
-    gdbsp_compile_lower:run(Prog, #{}).
+    gdbsp_compile_lower:run(Prog, #{}, #{}).
 
 compile_minimal(Source) ->
     {ok, Prog} = gdbsp_parse:parse_string(Source, #{}),
-    {ok, LG} = gdbsp_compile_lower:run(Prog, #{}),
-    gdbsp_compile_graph:build_from_lowered(LG, #{}, #{}, #{}).
+    {ok, LG} = gdbsp_compile_lower:run(Prog, #{}, #{}),
+    gdbsp_compile_graph:build_from_lowered(LG, #{}, #{}, #{}, #{}).
 
 contains(String, Sub) ->
     string:str(String, Sub) > 0.

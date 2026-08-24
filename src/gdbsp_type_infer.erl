@@ -55,12 +55,8 @@ struct_fields(_) -> #{}.
 %% Aggregate return type
 %%====================================================================
 
-infer_agg_return_type(FnRef, _ValType, FnReg, StdlibMap) ->
-    AggName = case maps:find(FnRef, FnReg) of
-        {ok, #{<<"aggregate">> := Name}} when is_binary(Name) -> Name;
-        _ -> FnRef
-    end,
-    case maps:find(AggName, StdlibMap) of
+infer_agg_return_type(FnRef, _ValType, _FnReg, StdlibMap) ->
+    case maps:find(FnRef, StdlibMap) of
         {ok, [#gdbsp_typespec{spec = {aggregate_function, _Pos, _Kw, Ret}} | _]} ->
             Ret;
         _ ->
@@ -243,45 +239,33 @@ infer_lnode_type(aggregate, Args, InputIds, _Tags, TypeAcc, _TSMap, FnReg, _FnPa
 infer_lnode_type(map, Args, InputIds, _Tags, TypeAcc, _TSMap, FnReg, FnParams, StdlibMap) ->
     InputType = lowered_input_type(InputIds, TypeAcc),
     {var, FnName} = lists:nth(2, Args),
-    case maps:find(FnName, FnReg) of
-        {ok, FnJson} ->
-            infer_fn_body_output_type(FnName, FnJson, FnParams, InputType, StdlibMap);
-        error ->
-            error(#{<<"class">> => <<"missing_typespec">>,
-                    <<"node">> => FnName,
-                    <<"message">> => <<"map function not found">>})
-    end;
+    infer_row_fn_output_type(FnName, InputType, FnReg, FnParams, StdlibMap);
 
 infer_lnode_type(filter, Args, InputIds, _Tags, TypeAcc, _TSMap, FnReg, FnParams, StdlibMap) ->
     InputType = lowered_input_type(InputIds, TypeAcc),
     {var, FnName} = lists:nth(2, Args),
-    case maps:find(FnName, FnReg) of
-        {ok, FnJson} ->
-            RetType = infer_fn_body_output_type(FnName, FnJson, FnParams, InputType, StdlibMap),
-            case is_boolean_subset(RetType) of
-                true -> InputType;
-                false ->
-                    error(#{<<"class">> => <<"non_boolean_filter">>,
-                            <<"message">> => <<"filter function must return boolean">>,
-                            <<"node">> => FnName,
-                            <<"return_type">> => gdbsp_type:canonical_text(RetType)})
-            end;
-        error ->
-            error(#{<<"class">> => <<"missing_typespec">>,
+    RetType = infer_row_fn_output_type(FnName, InputType, FnReg, FnParams, StdlibMap),
+    case is_boolean_subset(RetType) of
+        true -> InputType;
+        false ->
+            error(#{<<"class">> => <<"non_boolean_filter">>,
+                    <<"message">> => <<"filter function must return boolean">>,
                     <<"node">> => FnName,
-                    <<"message">> => <<"filter function not found">>})
+                    <<"return_type">> => gdbsp_type:canonical_text(RetType)})
     end;
 
 infer_lnode_type(flat_map, Args, InputIds, _Tags, TypeAcc, _TSMap, FnReg, FnParams, StdlibMap) ->
     InputType = lowered_input_type(InputIds, TypeAcc),
     {var, BaseFnName} = lists:nth(2, Args),
-    case maps:find(BaseFnName, FnReg) of
-        {ok, FnJson} ->
-            infer_flat_map_output_type(BaseFnName, FnJson, FnParams, InputType, StdlibMap);
-        error ->
-            error(#{<<"class">> => <<"missing_typespec">>,
+    case infer_row_fn_output_type(BaseFnName, InputType, FnReg, FnParams, StdlibMap) of
+        {array, ElemType, _} -> ElemType;
+        dynamic -> dynamic;
+        {dynamic, _} -> dynamic;
+        Other ->
+            error(#{<<"class">> => <<"type_conflict">>,
+                    <<"message">> => <<"flat_map function must return an array">>,
                     <<"node">> => BaseFnName,
-                    <<"message">> => <<"flat_map function not found">>})
+                    <<"return_type">> => gdbsp_type:canonical_text(Other)})
     end;
 
 infer_lnode_type(project, Args, InputIds, _Tags, TypeAcc, _TSMap, _FnReg, _FnParams, _StdlibMap) ->
@@ -310,16 +294,18 @@ infer_fn_body_output_type(FnName, FnJson, FnParams, InputType, StdlibMap) ->
                     <<"reason">> => Reason})
     end.
 
-infer_flat_map_output_type(FnName, FnJson, FnParams, InputType, StdlibMap) ->
-    case infer_fn_body_output_type(FnName, FnJson, FnParams, InputType, StdlibMap) of
-        {array, ElemType, _} -> ElemType;
-        dynamic -> dynamic;
-        {dynamic, _} -> dynamic;
-        Other ->
-            error(#{<<"class">> => <<"type_conflict">>,
-                    <<"message">> => <<"flat_map function must return an array">>,
-                    <<"node">> => FnName,
-                    <<"return_type">> => gdbsp_type:canonical_text(Other)})
+infer_row_fn_output_type(FnName, InputType, FnReg, FnParams, StdlibMap) ->
+    case maps:find(FnName, FnReg) of
+        {ok, FnJson} ->
+            infer_fn_body_output_type(FnName, FnJson, FnParams, InputType, StdlibMap);
+        error ->
+            case gdbsp_builtins:resolve_call(FnName, [InputType], [], StdlibMap) of
+                {ok, RetType, _Concrete} -> RetType;
+                {error, _} ->
+                    error(#{<<"class">> => <<"missing_typespec">>,
+                            <<"node">> => FnName,
+                            <<"message">> => <<"function not found">>})
+            end
     end.
 
 fn_arg_env(FnName, FnParams, InputType) ->

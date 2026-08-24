@@ -26,7 +26,7 @@
     circuit_trivial_dedup/1,
     circuit_trivial_different_args/1,
     circuit_trivial_nested_tags/1,
-    circuit_trivial_circuit_access/1,
+    circuit_trivial_member_access/1,
     fixpoint_selfref_inputs_isolated/1,
     fixpoint_selfref_tags/1,
     fixpoint_selfref_body_wiring/1,
@@ -35,7 +35,7 @@
     fixpoint_selfref_distinct_error/1,
     fixpoint_forbidden_operator/1,
     fixpoint_trivial_no_fixpoint_info/1,
-    circuit_access_resolved/1,
+    member_access_resolved/1,
     tag_map_completeness/1,
     circuit_macro_kw_substitution/1,
     circuit_macro_multi_kw_substitution/1,
@@ -56,7 +56,7 @@ all() ->
      dedup_transitive,
      circuit_trivial_dedup,
      circuit_trivial_different_args,
-     circuit_trivial_circuit_access,
+     circuit_trivial_member_access,
      fixpoint_selfref_inputs_isolated,
      fixpoint_selfref_tags,
      fixpoint_selfref_body_wiring,
@@ -65,7 +65,7 @@ all() ->
      fixpoint_selfref_distinct_error,
      fixpoint_forbidden_operator,
      fixpoint_trivial_no_fixpoint_info,
-      circuit_access_resolved,
+      member_access_resolved,
       tag_map_completeness,
       circuit_macro_kw_substitution,
       circuit_macro_multi_kw_substitution,
@@ -80,7 +80,7 @@ all() ->
 
 lower(Source) ->
     {ok, Prog} = gdbsp_parse:parse_string(list_to_binary(Source), #{}),
-    gdbsp_compile_lower:run(Prog, #{}).
+    gdbsp_compile_lower:run(Prog, #{}, #{}).
 
 lnode_op(#lnode{op = Op}) -> Op.
 lnode_tags(#lnode{tags = Tags}) -> Tags.
@@ -261,7 +261,7 @@ circuit_trivial_nested_tags(_Config) ->
     assert_has_tag(<<"fp.inner_fp.result">>, LG),
     ok.
 
-circuit_trivial_circuit_access(_Config) ->
+circuit_trivial_member_access(_Config) ->
     Src = "circuit pass(x: v):\n"
           "    result := map(v, fn1)\n"
           "s := source(\"data\")\n"
@@ -269,7 +269,7 @@ circuit_trivial_circuit_access(_Config) ->
           "fp := fixpoint(pass(x: s))\n"
           "out := fp.result\n",
     {ok, LG} = lower(Src),
-    %% circuit_access "fp.result" should resolve to the body output tag
+    %% member_access "fp.result" should resolve to the body output tag
     %% "out" is a plus wrapper around fp.result
     {_, OutNode} = find_by_tag(<<"out">>, LG),
     FpOutId = assert_has_tag(<<"fp.result">>, LG),
@@ -412,10 +412,10 @@ fixpoint_trivial_no_fixpoint_info(_Config) ->
     ok.
 
 %%====================================================================
-%% circuit_access tests
+%% member_access tests
 %%====================================================================
 
-circuit_access_resolved(_Config) ->
+member_access_resolved(_Config) ->
     Src = "circuit pass(x: v):\n"
           "    result := map(v, fn1)\n"
           "s := source(\"data\")\n"

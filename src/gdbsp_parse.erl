@@ -105,7 +105,7 @@ token_name2(_) -> <<>>.
 parse_node_def(Name, Line, Tokens) ->
     case Tokens of
         [{identifier, _, VarName}, {dot, _} | Rest] ->
-            parse_circuit_access_node(Name, Line, VarName, Rest);
+            parse_member_access_node(Name, Line, VarName, Rest);
         [{identifier, _, OpName}, {'(', _} | Rest] ->
             parse_node_def_with_op(Name, Line, OpName, Rest);
         [{identifier, _, VarName} | Rest] ->
@@ -125,14 +125,14 @@ parse_node_def(Name, Line, Tokens) ->
                    <<"expected '(' or argument after :=">>})
     end.
 
-parse_circuit_access_node(Name, Line, Var, [{identifier, _, Field} | Rest]) ->
+parse_member_access_node(Name, Line, Var, [{identifier, _, Field} | Rest]) ->
     Node = #gdbsp_node_def{
-        name = Name, op = circuit_access,
+        name = Name, op = member_access,
         args = [{var, Var}, {var, Field}],
         line = Line
     },
     {Node, skip_to_decl(Rest)};
-parse_circuit_access_node(_Name, _Line, _Var, Tokens) ->
+parse_member_access_node(_Name, _Line, _Var, Tokens) ->
     throw({parse_error, token_line(hd(Tokens)),
            <<"invalid circuit access">>}).
 
@@ -204,7 +204,7 @@ collect_fixpoint_kwargs(Tokens, Acc) ->
 parse_fixpoint_kw_val(Tokens) ->
     case Tokens of
         [{identifier, _, V}, {dot, _}, {identifier, _, F} | Rest] ->
-            {{circuit_access, V, F}, Rest};
+            {{member_access, V, F}, Rest};
         [{identifier, _, V} | Rest] -> {{var, V}, Rest};
         [{string, _, _} = T | Rest] -> {{string, token_val(T)}, Rest};
         _ -> throw({parse_error, token_line(hd(Tokens)),
@@ -236,7 +236,7 @@ collect_node_args(Tokens, Acc) ->
                         [{expr, {call, VarName, CallArgs}} | Acc]);
                 [{identifier, _, VarName}, {dot, _}, {identifier, _, Field} | Rest] ->
                     collect_node_args(Rest,
-                        [{circuit_access, VarName, Field} | Acc]);
+                        [{member_access, VarName, Field} | Acc]);
                 [{identifier, _, VarName} | Rest] ->
                     collect_node_args(Rest, [{var, VarName} | Acc]);
                 [{string, _, _} = T | Rest] ->
@@ -257,7 +257,7 @@ collect_inline_call_args(Tokens, Acc) ->
                     collect_inline_call_args(Rest, Acc);
                 [{identifier, _, VarName}, {dot, _}, {identifier, _, F} | Rest] ->
                     collect_inline_call_args(Rest,
-                        [{circuit_access, VarName, F} | Acc]);
+                        [{member_access, VarName, F} | Acc]);
                 [{identifier, _, VarName} | Rest] ->
                     collect_inline_call_args(Rest, [{var, VarName} | Acc]);
                 [{string, _, _} = T | Rest] ->
@@ -274,7 +274,7 @@ parse_kw_arg([{'[', _} | Rest]) ->
 parse_kw_arg(Tokens) ->
     case Tokens of
         [{identifier, _, V}, {dot, _}, {identifier, _, F} | Rest] ->
-            {{circuit_access, V, F}, Rest};
+            {{member_access, V, F}, Rest};
         [{identifier, _, V} | Rest] -> {{var, V}, Rest};
         [{string, _, _} = T | Rest] -> {token_val(T), Rest};
         _ ->
@@ -916,7 +916,7 @@ known_op(<<"aggregate">>)          -> true;
 known_op(<<"filter">>)             -> true;
 known_op(<<"project">>)            -> true;
 known_op(<<"antijoin">>)           -> true;
-known_op(<<"circuit_access">>)     -> true;
+known_op(<<"member_access">>)     -> true;
 known_op(<<"fixpoint">>)           -> true;
 known_op(_)                        -> false.
 

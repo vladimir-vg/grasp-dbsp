@@ -17,7 +17,7 @@ validate input data.
 Function-level type checking for inline function bodies runs as a pre-pass
 before lowering — it verifies that each function body's return type matches
 its declared typespec. After this pre-pass, all function bodies are available
-as JSON expression trees in the merged function registry, and stream-level
+as JSON expression trees in the inline function registry, and stream-level
 inference proceeds as described below.
 
 Type inference uses **exact type equality** via canonical text
@@ -56,7 +56,7 @@ its input schemas. The propagation rules:
 | Operator | Output Schema |
 |----------|-------------|
 | `source` | Struct fields from the `stream(struct(...))` declaration |
-| `map` | Output type of the function (inferred from the function registry). `{"arg": "row"}` passes through the input struct type. |
+| `map` | Output type of the function (from the inline registry or stdlib). `{"arg": "row"}` passes through the input struct type. |
 | `filter` | Same as input schema (filter does not change columns) |
 | `flat_map` | Element type of the `array(new_row_type)` returned by the function |
 | `project` | Subset of input schema: only the listed field names |
