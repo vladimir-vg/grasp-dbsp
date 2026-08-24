@@ -747,7 +747,7 @@ write_e2e_lowered_dot(Prog0, Functions, GroupName, Config) ->
     TSMap = e2e_build_ts_map(Prog0#gdbsp_program.typespecs),
     case gdbsp_compile_lower:run(Prog0, #{}) of
         {ok, Lowered0} ->
-            case gdbsp_type_infer:infer_lowered(Lowered0, TSMap, Functions, StdlibMap) of
+            case gdbsp_type_infer:infer_lowered(Lowered0, TSMap, Functions, #{}, StdlibMap) of
                 {ok, Lowered} ->
                     write_dot_file("e2e", GroupName, "lowered",
                                    gdbsp_graphviz:lowered_to_dot(Lowered),

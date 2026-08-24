@@ -458,7 +458,11 @@ Comparison:
 
 | Function | Signature |
 |----------|-----------|
-| `std.struct_get` | `(S, key: string) → V` — field access; `key` must be a string literal |
+| `std.struct_get` | `(S, key: string("UTF-8")) → V` — field access; `key` must be a string literal |
+| `std.struct_set` | `(S, key: string("UTF-8"), value: V) → S` — update-only; `key` must be a string literal naming an existing field; `value`'s type must exactly match the field's type |
+
+Non-literal keys in `std.struct_get` / `std.struct_set` are compile errors,
+because the result type depends on which field the key selects.
 
 #### Struct construction
 
@@ -531,7 +535,9 @@ Struct constructor functions use the `call` node with `"struct"`:
 }
 ```
 
-Flat-map expansion functions use `"call": "std.struct_get"` to reference the column to unnest:
+A `flat_map` function must return `array(new_row_type)`; each array element
+is emitted as a complete output row. A common pattern is to return an
+array-valued field directly:
 
 ```json
 {
@@ -542,6 +548,9 @@ Flat-map expansion functions use `"call": "std.struct_get"` to reference the col
     }
 }
 ```
+
+Here the input row's `vals` field is `array(struct(...))`, so the output
+stream's element type is that `struct(...)`.
 
 ### 4.2 Aggregate Functions
 

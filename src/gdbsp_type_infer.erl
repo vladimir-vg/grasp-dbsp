@@ -5,6 +5,9 @@
 %%% propagating types from explicitly-typed source nodes through
 %%% operators (filter, map, join, aggregate, etc.).
 %%%
+%%% Expression-level typing is delegated to gdbsp_type_infer_expr, the
+%%% single shared engine operating on `expr()` / gdbsp_column_type().
+%%%
 %%% Pure module — no processes, no state.
 %%% @end
 %%%-------------------------------------------------------------------
@@ -16,9 +19,10 @@
 
 -import(gdbsp_string_util, [parse_string_list/1]).
 
--export([infer_lowered/4]).
+-export([infer_lowered/5]).
 
 -type fn_registry() :: #{binary() => map()}.
+-type fn_params() :: #{binary() => #{pos := [binary()], kw := [{binary(), binary()}]}}.
 
 %%====================================================================
 %% Project
@@ -28,211 +32,8 @@ project_struct({struct, Fields, _Rest}, KeepFields) when is_list(KeepFields) ->
     NewFields = maps:with(KeepFields, Fields),
     {struct, NewFields, exact};
 project_struct(_NonStruct, _KeepFields) ->
-    dynamic.
-
-%%====================================================================
-%% Map — analyse function expression tree to determine output type
-%%====================================================================
-
-infer_map_output_type(#{<<"call">> := <<"struct">>,
-                        <<"kwargs">> := KwArgs}, InputType, _StdlibMap)
-  when is_map(KwArgs) ->
-    Fields = maps:map(
-        fun(_FieldName, ExprJson) ->
-            infer_expr_output_type(ExprJson, InputType, _StdlibMap)
-        end, KwArgs),
-    {struct, Fields, exact};
-
-infer_map_output_type(#{<<"type">> := TypeJson, <<"value">> := _ValJson},
-                      _InputType, _StdlibMap) ->
-    case gdbsp_type:parse_type(TypeJson) of
-        {ok, T} -> T;
-        {error, _} -> dynamic
-    end;
-
-infer_map_output_type(#{<<"arg">> := _ArgName}, InputType, _StdlibMap) ->
-    InputType;
-
-infer_map_output_type(#{<<"call">> := CallName} = CallJson, InputType, StdlibMap) ->
-    infer_call_output_type(bin(CallName), CallJson, InputType, StdlibMap);
-
-infer_map_output_type(#{<<"get">> := _} = GetJson, InputType, StdlibMap) ->
-    infer_expr_output_type(GetJson, InputType, StdlibMap);
-
-infer_map_output_type(#{<<"slice">> := _} = SliceJson, InputType, StdlibMap) ->
-    infer_expr_output_type(SliceJson, InputType, StdlibMap);
-
-infer_map_output_type(_Other, InputType, _StdlibMap) ->
-    InputType.
-
-%%====================================================================
-%% Expression output type (for sub-expressions inside map functions)
-%%====================================================================
-
-infer_expr_output_type(#{<<"type">> := TypeJson}, _InputType, _StdlibMap) ->
-    case gdbsp_type:parse_type(TypeJson) of
-        {ok, T} -> T;
-        {error, _} -> dynamic
-    end;
-
-infer_expr_output_type(#{<<"arg">> := _ArgName}, InputType, _StdlibMap) ->
-    InputType;
-
-infer_expr_output_type(#{<<"call">> := CallName} = CallJson, InputType, StdlibMap) ->
-    infer_call_output_type(bin(CallName), CallJson, InputType, StdlibMap);
-
-infer_expr_output_type(#{<<"get">> := ObjJson, <<"keys">> := [KeyJson | _]},
-                       InputType, StdlibMap) ->
-    ContainerType = infer_expr_output_type(ObjJson, InputType, StdlibMap),
-    infer_get_json_type(ContainerType, KeyJson);
-
-infer_expr_output_type(#{<<"slice">> := ObjJson}, InputType, StdlibMap) ->
-    ContainerType = infer_expr_output_type(ObjJson, InputType, StdlibMap),
-    infer_slice_json_type(ContainerType);
-
-infer_expr_output_type(#{<<"aggregate">> := _AggName}, _InputType, _StdlibMap) ->
-    dynamic;
-
-infer_expr_output_type(_Other, _InputType, _StdlibMap) ->
-    dynamic.
-
-%%====================================================================
-%% Function call return type lookup
-%%====================================================================
-
-infer_call_output_type(<<"std.struct_get">>, CallJson, InputType, StdlibMap) ->
-    infer_struct_get_type(CallJson, InputType, StdlibMap);
-
-infer_call_output_type(<<"struct:set">>, CallJson, InputType, StdlibMap) ->
-    infer_struct_set_type(CallJson, InputType, StdlibMap);
-
-infer_call_output_type(<<"struct">>, #{<<"kwargs">> := KwArgs}, InputType, StdlibMap)
-  when is_map(KwArgs) ->
-    Fields = maps:map(
-        fun(_FieldName, ExprJson) ->
-            infer_expr_output_type(ExprJson, InputType, StdlibMap)
-        end, KwArgs),
-    {struct, Fields, exact};
-
-infer_call_output_type(CallName, CallJson, InputType, StdlibMap) ->
-    PosArgs = maps:get(<<"args">>, CallJson, []),
-    KwArgs = maps:get(<<"kwargs">>, CallJson, #{}),
-    PosTypes = [infer_expr_output_type(A, InputType, StdlibMap) || A <- PosArgs],
-    KwPairs = [{K, infer_expr_output_type(V, InputType, StdlibMap)} || {K, V} <- maps:to_list(KwArgs)],
-    case gdbsp_builtins:resolve_call(CallName, PosTypes, KwPairs, StdlibMap) of
-        {ok, RetType, _ConcreteName} -> RetType;
-        {error, Reason} ->
-            error(#{<<"class">> => <<"fn_lookup_error">>,
-                    <<"function">> => CallName,
-                    <<"reason">> => Reason})
-    end.
-
-%%====================================================================
-%% get / slice (subscript) output type resolution
-%%====================================================================
-
-infer_get_json_type({array, T, _}, KeyJson) ->
-    case is_integer_key_json(KeyJson) of
-        true -> T;
-        false -> dynamic
-    end;
-infer_get_json_type({map, K, V}, KeyJson) ->
-    case extract_literal_type(KeyJson) of
-        {ok, KT} ->
-            case gdbsp_builtins:exact_match(K, KT) of
-                true -> V;
-                false -> dynamic
-            end;
-        false -> dynamic
-    end;
-infer_get_json_type({struct, Fields, _}, KeyJson) ->
-    case extract_string_literal(KeyJson) of
-        {ok, KeyStr} -> field_type(KeyStr, {struct, Fields, exact});
-        false -> dynamic
-    end;
-infer_get_json_type(dynamic, _) -> dynamic;
-infer_get_json_type({dynamic, _}, _) -> dynamic;
-infer_get_json_type(Container, _) ->
     error(#{<<"class">> => <<"type_conflict">>,
-            <<"message">> => <<"get on non-container">>,
-            <<"container">> => gdbsp_type:canonical_text(Container)}).
-
-infer_slice_json_type({array, T, _}) -> {array, T, varsize};
-infer_slice_json_type(string) -> string;
-infer_slice_json_type({string, _}) -> string;
-infer_slice_json_type(bytes) -> bytes;
-infer_slice_json_type({bytes, _}) -> bytes;
-infer_slice_json_type(dynamic) -> dynamic;
-infer_slice_json_type({dynamic, _}) -> dynamic;
-infer_slice_json_type(Container) ->
-    error(#{<<"class">> => <<"type_conflict">>,
-            <<"message">> => <<"slice on non-sequence">>,
-            <<"container">> => gdbsp_type:canonical_text(Container)}).
-
-is_integer_key_json(#{<<"type">> := T, <<"value">> := _}) ->
-    T =:= <<"integer">> orelse T =:= <<"i64">> orelse T =:= <<"i32">> orelse
-    T =:= <<"i16">> orelse T =:= <<"i8">> orelse T =:= <<"u64">> orelse
-    T =:= <<"u32">> orelse T =:= <<"u16">> orelse T =:= <<"u8">>;
-is_integer_key_json(_) -> false.
-
-extract_literal_type(#{<<"type">> := TypeJson, <<"value">> := _}) ->
-    case gdbsp_type:parse_type(TypeJson) of
-        {ok, T} -> {ok, T};
-        _ -> false
-    end;
-extract_literal_type(_) -> false.
-
-%%====================================================================
-%% struct:get / struct:set output type resolution
-%%====================================================================
-
-infer_struct_get_type(#{<<"args">> := [StructExpr | _],
-                         <<"kwargs">> := #{<<"key">> := KeyExpr}}, InputType, StdlibMap) ->
-    StructType = infer_expr_output_type(StructExpr, InputType, StdlibMap),
-    case extract_string_literal(KeyExpr) of
-        {ok, KeyStr} -> field_type(KeyStr, StructType);
-        false -> dynamic
-    end;
-infer_struct_get_type(_CallJson, _InputType, _StdlibMap) ->
-    dynamic.
-
-infer_struct_set_type(#{<<"args">> := [StructExpr, ValExpr | _],
-                         <<"kwargs">> := #{<<"key">> := KeyExpr}}, InputType, StdlibMap) ->
-    StructType = infer_expr_output_type(StructExpr, InputType, StdlibMap),
-    ValType = infer_expr_output_type(ValExpr, InputType, StdlibMap),
-    case extract_string_literal(KeyExpr) of
-        {ok, KeyStr} ->
-            case StructType of
-                {struct, Fields, Mode} ->
-                    {struct, Fields#{KeyStr => ValType}, Mode};
-                _ -> dynamic
-            end;
-        false -> dynamic
-    end;
-infer_struct_set_type(_CallJson, _InputType, _StdlibMap) ->
-    dynamic.
-
-extract_string_literal(#{<<"type">> := <<"string">>, <<"value">> := Val}) when is_binary(Val) ->
-    {ok, Val};
-extract_string_literal(#{<<"type">> := <<"string">>, <<"value">> := Val}) when is_list(Val) ->
-    {ok, list_to_binary(Val)};
-extract_string_literal(#{<<"type">> := #{<<"string">> := #{<<"encoding">> := _}},
-                         <<"value">> := Val}) when is_binary(Val) ->
-    {ok, Val};
-extract_string_literal(#{<<"type">> := #{<<"string">> := #{<<"encoding">> := _}},
-                         <<"value">> := Val}) when is_list(Val) ->
-    {ok, list_to_binary(Val)};
-extract_string_literal(_) -> false.
-
-%%====================================================================
-%% Flat map
-%%====================================================================
-
-infer_flat_map_out_type(_BaseFnName, InputType) ->
-    case InputType of
-        {struct, _Fields, _} -> InputType;
-        _ -> InputType
-    end.
+            <<"message">> => <<"project on non-struct">>}).
 
 %%====================================================================
 %% Join
@@ -263,7 +64,9 @@ infer_agg_return_type(FnRef, _ValType, FnReg, StdlibMap) ->
         {ok, [#gdbsp_typespec{spec = {aggregate_function, _Pos, _Kw, Ret}} | _]} ->
             Ret;
         _ ->
-            dynamic
+            error(#{<<"class">> => <<"missing_typespec">>,
+                    <<"node">> => FnRef,
+                    <<"message">> => <<"aggregate function not found in stdlib">>})
     end.
 
 %%====================================================================
@@ -273,10 +76,18 @@ infer_agg_return_type(FnRef, _ValType, FnReg, StdlibMap) ->
 field_type(FieldName, {struct, Fields, _Rest}) ->
     case maps:find(FieldName, Fields) of
         {ok, T} -> T;
-        error -> dynamic
+        error ->
+            error(#{<<"class">> => <<"missing_field">>,
+                    <<"field">> => FieldName})
     end;
-field_type(_FieldName, _NonStruct) ->
-    dynamic.
+field_type(_FieldName, dynamic) ->
+    dynamic;
+field_type(_FieldName, {dynamic, _}) ->
+    dynamic;
+field_type(FieldName, _NonStruct) ->
+    error(#{<<"class">> => <<"type_conflict">>,
+            <<"message">> => <<"field access on non-struct">>,
+            <<"field">> => FieldName}).
 
 %%====================================================================
 %% Arg helpers
@@ -306,22 +117,13 @@ get_string_list_arg(Args, Pos) ->
     end.
 
 %%====================================================================
-%% Helpers
-%%====================================================================
-
-bin(V) when is_binary(V) -> V;
-bin(V) when is_list(V) -> list_to_binary(V);
-bin(V) when is_atom(V) -> atom_to_binary(V, utf8);
-bin(V) -> V.
-
-%%====================================================================
 %% Lowered graph type inference
 %%====================================================================
 
 -spec infer_lowered(#lowered_graph{}, #{binary() => gdbsp_column_type()},
-                    fn_registry(), gdbsp_builtins:stdlib_map()) ->
+                    fn_registry(), fn_params(), gdbsp_builtins:stdlib_map()) ->
     {ok, #lowered_graph{}} | {error, term()}.
-infer_lowered(#lowered_graph{nodes = Nodes} = LG, TSMap, FnReg, StdlibMap) ->
+infer_lowered(#lowered_graph{nodes = Nodes} = LG, TSMap, FnReg, FnParams, StdlibMap) ->
     try
         NodeList = maps:to_list(Nodes),
         Sorted = lowered_topo_sort(NodeList),
@@ -333,7 +135,7 @@ infer_lowered(#lowered_graph{nodes = Nodes} = LG, TSMap, FnReg, StdlibMap) ->
                     true -> ExistingType;
                     false ->
                         infer_lnode_type(Op, Args, InputIds, Tags, TypeAcc,
-                                          TSMap, FnReg, StdlibMap)
+                                          TSMap, FnReg, FnParams, StdlibMap)
                 end,
                 Node = (maps:get(LId, AccNodes))#lnode{type = Type},
                 {maps:put(LId, Node, AccNodes), TypeAcc#{LId => Type}}
@@ -380,12 +182,9 @@ lowered_topo_loop(Q, InDeg, Consumers, Acc) ->
     end.
 
 is_concrete_type(undefined) -> false;
-is_concrete_type(dynamic) -> false;
-is_concrete_type({dynamic, _}) -> false;
-is_concrete_type({struct, Fields, _}) when map_size(Fields) =:= 0 -> false;
 is_concrete_type(_) -> true.
 
-infer_lnode_type(source, _Args, _InputIds, Tags, _TypeAcc, TSMap, _FnReg, _StdlibMap) ->
+infer_lnode_type(source, _Args, _InputIds, Tags, _TypeAcc, TSMap, _FnReg, _FnParams, _StdlibMap) ->
     Name = case Tags of [Tag | _] -> Tag; _ -> undefined end,
     case Name of
         undefined ->
@@ -400,13 +199,13 @@ infer_lnode_type(source, _Args, _InputIds, Tags, _TypeAcc, TSMap, _FnReg, _Stdli
             end
     end;
 
-infer_lnode_type(fixpoint_input, _Args, InputIds, _Tags, TypeAcc, _TSMap, _FnReg, _StdlibMap) ->
+infer_lnode_type(fixpoint_input, _Args, InputIds, _Tags, TypeAcc, _TSMap, _FnReg, _FnParams, _StdlibMap) ->
     lowered_input_type(InputIds, TypeAcc);
 
-infer_lnode_type(fixpoint_output, _Args, InputIds, _Tags, TypeAcc, _TSMap, _FnReg, _StdlibMap) ->
+infer_lnode_type(fixpoint_output, _Args, InputIds, _Tags, TypeAcc, _TSMap, _FnReg, _FnParams, _StdlibMap) ->
     lowered_input_type(InputIds, TypeAcc);
 
-infer_lnode_type(plus, _Args, InputIds, _Tags, TypeAcc, _TSMap, _FnReg, _StdlibMap) ->
+infer_lnode_type(plus, _Args, InputIds, _Tags, TypeAcc, _TSMap, _FnReg, _FnParams, _StdlibMap) ->
     Types = [maps:get(Id, TypeAcc, dynamic) || Id <- InputIds],
     case Types of
         [First | Rest] ->
@@ -422,14 +221,14 @@ infer_lnode_type(plus, _Args, InputIds, _Tags, TypeAcc, _TSMap, _FnReg, _StdlibM
         [] -> dynamic
     end;
 
-infer_lnode_type(join, Args, InputIds, _Tags, TypeAcc, _TSMap, _FnReg, _StdlibMap) ->
+infer_lnode_type(join, Args, InputIds, _Tags, TypeAcc, _TSMap, _FnReg, _FnParams, _StdlibMap) ->
     LType = lowered_nth_input_type(1, InputIds, TypeAcc),
     RType = lowered_nth_input_type(2, InputIds, TypeAcc),
     {on, OnFields} = get_kw_arg(Args, on, []),
     check_join_key_types(OnFields, LType, RType),
     merge_join_type(LType, RType, OnFields);
 
-infer_lnode_type(aggregate, Args, InputIds, _Tags, TypeAcc, _TSMap, FnReg, StdlibMap) ->
+infer_lnode_type(aggregate, Args, InputIds, _Tags, TypeAcc, _TSMap, FnReg, _FnParams, StdlibMap) ->
     InputType = lowered_input_type(InputIds, TypeAcc),
     FnRef = get_var_arg(Args, 2),
     _ = case maps:find(FnRef, FnReg) of
@@ -448,29 +247,27 @@ infer_lnode_type(aggregate, Args, InputIds, _Tags, TypeAcc, _TSMap, FnReg, Stdli
     AllFields = ByPairs ++ [{AsField, AggRetType}],
     {struct, maps:from_list(AllFields), exact};
 
-infer_lnode_type(map, Args, InputIds, _Tags, TypeAcc, _TSMap, FnReg, StdlibMap) ->
+infer_lnode_type(map, Args, InputIds, _Tags, TypeAcc, _TSMap, FnReg, FnParams, StdlibMap) ->
     InputType = lowered_input_type(InputIds, TypeAcc),
     {var, FnName} = lists:nth(2, Args),
     case maps:find(FnName, FnReg) of
-        {ok, FnJson} -> infer_map_output_type(FnJson, InputType, StdlibMap);
+        {ok, FnJson} ->
+            infer_fn_body_output_type(FnName, FnJson, FnParams, InputType, StdlibMap);
         error ->
             error(#{<<"class">> => <<"missing_typespec">>,
                     <<"node">> => FnName,
                     <<"message">> => <<"map function not found">>})
     end;
 
-infer_lnode_type(filter, Args, InputIds, _Tags, TypeAcc, _TSMap, FnReg, StdlibMap) ->
+infer_lnode_type(filter, Args, InputIds, _Tags, TypeAcc, _TSMap, FnReg, FnParams, StdlibMap) ->
     InputType = lowered_input_type(InputIds, TypeAcc),
     {var, FnName} = lists:nth(2, Args),
     case maps:find(FnName, FnReg) of
         {ok, FnJson} ->
-            RetType = infer_expr_output_type(FnJson, InputType, StdlibMap),
-            case RetType of
-                {enum, [<<"false">>, <<"true">>]} -> InputType;
-                dynamic -> InputType;
-                {dynamic, _} -> InputType;
-                undefined -> InputType;
-                _ ->
+            RetType = infer_fn_body_output_type(FnName, FnJson, FnParams, InputType, StdlibMap),
+            case is_boolean_subset(RetType) of
+                true -> InputType;
+                false ->
                     error(#{<<"class">> => <<"non_boolean_filter">>,
                             <<"message">> => <<"filter function must return boolean">>,
                             <<"node">> => FnName,
@@ -482,25 +279,83 @@ infer_lnode_type(filter, Args, InputIds, _Tags, TypeAcc, _TSMap, FnReg, StdlibMa
                     <<"message">> => <<"filter function not found">>})
     end;
 
-infer_lnode_type(flat_map, Args, InputIds, _Tags, TypeAcc, _TSMap, FnReg, _StdlibMap) ->
+infer_lnode_type(flat_map, Args, InputIds, _Tags, TypeAcc, _TSMap, FnReg, FnParams, StdlibMap) ->
     InputType = lowered_input_type(InputIds, TypeAcc),
     {var, BaseFnName} = lists:nth(2, Args),
     case maps:find(BaseFnName, FnReg) of
-        {ok, _} ->
-            infer_flat_map_out_type(BaseFnName, InputType);
+        {ok, FnJson} ->
+            infer_flat_map_output_type(BaseFnName, FnJson, FnParams, InputType, StdlibMap);
         error ->
             error(#{<<"class">> => <<"missing_typespec">>,
                     <<"node">> => BaseFnName,
                     <<"message">> => <<"flat_map function not found">>})
     end;
 
-infer_lnode_type(project, Args, InputIds, _Tags, TypeAcc, _TSMap, _FnReg, _StdlibMap) ->
+infer_lnode_type(project, Args, InputIds, _Tags, TypeAcc, _TSMap, _FnReg, _FnParams, _StdlibMap) ->
     InputType = lowered_input_type(InputIds, TypeAcc),
     KeepFields = get_string_list_arg(Args, 2),
     project_struct(InputType, KeepFields);
 
-infer_lnode_type(_Op, _Args, InputIds, _Tags, TypeAcc, _TSMap, _FnReg, _StdlibMap) ->
+infer_lnode_type(_Op, _Args, InputIds, _Tags, TypeAcc, _TSMap, _FnReg, _FnParams, _StdlibMap) ->
     lowered_input_type(InputIds, TypeAcc).
+
+%%--------------------------------------------------------------------
+%% Function body output type (decode registry JSON → shared engine)
+%%--------------------------------------------------------------------
+
+infer_fn_body_output_type(FnName, FnJson, FnParams, InputType, StdlibMap) ->
+    ArgEnv = fn_arg_env(FnName, FnParams, InputType),
+    case gdbsp_expr:json_to_expr(FnJson) of
+        {ok, Expr} ->
+            case gdbsp_type_infer_expr:infer_expr(Expr, ArgEnv, StdlibMap) of
+                {ok, T} -> T;
+                {error, [First | _]} -> throw_expr_error(First)
+            end;
+        {error, Reason} ->
+            error(#{<<"class">> => <<"invalid_fn_expr">>,
+                    <<"node">> => FnName,
+                    <<"reason">> => Reason})
+    end.
+
+infer_flat_map_output_type(FnName, FnJson, FnParams, InputType, StdlibMap) ->
+    case infer_fn_body_output_type(FnName, FnJson, FnParams, InputType, StdlibMap) of
+        {array, ElemType, _} -> ElemType;
+        dynamic -> dynamic;
+        {dynamic, _} -> dynamic;
+        Other ->
+            error(#{<<"class">> => <<"type_conflict">>,
+                    <<"message">> => <<"flat_map function must return an array">>,
+                    <<"node">> => FnName,
+                    <<"return_type">> => gdbsp_type:canonical_text(Other)})
+    end.
+
+fn_arg_env(FnName, FnParams, InputType) ->
+    ArgName = case maps:find(FnName, FnParams) of
+        {ok, #{pos := [A | _]}} -> A;
+        _ -> <<"row">>
+    end,
+    #{ArgName => InputType}.
+
+throw_expr_error(Err) ->
+    error(#{<<"class">> => expr_error_class(Err), <<"reason">> => Err}).
+
+expr_error_class({fn_lookup_error, _, _}) -> <<"fn_lookup_error">>;
+expr_error_class({non_literal_key, _}) -> <<"non_literal_key">>;
+expr_error_class({missing_field, _}) -> <<"missing_field">>;
+expr_error_class({type_conflict, _, _, _}) -> <<"type_conflict">>;
+expr_error_class({non_struct_target, _}) -> <<"type_conflict">>;
+expr_error_class({get_on_non_container, _}) -> <<"type_conflict">>;
+expr_error_class({slice_on_non_sequence, _}) -> <<"type_conflict">>;
+expr_error_class({map_key_type_mismatch, _, _}) -> <<"type_conflict">>;
+expr_error_class({array_index_not_integer, _}) -> <<"type_conflict">>;
+expr_error_class({unbound_var, _}) -> <<"unbound_var">>;
+expr_error_class({map_merge_non_map}) -> <<"type_conflict">>;
+expr_error_class({aggregates_not_allowed_in_fn_body}) -> <<"type_conflict">>;
+expr_error_class(_) -> <<"expr_error">>.
+
+is_boolean_subset({enum, S}) ->
+    lists:all(fun(M) -> M =:= <<"false">> orelse M =:= <<"true">> end, S);
+is_boolean_subset(_) -> false.
 
 %%--------------------------------------------------------------------
 %% Join key type conflict check

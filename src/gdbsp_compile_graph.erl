@@ -223,7 +223,7 @@ build_aggregate_graph_lowered(G, Args, InputIds, FnReg) ->
 %% Operator mapping from lowered args
 %%--------------------------------------------------------------------
 
-make_operator_lowered(G, Op, Args, InputIds, TS, FnReg, FnParams) ->
+make_operator_lowered(G, Op, Args, InputIds, _TS, FnReg, FnParams) ->
     case Op of
         source ->
             TableName = get_string_arg(Args, 1),
@@ -259,16 +259,7 @@ make_operator_lowered(G, Op, Args, InputIds, TS, FnReg, FnParams) ->
             check_row_fn_arity(flat_map, FnName, FnParams),
             {Expr, ArgName} = resolve_fn(FnName, FnReg, FnParams),
             RowType = get_input_row_type(InputIds, G),
-            OutType = case TS of
-                {struct, _, _} = Struct -> Struct;
-                undefined -> dynamic;
-                _ -> TS
-            end,
-            AllCols = struct_field_names(OutType),
-            InputCols = get_schema(G, hd(InputIds)),
-            NewCols = AllCols -- InputCols,
-            {{flat_map, #{expr => Expr, row_type => RowType,
-                          unnest_outs => NewCols, arg_name => ArgName}}, []};
+            {{flat_map, #{expr => Expr, row_type => RowType, arg_name => ArgName}}, []};
         project ->
             KeepFields = get_string_list_arg(Args, 2),
             {{map, #{kind => project, keep => KeepFields}}, []};

@@ -339,6 +339,10 @@ std.is_finite   :: function((f64) -> enum("false","true"))
 # Non-literal keys result in a compile error.
 std.struct_get :: function((S, "key": string("UTF-8")) -> V)
 
+# Update-only: key must name an existing field; value type must match the
+# field's declared type. Output type is S unchanged.
+std.struct_set :: function((S, "key": string("UTF-8"), "value": V) -> S)
+
 # ===== Aggregates =====
 
 std.agg_sum_i64      :: aggregate_function((i64) -> i64)

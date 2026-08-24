@@ -325,28 +325,29 @@
       struct:
         x: i64
 
-- description: "flat_map returns input struct type"
+- description: "flat_map returns the array element type"
   source: |
     src := source("data")
     src :: stream(struct("x": i64, "y": i64))
     f := flat_map(src, expand_fn)
   functions:
     expand_fn:
-      call: struct
-      kwargs:
-        x:
-          call: "std.struct_get"
-          args:
-            - arg: row
+      call: array
+      args:
+        - call: struct
           kwargs:
-            key:
-              type: string
-              value: "x"
+            x:
+              call: "std.struct_get"
+              args:
+                - arg: row
+              kwargs:
+                key:
+                  type: string
+                  value: "x"
   expected:
     f:
       struct:
         x: i64
-        y: i64
 
 - description: "antijoin inherits left input type"
   source: |
@@ -481,7 +482,7 @@
   expected:
     out: string
 
-- description: "map with unrecognized expression shape falls back to input type"
+- description: "map with unrecognized expression shape fails"
   source: |
     src := source("data")
     src :: stream(struct("x": i64, "y": i64))
@@ -489,13 +490,10 @@
   functions:
     unknown_shape:
       some_unknown_key: 42
-  expected:
-    out:
-      struct:
-        x: i64
-        y: i64
+  expected_errors:
+    - class: invalid_fn_expr
 
-- description: "map struct constructor with unrecognized sub-expr falls back to dynamic"
+- description: "map struct constructor with unrecognized sub-expr fails"
   source: |
     src := source("data")
     src :: stream(struct("a": i64, "b": i64))
@@ -506,10 +504,8 @@
       kwargs:
         x:
           garbage: true
-  expected:
-    out:
-      struct:
-        x: dynamic
+  expected_errors:
+    - class: invalid_fn_expr
 
 - description: "flat_map with unknown function fails"
   source: |
@@ -519,29 +515,72 @@
   expected_errors:
     - class: missing_typespec
 
-- description: "map with struct:set updates field type in output"
+- description: "map with std.struct_set updates existing field value"
   source: |
     src := source("data")
     src :: stream(struct("id": i64, "name": string("UTF-8")))
     out := map(src, fix_name)
   functions:
     fix_name:
-      call: "struct:set"
+      call: "std.struct_set"
       args:
         - arg: row
-        - type: string
-          value: "fixed"
       kwargs:
         key:
           type: string
           value: "name"
+        value:
+          type: string
+          value: "fixed"
   expected:
     out:
       struct:
         id: i64
-        name: string
+        name:
+          string:
+            encoding: "UTF-8"
 
-- description: "std.struct_get with non-constant key degrades to dynamic"
+- description: "std.struct_set on a new field fails"
+  source: |
+    src := source("data")
+    src :: stream(struct("id": i64, "name": string("UTF-8")))
+    out := map(src, add_field)
+  functions:
+    add_field:
+      call: "std.struct_set"
+      args:
+        - arg: row
+      kwargs:
+        key:
+          type: string
+          value: "nope"
+        value:
+          type: i64
+          value: "1"
+  expected_errors:
+    - class: missing_field
+
+- description: "std.struct_set with mismatched value type fails"
+  source: |
+    src := source("data")
+    src :: stream(struct("id": i64, "name": string("UTF-8")))
+    out := map(src, fix_name)
+  functions:
+    fix_name:
+      call: "std.struct_set"
+      args:
+        - arg: row
+      kwargs:
+        key:
+          type: string
+          value: "name"
+        value:
+          type: i64
+          value: "1"
+  expected_errors:
+    - class: type_conflict
+
+- description: "std.struct_get with non-constant key fails"
   source: |
     src := source("data")
     src :: stream(struct("key": string("UTF-8"), "a": i64, "b": i64))
@@ -560,8 +599,38 @@
             key:
               type: string
               value: "key"
+  expected_errors:
+    - class: non_literal_key
+
+- description: "inline std.struct_get with non-constant key fails"
+  source: |
+    src := source("data")
+    src :: stream(struct("key": string("UTF-8"), "a": i64, "b": i64))
+    get := function((row) -> std.struct_get(row, key: row.key))
+    get :: function((struct("key": string("UTF-8"), "a": i64, "b": i64)) -> dynamic)
+    out := map(src, get)
+  expected_errors:
+    - class: non_literal_key
+
+- description: "array subscript with runtime index infers element type"
+  source: |
+    src := source("data")
+    src :: stream(struct("vals": array(i64), "i": i64))
+    pick := function((row) -> std.struct_get(row, key: "vals")[std.struct_get(row, key: "i")])
+    pick :: function((struct("vals": array(i64), "i": i64)) -> i64)
+    out := map(src, pick)
   expected:
-    out: dynamic
+    out: i64
+
+- description: "map subscript with runtime key infers value type"
+  source: |
+    src := source("data")
+    src :: stream(struct("m": map(string("UTF-8"), i64), "k": string("UTF-8")))
+    pick := function((row) -> std.struct_get(row, key: "m")[std.struct_get(row, key: "k")])
+    pick :: function((struct("m": map(string("UTF-8"), i64), "k": string("UTF-8"))) -> i64)
+    out := map(src, pick)
+  expected:
+    out: i64
 
 - description: "subscript element type infers array element type"
   source: |

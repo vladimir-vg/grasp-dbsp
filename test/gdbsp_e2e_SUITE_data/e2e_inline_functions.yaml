@@ -94,20 +94,20 @@
 - description: "inline flat_map unnest via dot access"
   source: |
     src := source("data")
-    src :: stream(struct("name": string("UTF-8"), "vals": array(integer)))
+    src :: stream(struct("name": string("UTF-8"), "vals": array(struct("x": integer))))
     unnest := function((row) -> row.vals)
-    unnest :: function((struct("name": string("UTF-8"), "vals": array(integer))) -> array(integer))
+    unnest :: function((struct("name": string("UTF-8"), "vals": array(struct("x": integer)))) -> array(struct("x": integer)))
     expanded := flat_map(src, unnest)
-    expanded :: stream(struct("name": string("UTF-8"), "v": integer, "vals": array(integer)))
+    expanded :: stream(struct("x": integer))
   input:
     - data:
-        - [1, {name: "Alice", vals: ["10", "20"]}]
-        - [1, {name: "Bob", vals: ["30"]}]
+        - [1, {name: "Alice", vals: [{x: "10"}, {x: "20"}]}]
+        - [1, {name: "Bob", vals: [{x: "30"}]}]
   expected:
     - expanded:
-        - [1, {name: "Alice", v: "10", vals: ["10", "20"]}]
-        - [1, {name: "Alice", v: "20", vals: ["10", "20"]}]
-        - [1, {name: "Bob", v: "30", vals: ["30"]}]
+        - [1, {x: "10"}]
+        - [1, {x: "20"}]
+        - [1, {x: "30"}]
 
 - description: "inline map preserves retractions"
   source: |
@@ -532,3 +532,28 @@
   expected_errors:
     - class: compile_error
       message: "fn_lookup_error"
+
+- description: "std.struct_set updates an existing field"
+  source: |
+    src := source("data")
+    src :: stream(struct("id": i64, "name": string("UTF-8")))
+    fix := function((row) -> std.struct_set(row, key: "name", value: "fixed"))
+    fix :: function((struct("id": i64, "name": string("UTF-8"))) -> struct("id": i64, "name": string("UTF-8")))
+    out := map(src, fix)
+  input:
+    - data:
+        - [1, {id: "1", name: "alice"}]
+  expected:
+    - out:
+        - [1, {id: "1", name: "fixed"}]
+
+- description: "non-literal struct key fails"
+  source: |
+    src := source("data")
+    src :: stream(struct("key": string("UTF-8"), "a": i64, "b": i64))
+    get := function((row) -> std.struct_get(row, key: row.key))
+    get :: function((struct("key": string("UTF-8"), "a": i64, "b": i64)) -> dynamic)
+    out := map(src, get)
+  expected_errors:
+    - class: compile_error
+      message: "non_literal_key"

@@ -354,6 +354,13 @@ Some parse expression forms are desugared to function calls during lowering:
 The `struct`, `array`, `map`, and `map_merge` constructors are special-cased
 during type inference and evaluation; they are not resolved through stdlib.
 
+Subscript and slice (`obj[key]`, `obj[s:e]`) desugar to `{get, obj, [key]}`
+and `{slice, obj, start, stop, step}` respectively. Struct field access
+(`r.field`, `r["field"]`, `std.struct_get`, `std.struct_set`) requires a
+compile-time string-literal key, because the result type depends on which
+field is selected. Map keys and array indices do **not** need to be
+literals — only their type must match the map's key type / be an integer.
+
 ---
 
 ## 7. Circuit Definitions

@@ -629,6 +629,7 @@ fn_impl(<<"std.abs_i64">>)   -> {ok, {gdbsp_math, math_abs_i64, 1}};
 fn_impl(<<"std.abs_f64">>)   -> {ok, {gdbsp_math, math_abs_f64, 1}};
 
 fn_impl(<<"std.struct_get">>) -> {ok, {gdbsp_struct, struct_get, 2}};
+fn_impl(<<"std.struct_set">>) -> {ok, {gdbsp_struct, struct_set, 3}};
 
 fn_impl(_) -> {error, unknown_impl}.
 

@@ -99,9 +99,9 @@
 
 - source: |
     src := source("data")
-    src :: stream(struct("name": string("UTF-8"), "vals": array(i64)))
+    src :: stream(struct("name": string("UTF-8"), "vals": array(struct("x": i64))))
     expanded := flat_map(src, unnest_vals)
-    expanded :: stream(struct("name": string("UTF-8"), "v": i64, "vals": array(i64)))
+    expanded :: stream(struct("x": i64))
 
   functions:
     unnest_vals:
@@ -115,14 +115,14 @@
 
   input:
     - data:
-        - [1, {name: "Alice", vals: ["10", "20"]}]
-        - [1, {name: "Bob", vals: ["30"]}]
+        - [1, {name: "Alice", vals: [{x: "10"}, {x: "20"}]}]
+        - [1, {name: "Bob", vals: [{x: "30"}]}]
 
   expected:
     - expanded:
-        - [1, {name: "Alice", v: "10", vals: ["10", "20"]}]
-        - [1, {name: "Alice", v: "20", vals: ["10", "20"]}]
-        - [1, {name: "Bob", v: "30", vals: ["30"]}]
+        - [1, {x: "10"}]
+        - [1, {x: "20"}]
+        - [1, {x: "30"}]
 
 - source: |
     src := source("data")

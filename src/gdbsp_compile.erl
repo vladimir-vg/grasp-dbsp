@@ -72,7 +72,7 @@ infer(Program, ExternalFnReg) ->
         TSMap = build_ts_map(Program#gdbsp_program.typespecs),
         case gdbsp_compile_lower:run(Program, #{}) of
             {ok, Lowered0} ->
-                case gdbsp_type_infer:infer_lowered(Lowered0, TSMap, FnReg, CallableMap) of
+                case gdbsp_type_infer:infer_lowered(Lowered0, TSMap, FnReg, FnParams, CallableMap) of
                     {ok, Lowered} -> {ok, Lowered, FnReg, FnParams};
                     {error, _} = E -> E
                 end;

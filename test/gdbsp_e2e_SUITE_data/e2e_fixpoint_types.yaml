@@ -185,7 +185,7 @@
 
 # C2: Map restructures output type inside trivial fixpoint circuit.
 # The map function renames fields via struct constructor.
-# Verifies infer_map_output_type works inside circuit body.
+# Verifies map output typing works inside a circuit body.
 - source: |
     circuit rename_fields(x: val):
         result := map(val, swap)

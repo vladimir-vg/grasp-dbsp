@@ -418,8 +418,17 @@ dispatch_call(<<"array">>, PosValues, _KwValues) ->
 dispatch_call(<<"struct">>, _PosValues, KwValues) ->
     Fields = maps:map(fun(_K, V) -> element(2, V) end, KwValues),
     {ok, {value, {struct, Fields, exact}, KwValues}};
-dispatch_call(<<"struct:get">>, PosValues, KwValues) ->
-    dispatch_call(<<"std.struct_get">>, PosValues, KwValues);
+dispatch_call(<<"std.struct_set">>, [Struct], KwValues) ->
+    Key = maps:get(<<"key">>, KwValues),
+    Value = maps:get(<<"value">>, KwValues),
+    try gdbsp_struct:struct_set(Struct, Key, Value) of
+        Result -> {ok, Result}
+    catch
+        throw:drop_row -> drop_row;
+        _:Reason -> {error, {call_failed, gdbsp_struct, struct_set, Reason}}
+    end;
+dispatch_call(<<"std.struct_set">>, _PosValues, _KwValues) ->
+    {error, {bad_arity, <<"std.struct_set">>}};
 dispatch_call(Name, PosValues, KwValues) ->
     PosTypes = [type_of(V) || V <- PosValues],
     KwPairs = [{K, type_of(V)} || {K, V} <- maps:to_list(KwValues)],

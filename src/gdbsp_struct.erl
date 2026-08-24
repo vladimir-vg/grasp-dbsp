@@ -38,7 +38,7 @@ struct_constructor(_TypeArg, _RawValues) ->
     erlang:throw(drop_row).
 
 %%====================================================================
-%% struct:get(struct, key: string) -> dynamic
+%% std.struct_get(struct, key: string) -> field value
 %%====================================================================
 
 -define(IS_STRING_TYPE(KT), (KT =:= string orelse KT =:= {string, <<"UTF-8">>})).
@@ -60,7 +60,7 @@ struct_get(_, _) ->
     erlang:throw(drop_row).
 
 %%====================================================================
-%% struct:set(struct, key: string, value: dynamic) -> struct
+%% std.struct_set(struct, key: string, value: T) -> struct (update-only)
 %%====================================================================
 
 -spec struct_set(value(), value(), value()) -> value().

@@ -58,7 +58,7 @@ its input schemas. The propagation rules:
 | `source` | Struct fields from the `stream(struct(...))` declaration |
 | `map` | Output type of the function (inferred from the function registry). `{"arg": "row"}` passes through the input struct type. |
 | `filter` | Same as input schema (filter does not change columns) |
-| `flat_map` | Input columns plus any new columns produced by the flat-mapped expansion |
+| `flat_map` | Element type of the `array(new_row_type)` returned by the function |
 | `project` | Subset of input schema: only the listed field names |
 | `plus` | Same as inputs (exact type match required across all inputs) |
 | `neg` | Same as input schema |
@@ -158,17 +158,43 @@ is used, the return type is inferred from the input value type.
 
 ## 6. Expression Type Inference
 
-For `map` and `filter` operators, the return type is inferred from the
-function definition in the function registry. This applies to both inline
-function bodies (compiled to JSON before inference) and externally-provided
-JSON bodies:
+A single expression-type engine (`gdbsp_type_infer_expr`) infers the
+type of a function body for `map`, `filter`, and `flat_map`. It operates
+on the internal `gdbsp_column_type()` representation (never JSON) and is
+used both by inline function body checking (before lowering) and by
+stream-level node output typing (after decoding the function registry's
+JSON bodies via `gdbsp_expr:json_to_expr/1`).
 
-- **Arg reference** (`{"arg": N}`): output type is the declared parameter type from the function's typespec.
-- **Struct construction** (`{"call": "struct", "kwargs": {...}}`): output type is a struct with fields matching the kwargs, each typed by its expression.
-- **`std.struct_get`** (`{"call": "std.struct_get", "args": [expr], "kwargs": {"key": {...}}}`): when the key is a string literal, the output type is the specific field's type from the input struct schema; when computed at runtime, falls back to `dynamic`.
-- **`struct:set`** (`{"call": "struct:set", "args": [expr, value], "kwargs": {"key": ...}}`): output type is the input struct type with the specified field's type updated. *Future work:* `struct:set` is currently a bare special-cased name; it will be migrated to `std.struct_set` to match the rest of the stdlib naming scheme.
-- **Comparison operators** (`=`, `!=`, `<`, `<=`, `>`, `>=`): resolve to `std.eq_*` / `std.neq_*` / `std.lt_*` / `std.lte_*` / `std.gt_*` / `std.gte_*`; output type is `enum("false", "true")`.
-- **Other functions** (`std.add_i64`, `std.string_upper`, etc.): output type follows the function's declared return type from stdlib.
+- **Arg reference** (`{arg, N}`): the declared parameter type from the
+  function's typespec.
+- **Value literal** (`{value, T, _}`): the literal's type `T`.
+- **Struct construction** (`{call, struct, _, KwArgs}`): a struct with one
+  field per keyword argument, each typed by its expression.
+- **`std.struct_get`** (`{call, std.struct_get, [S], #{key := K}}`): the
+  key must be a compile-time string literal; the result is the field's
+  type. A non-literal key is a `non_literal_key` error and a missing field
+  is a `missing_field` error. Accessing a `dynamic` value yields `dynamic`.
+- **`std.struct_set`** (`{call, std.struct_set, [S], #{key := K, value := V}}`):
+  the key must be a string literal naming an existing field, and `V`'s
+  type must exactly match that field's type. The result type is `S`
+  unchanged (update-only). A non-literal key, a missing field, and a
+  value-type mismatch are errors.
+- **Subscript** (`{get, Obj, [Key]}`): on a struct the key must be a
+  string literal (as `std.struct_get`). On an array the index need only be
+  an integer type (result is the element type). On a map the key need only
+  have the map's key type (result is the value type). Subscripting a
+  `dynamic` value yields `dynamic`.
+- **Slice** (`{slice, Obj, ...}`): `array(T)` → `array(T)`, `string` →
+  `string`, `bytes` → `bytes`, `dynamic` → `dynamic`.
+- **Comparison / arithmetic / other operators**: resolved through
+  `gdbsp_builtins:resolve_call/4` against the stdlib typespecs; the output
+  type is the resolved function's declared return type. An unresolvable
+  call is an error (`fn_lookup_error`), never `dynamic`.
+- **Unknown expression shapes** are errors, never a silent fallback to
+  `dynamic` or to the input type.
+
+`dynamic` is produced only by a declared `dynamic` type or by access into
+an already-`dynamic` container.
 
 ---
 
@@ -203,3 +229,17 @@ to a concrete type from the call-site context:
 ```
 Error: unresolved type variable <Var> in node <name>
 ```
+
+### 7.4 Non-literal / missing access keys
+
+Struct field access (`std.struct_get`, `std.struct_set`, and struct
+subscript) requires a compile-time string-literal key, because the result
+type depends on which field is selected:
+
+```
+Error: non_literal_key — struct key must be a string literal
+Error: missing_field  — field <name> not present in struct
+```
+
+Map and array access are different: they only require the key/index *type*
+to match, not a literal value.

@@ -564,7 +564,7 @@
 - description: "Function call in expression"
   input: |
     f := function((x) -> sqrt(x))
-    g := function((r, col) -> struct:get(r, key: col))
+    g := function((r, col) -> std.struct_get(r, key: col))
   expected:
     - name: f
       kind: fn_def
@@ -581,7 +581,7 @@
         - {pos: r}
         - {pos: col}
       body:
-        call: 'struct:get'
+        call: 'std.struct_get'
         args:
           - {var: r}
           - {kv: key, val: {var: col}}
