@@ -743,7 +743,7 @@ to_map_val(V) -> V.
 %%====================================================================
 
 write_e2e_lowered_dot(Prog0, Functions, GroupName, Config) ->
-    {ok, StdlibMap} = gdbsp_compile:load_stdlib(),
+    {ok, StdlibMap} = gdbsp_builtins:load_stdlib(),
     TSMap = e2e_build_ts_map(Prog0#gdbsp_program.typespecs),
     case gdbsp_compile_lower:run(Prog0, #{}) of
         {ok, Lowered0} ->

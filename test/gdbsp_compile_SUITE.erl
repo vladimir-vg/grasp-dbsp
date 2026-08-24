@@ -359,25 +359,25 @@ typespec_only_no_external(_Config) ->
 %%--------------------------------------------------------------------
 
 stdlib_parse_ok(_Config) ->
-    case gdbsp_compile:load_stdlib() of
+    case gdbsp_builtins:load_stdlib() of
         {ok, StdlibMap} when is_map(StdlibMap) -> ok;
         {error, Reason} -> ct:fail("load_stdlib failed: ~p", [Reason])
     end.
 
 stdlib_has_arithmetic(_Config) ->
-    {ok, StdlibMap} = gdbsp_compile:load_stdlib(),
+    {ok, StdlibMap} = gdbsp_builtins:load_stdlib(),
     true = maps:is_key(<<"std.add_i64">>, StdlibMap),
     true = maps:is_key(<<"std.add_numeric">>, StdlibMap),
     true = maps:is_key(<<"std.mul_f64">>, StdlibMap),
     true = maps:is_key(<<"std.neg_i64">>, StdlibMap).
 
 stdlib_typespec_correct(_Config) ->
-    {ok, StdlibMap} = gdbsp_compile:load_stdlib(),
+    {ok, StdlibMap} = gdbsp_builtins:load_stdlib(),
     [TS] = maps:get(<<"std.add_i64">>, StdlibMap),
     {function, [i64, i64], #{}, i64} = TS#gdbsp_typespec.spec.
 
 stdlib_agg_overloads(_Config) ->
-    {ok, StdlibMap} = gdbsp_compile:load_stdlib(),
+    {ok, StdlibMap} = gdbsp_builtins:load_stdlib(),
     %% With per-type naming, each specialization is a separate entry.
     TSListI64 = maps:get(<<"std.agg_sum_i64">>, StdlibMap),
     true = (length(TSListI64) >= 1),
@@ -398,7 +398,7 @@ stdlib_missing_file(_Config) ->
     {error, _} = Result.
 
 stdlib_operator_tvar(_Config) ->
-    {ok, StdlibMap} = gdbsp_compile:load_stdlib(),
+    {ok, StdlibMap} = gdbsp_builtins:load_stdlib(),
     %% Operator entries not in Phase A's stdlib yet, but verify the map works
     %% (this test prepares for Phase E when operator TVars are added)
     true = is_map(StdlibMap).
@@ -414,6 +414,6 @@ load_stdlib_at(Path) ->
     case file:read_file(Path) of
         {ok, Bin} ->
             {ok, Prog} = gdbsp_parse:parse_string(Bin, #{}),
-            {ok, gdbsp_compile:build_stdlib_map(Prog#gdbsp_program.typespecs)};
+            {ok, gdbsp_builtins:build_stdlib_map(Prog#gdbsp_program.typespecs)};
         {error, _} = E -> E
     end.

@@ -16,7 +16,7 @@
 -include("gdbsp_expr.hrl").
 
 %% ── Core evaluators ─────────────────────────────────────────────────
--export([eval_with_blob/2, eval_with_row/3]).
+-export([eval_with_blob/2, eval_with_row/3, eval_with_row/4]).
 -export([eval_with_blob_batch/2]).
 
 %%====================================================================
@@ -36,9 +36,14 @@ eval_with_blob(Expr, Fetcher) ->
 
 -spec eval_with_row(expr(), value(), binary()) ->
     {ok, value()} | drop_row | {error, term()}.
-eval_with_row(Expr, {value, {struct, _Fields, _Rest}, _Data} = Row, ArgName) ->
-    do_eval(Expr, {row, Row, ArgName});
-eval_with_row(_Expr, _NotAStruct, _ArgName) ->
+eval_with_row(Expr, Row, ArgName) ->
+    eval_with_row(Expr, Row, ArgName, #{}).
+
+-spec eval_with_row(expr(), value(), binary(), #{binary() => [binary()]}) ->
+    {ok, value()} | drop_row | {error, term()}.
+eval_with_row(Expr, {value, {struct, _Fields, _Rest}, _Data} = Row, ArgName, KwargOrder) ->
+    do_eval(Expr, {row, Row, ArgName, KwargOrder});
+eval_with_row(_Expr, _NotAStruct, _ArgName, _KwargOrder) ->
     {error, {eval_with_row_requires_struct_value, _NotAStruct}}.
 
 %%====================================================================
@@ -64,11 +69,11 @@ do_eval({value, type, T}, _Ctx) ->
     {ok, {type, T}};
 do_eval({value, _, _} = V, _Ctx) ->
     {ok, V};
-do_eval({arg, Name}, {row, Row, ArgName}) when Name =:= ArgName -> {ok, Row};
+do_eval({arg, Name}, {row, Row, ArgName, _KwargOrder}) when Name =:= ArgName -> {ok, Row};
 do_eval({arg, _}, _Ctx) -> {error, unknown_arg};
 do_eval({call, <<"storage:blob">>, [], Kw}, {blob, Fetcher}) ->
     resolve_blob(Kw, Fetcher);
-do_eval({call, <<"storage:blob">>, _, _}, {row, _, _}) ->
+do_eval({call, <<"storage:blob">>, _, _}, {row, _, _, _}) ->
     {error, blob_resolution_not_allowed_in_row_eval};
 do_eval({call, Name, PosArgs, KwArgs}, Ctx) ->
     eval_call(Name, PosArgs, KwArgs, Ctx);
@@ -92,20 +97,25 @@ do_eval({slice, Obj, Start, Stop, Step}, Ctx) ->
 eval_call(Name, PosArgs, KwArgs, Ctx) ->
     case eval_args(PosArgs, KwArgs, Ctx) of
         {ok, PosValues, KwValues} ->
-            dispatch_call(Name, PosValues, KwValues);
+            dispatch_call(Name, PosValues, KwValues, kwarg_order_of(Ctx));
         drop_row -> drop_row;
         {error, _} = E -> E
     end.
 
-call_impl(Mod, Fun, PosValues, KwValues) ->
-    try
-        case maps:size(KwValues) of
-            0 ->
-                apply(Mod, Fun, PosValues);
-            _ ->
-                apply(Mod, Fun, kw_pos_args(PosValues, KwValues, Mod, Fun))
-        end
-    of
+kwarg_order_of({row, _Row, _ArgName, KwargOrder}) -> KwargOrder;
+kwarg_order_of({blob, _Fetcher}) -> #{}.
+
+call_impl(Concrete, Mod, Fun, Arity, KwargOrder, PosValues, KwValues) ->
+    case build_args(Concrete, PosValues, KwValues, KwargOrder) of
+        {ok, Args} when length(Args) =:= Arity ->
+            apply_impl(Mod, Fun, Args);
+        {ok, Args} ->
+            {error, {arity_mismatch, Concrete, length(Args), Arity}};
+        {error, _} = E -> E
+    end.
+
+apply_impl(Mod, Fun, Args) ->
+    try apply(Mod, Fun, Args) of
         Result -> {ok, Result}
     catch
         throw:drop_row -> drop_row;
@@ -114,13 +124,27 @@ call_impl(Mod, Fun, PosValues, KwValues) ->
         _:Reason -> {error, {call_failed, Mod, Fun, Reason}}
     end.
 
-kw_pos_args(PosValues, KwValues, Mod, Fun) ->
-    Arity = proplists:get_value(Fun,
-        Mod:module_info(exports), 0),
-    AllArgs = PosValues ++ maps:values(KwValues),
-    case length(AllArgs) >= Arity of
-        true -> lists:sublist(AllArgs, Arity);
-        false -> AllArgs
+build_args(_Concrete, PosValues, KwValues, _KwargOrder) when map_size(KwValues) =:= 0 ->
+    {ok, PosValues};
+build_args(Concrete, PosValues, KwValues, KwargOrder) ->
+    kw_pos_args(Concrete, PosValues, KwValues, KwargOrder).
+
+%% Assemble the positional argument list from the caller's kwarg map, looking
+%% each declared kwarg up by NAME (caller order is irrelevant). The order is
+%% the callee's declared order, taken from the derived kwarg-order table.
+kw_pos_args(Concrete, PosValues, KwValues, KwargOrder) ->
+    case maps:get(Concrete, KwargOrder, undefined) of
+        undefined ->
+            {error, {no_kwarg_order, Concrete}};
+        KwOrder ->
+            case [K || K <- maps:keys(KwValues), not lists:member(K, KwOrder)] of
+                [K | _] -> {error, {unexpected_kw_arg, K}};
+                [] ->
+                    case [K || K <- KwOrder, not maps:is_key(K, KwValues)] of
+                        [K | _] -> {error, {missing_kw_arg, K}};
+                        [] -> {ok, PosValues ++ [maps:get(K, KwValues) || K <- KwOrder]}
+                    end
+            end
     end.
 
 %%====================================================================
@@ -403,33 +427,22 @@ type_of({value, {dynamic, T}, _V}) -> {dynamic, T};
 type_of({type, _}) -> type;
 type_of({value, Type, _Data}) -> Type.
 
-dispatch_call(<<"map">>, _PosValues, KwValues) ->
+dispatch_call(<<"map">>, _PosValues, KwValues, _KwargOrder) ->
     ConcreteV = case maps:values(KwValues) of
         [] -> dynamic;
         Vs -> element(2, lists:last(Vs))
     end,
     {ok, {value, {map, string, ConcreteV}, maps:map(fun(_K, V) -> V end, KwValues)}};
-dispatch_call(<<"array">>, PosValues, _KwValues) ->
+dispatch_call(<<"array">>, PosValues, _KwValues, _KwargOrder) ->
     ConcreteE = case PosValues of
         [] -> dynamic;
         _ -> element(2, lists:last(PosValues))
     end,
     {ok, {value, {array, ConcreteE, varsize}, PosValues}};
-dispatch_call(<<"struct">>, _PosValues, KwValues) ->
+dispatch_call(<<"struct">>, _PosValues, KwValues, _KwargOrder) ->
     Fields = maps:map(fun(_K, V) -> element(2, V) end, KwValues),
     {ok, {value, {struct, Fields, exact}, KwValues}};
-dispatch_call(<<"std.struct_set">>, [Struct], KwValues) ->
-    Key = maps:get(<<"key">>, KwValues),
-    Value = maps:get(<<"value">>, KwValues),
-    try gdbsp_struct:struct_set(Struct, Key, Value) of
-        Result -> {ok, Result}
-    catch
-        throw:drop_row -> drop_row;
-        _:Reason -> {error, {call_failed, gdbsp_struct, struct_set, Reason}}
-    end;
-dispatch_call(<<"std.struct_set">>, _PosValues, _KwValues) ->
-    {error, {bad_arity, <<"std.struct_set">>}};
-dispatch_call(Name, PosValues, KwValues) ->
+dispatch_call(Name, PosValues, KwValues, KwargOrder) ->
     PosTypes = [type_of(V) || V <- PosValues],
     KwPairs = [{K, type_of(V)} || {K, V} <- maps:to_list(KwValues)],
     Concrete = case gdbsp_builtins:concrete_fn(Name, PosTypes, maps:from_list(KwPairs)) of
@@ -437,8 +450,8 @@ dispatch_call(Name, PosValues, KwValues) ->
         CN -> CN
     end,
     case gdbsp_builtins:fn_impl(Concrete) of
-        {ok, {Mod, Fun, _Arity}} ->
-            call_impl(Mod, Fun, PosValues, KwValues);
+        {ok, {Mod, Fun, Arity}} ->
+            call_impl(Concrete, Mod, Fun, Arity, KwargOrder, PosValues, KwValues);
         {error, unknown_impl} ->
             {error, {no_implementation, Name}};
         {error, _} = E -> E

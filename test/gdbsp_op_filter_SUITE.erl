@@ -115,6 +115,7 @@ mk_barrier_delta(Epoch, Tag, Deltas, From) ->
     {delta, #{epoch => Epoch, barrier => Tag}, Deltas, From}.
 
 -define(STR_ROW_TYPE, {struct, #{<<"x">> => string}, exact}).
+-define(KWARG_ORDER, #{<<"std.struct_get">> => [<<"key">>]}).
 
 eq_field(Col, Val) ->
     {call, <<"=">>, [{call, <<"std.struct_get">>, [{arg, <<"row">>}], #{<<"key">> => {value, string, Col}}}, {value, string, Val}], #{}}.
@@ -133,7 +134,7 @@ merge_metas_trivial(_Config) ->
 %%==== Proc
 
 keeps_matching(_Config) ->
-    {Op, Up, Down} = start_filter(#{expr => eq_field(<<"x">>, <<"a">>), row_type => ?STR_ROW_TYPE}),
+    {Op, Up, Down} = start_filter(#{expr => eq_field(<<"x">>, <<"a">>), row_type => ?STR_ROW_TYPE, kwarg_order => ?KWARG_ORDER}),
     Op ! mk_delta(0, [{1, mk_str_row(<<"a">>)}], Up),
     [{delta, _, [{1, _}], _}] = await(Down, 1),
     ok = cleanup([Op, Up, Down]).
@@ -145,14 +146,14 @@ expr_init(_Config) ->
     TypedRow3 = gdbsp_value:map_to_struct(#{<<"x">> => 3}, RowType),
     Up = start_collector(),
     Down = start_collector(),
-    {ok, Op} = gdbsp_op_proc:start_link(gdbsp_op_filter, #{value_mod => gdbsp_value, expr => CanonicalExpr, row_type => RowType}),
+    {ok, Op} = gdbsp_op_proc:start_link(gdbsp_op_filter, #{value_mod => gdbsp_value, expr => CanonicalExpr, row_type => RowType, kwarg_order => ?KWARG_ORDER}),
     Op ! {wiring_update, #{Up => default}, #{default => Down}},
     Op ! mk_delta(0, [{1, TypedRow10}, {-1, TypedRow3}], Up),
     [{delta, #{epoch := 0}, [{1, TypedRow10}], _}] = await(Down, 1),
     ok = cleanup([Op, Up, Down]).
 
 drops_nonmatching(_Config) ->
-    {Op, Up, Down} = start_filter(#{expr => eq_field(<<"x">>, <<"a">>), row_type => ?STR_ROW_TYPE}),
+    {Op, Up, Down} = start_filter(#{expr => eq_field(<<"x">>, <<"a">>), row_type => ?STR_ROW_TYPE, kwarg_order => ?KWARG_ORDER}),
     Op ! mk_delta(0, [{1, mk_str_row(<<"b">>)}], Up),
     [] = drain(Down),
     ok = cleanup([Op, Up, Down]).

@@ -126,7 +126,9 @@ get_vals(Deltas) ->
     [gdbsp_value:unwrap(R) || {_, R} <- Deltas].
 
 -define(EXPR, {call, <<"std.struct_get">>, [{arg, <<"row">>}], #{<<"key">> => {value, string, <<"v">>}}}).
--define(ARGS, #{expr => ?EXPR, row_type => {struct, #{<<"v">> => {array, i64, varsize}}, exact}}).
+-define(KWARG_ORDER, #{<<"std.struct_get">> => [<<"key">>]}).
+-define(ARGS, #{expr => ?EXPR, row_type => {struct, #{<<"v">> => {array, i64, varsize}}, exact},
+                kwarg_order => ?KWARG_ORDER}).
 
 %%==== Pure
 

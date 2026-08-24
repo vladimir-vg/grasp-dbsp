@@ -12,6 +12,7 @@
 -export([operand_types/1, is_valid_operand/2, concrete_fn/3]).
 -export([unify_types/3, fn_impl/1, agg_impl/1]).
 -export([exact_match/2]).
+-export([load_stdlib/0, build_stdlib_map/1, build_kwarg_order/1]).
 
 -include("gdbsp_type.hrl").
 -include("gdbsp_parse.hrl").
@@ -55,6 +56,45 @@ unop_fn_name('not') -> <<"not">>.
 %%====================================================================
 
 -type stdlib_map() :: #{binary() => [#gdbsp_typespec{}]}.
+
+%%====================================================================
+%% stdlib loading (moved here from gdbsp_compile — this is the registry)
+%%====================================================================
+
+-spec load_stdlib() -> {ok, stdlib_map()} | {error, term()}.
+load_stdlib() ->
+    PrivDir = code:priv_dir(grasp_dbsp),
+    Path = filename:join(PrivDir, "stdlib.gdbsp"),
+    case file:read_file(Path) of
+        {ok, Bin} ->
+            {ok, Prog} = gdbsp_parse:parse_string(Bin, #{}),
+            {ok, build_stdlib_map(Prog#gdbsp_program.typespecs)};
+        {error, _} = E -> E
+    end.
+
+-spec build_stdlib_map([#gdbsp_typespec{}]) -> stdlib_map().
+build_stdlib_map(Typespecs) ->
+    lists:foldl(
+        fun(#gdbsp_typespec{name = N} = TS, Acc) ->
+            Existing = maps:get(N, Acc, []),
+            Acc#{N => [TS | Existing]}
+        end, #{}, Typespecs).
+
+%% Derive `#{Name => [KwNames]}` for functions whose declared kwarg order is
+%% unambiguous (a single distinct non-empty kwarg-name set). Overloaded names
+%% (multiple typespecs with differing kwarg sets) are omitted — dispatch for
+%% those is a separate concern (overload keying), and none are wired yet.
+-spec build_kwarg_order(stdlib_map()) -> #{binary() => [binary()]}.
+build_kwarg_order(StdlibMap) ->
+    maps:fold(fun(Name, TSpecs, Acc) ->
+        Orders = [KW || #gdbsp_typespec{spec = {K, _, _, _}, kw_order = KW} <- TSpecs,
+                        (K =:= function orelse K =:= aggregate_function),
+                        KW =/= undefined, KW =/= []],
+        case lists:usort(Orders) of
+            [Order] -> Acc#{Name => Order};
+            _ -> Acc
+        end
+    end, #{}, StdlibMap).
 
 -spec resolve_call(binary(), [gdbsp_column_type()], [{binary(), gdbsp_column_type()}],
                    stdlib_map()) ->

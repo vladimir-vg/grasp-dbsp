@@ -26,8 +26,9 @@
 init(#{expr := Expr, row_type := _RowType} = Args) ->
     Value = maps:get(value_mod, Args, gdbsp_value),
     ArgName = maps:get(arg_name, Args, <<"row">>),
+    KwargOrder = maps:get(kwarg_order, Args, #{}),
     Fun = fun(Row) ->
-        case Value:eval_expr(Expr, Row, ArgName) of
+        case Value:eval_expr(Expr, Row, ArgName, KwargOrder) of
             {ok, {value, {array, _ElemType, _}, Arr}} when is_list(Arr) ->
                 Arr;
             {ok, {value, {dynamic, {array, _ET, _}}, Arr}} when is_list(Arr) ->

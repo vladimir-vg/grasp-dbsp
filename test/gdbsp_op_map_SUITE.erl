@@ -138,7 +138,7 @@ expr_init(_Config) ->
     Expected = gdbsp_value:struct_extend(TypedRow, <<"y">>, {value, i64, 6}),
     Up = start_collector(),
     Down = start_collector(),
-    {ok, Op} = gdbsp_op_proc:start_link(gdbsp_op_map, #{value_mod => gdbsp_value, expr => CanonicalExpr, row_type => RowType, out => <<"y">>}),
+    {ok, Op} = gdbsp_op_proc:start_link(gdbsp_op_map, #{value_mod => gdbsp_value, expr => CanonicalExpr, row_type => RowType, out => <<"y">>, kwarg_order => #{<<"std.struct_get">> => [<<"key">>]}}),
     Op ! {wiring_update, #{Up => default}, #{default => Down}},
     Op ! mk_delta(0, [{1, TypedRow}], Up),
     [{delta, #{epoch := 0}, [{1, Expected}], _}] = await(Down, 1),

@@ -326,6 +326,7 @@ parse_fn_typespec(Name, Kind, Tokens) ->
             Spec = #gdbsp_typespec{
                 name = Name,
                 spec = {Kind, PosTypes, maps:from_list(KwMap), RetType},
+                kw_order = [K || {K, _} <- KwMap],
                 line = token_line(hd(Tokens))
             },
             {Spec, skip_to_decl(tl(Rest3))};

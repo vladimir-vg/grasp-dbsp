@@ -15,6 +15,7 @@
     spec   :: {type, term()}
             | {function, [term()], #{binary() => term()}, term()}
             | {aggregate_function, [term()], #{binary() => term()}, term()},
+    kw_order :: [binary()] | undefined,   % declared kwarg order (function/aggregate only)
     line   :: pos_integer()
 }).
 

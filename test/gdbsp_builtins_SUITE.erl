@@ -28,7 +28,9 @@
          t33_unify_same/1, t34_unify_conflict/1,
          t35_unify_single/1, t36_unify_nested/1,
          t37_unify_struct/1, t38_impl_add_i64/1,
-         t39_impl_not/1, t40_impl_unknown/1
+         t39_impl_not/1, t40_impl_unknown/1,
+         t41_kwarg_order_struct_set/1, t42_kwarg_order_struct_get/1,
+         t43_kwarg_order_overload_omitted/1
         ]).
 
 %%====================================================================
@@ -54,7 +56,9 @@ all() ->
      t33_unify_same, t34_unify_conflict,
      t35_unify_single, t36_unify_nested,
      t37_unify_struct, t38_impl_add_i64,
-     t39_impl_not, t40_impl_unknown
+     t39_impl_not, t40_impl_unknown,
+     t41_kwarg_order_struct_set, t42_kwarg_order_struct_get,
+     t43_kwarg_order_overload_omitted
     ].
 
 %%====================================================================
@@ -237,6 +241,28 @@ t39_impl_not(_Config) ->
 
 t40_impl_unknown(_Config) ->
     {error, unknown_impl} = gdbsp_builtins:fn_impl(<<"nonexistent">>).
+
+%%====================================================================
+%% B6. Kwarg-order derivation (single source of truth: stdlib.gdbsp)
+%%====================================================================
+
+kwarg_order_table() ->
+    {ok, StdlibMap} = gdbsp_builtins:load_stdlib(),
+    gdbsp_builtins:build_kwarg_order(StdlibMap).
+
+t41_kwarg_order_struct_set(_Config) ->
+    [<<"key">>, <<"value">>] = maps:get(<<"std.struct_set">>, kwarg_order_table()).
+
+t42_kwarg_order_struct_get(_Config) ->
+    [<<"key">>] = maps:get(<<"std.struct_get">>, kwarg_order_table()).
+
+t43_kwarg_order_overload_omitted(_Config) ->
+    %% Overloaded names (multiple kwarg-name sets) must be absent until
+    %% overload keying is implemented; none of them are wired yet.
+    Table = kwarg_order_table(),
+    false = maps:is_key(<<"std.string_substring">>, Table),
+    false = maps:is_key(<<"std.string_slice">>, Table),
+    false = maps:is_key(<<"std.array_slice">>, Table).
 
 %%====================================================================
 %% Helpers

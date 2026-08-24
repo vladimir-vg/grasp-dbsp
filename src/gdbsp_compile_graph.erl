@@ -8,7 +8,7 @@
 %%%-------------------------------------------------------------------
 -module(gdbsp_compile_graph).
 
--export([build_from_lowered/3]).
+-export([build_from_lowered/4]).
 
 -include("gdbsp_circuit.hrl").
 -include("gdbsp_lowered.hrl").
@@ -20,16 +20,17 @@
 
 -type fn_registry() :: #{binary() := jsx:json_term()}.
 -type fn_params() :: #{binary() => #{pos := [binary()], kw := [{binary(), binary()}]}}.
+-type kwarg_order() :: #{binary() => [binary()]}.
 
--spec build_from_lowered(#lowered_graph{}, fn_registry(), fn_params()) ->
+-spec build_from_lowered(#lowered_graph{}, fn_registry(), fn_params(), kwarg_order()) ->
     {ok, #circuit_graph{}, #{binary() => node_id()}} | {error, term()}.
 build_from_lowered(#lowered_graph{nodes = LNodes, tag_map = TagMap,
-                                  fixpoints = Fixpoints}, FnReg, FnParams) ->
+                                  fixpoints = Fixpoints}, FnReg, FnParams, KwargOrder) ->
     NodeList = maps:to_list(LNodes),
     case lowered_topo_sort(NodeList) of
         {ok, Order} ->
             {Graph0, LnIdMap, CircuitFixpointInputs, CircuitFixpointOutputs} =
-                construct_from_lowered(NodeList, Order, FnReg, FnParams),
+                construct_from_lowered(NodeList, Order, FnReg, FnParams, KwargOrder),
             {Graph1, RecOutputTags} = construct_fixpoints(Graph0, Fixpoints, LnIdMap,
                                           CircuitFixpointInputs, CircuitFixpointOutputs),
             ok = validate_rec_source_inputs(Graph1),
@@ -92,7 +93,7 @@ lowered_topo_loop(Q, InDeg, Consumers, Total, Acc) ->
 %% Circuit graph construction from lowered nodes
 %%====================================================================
 
-construct_from_lowered(NodeList, Order, FnReg, FnParams) ->
+construct_from_lowered(NodeList, Order, FnReg, FnParams, KwargOrder) ->
     LNodeById = maps:from_list(NodeList),
     {G, LnIdMap, FixInMap, FixOutMap} = lists:foldl(
         fun(LId, {GAcc, IdMapAcc, FIMAcc, FOMAcc}) ->
@@ -135,7 +136,7 @@ construct_from_lowered(NodeList, Order, FnReg, FnParams) ->
                     {G4, IdMapAcc#{LId => NodeId}, FIMAcc, FOMAcc};
                 _ ->
                     {OpTuple, SubNodes} = make_operator_lowered(
-                        GAcc, Op, Args, CInputIds, Type, FnReg, FnParams),
+                        GAcc, Op, Args, CInputIds, Type, FnReg, FnParams, KwargOrder),
                     {G2, FinalId} = add_with_sub_nodes(GAcc, OpTuple, CInputIds, SubNodes),
                     Schema = compute_schema_lowered(Op, Args, CInputIds, Type, G2),
                     G3 = set_schema(G2, FinalId, Schema),
@@ -223,7 +224,7 @@ build_aggregate_graph_lowered(G, Args, InputIds, FnReg) ->
 %% Operator mapping from lowered args
 %%--------------------------------------------------------------------
 
-make_operator_lowered(G, Op, Args, InputIds, _TS, FnReg, FnParams) ->
+make_operator_lowered(G, Op, Args, InputIds, _TS, FnReg, FnParams, KwargOrder) ->
     case Op of
         source ->
             TableName = get_string_arg(Args, 1),
@@ -246,20 +247,22 @@ make_operator_lowered(G, Op, Args, InputIds, _TS, FnReg, FnParams) ->
             {Expr, ArgName} = resolve_fn(FnName, FnReg, FnParams),
             RowType = get_input_row_type(InputIds, G),
             Spec = #{kind => expr, expr => Expr, row_type => RowType,
-                     arg_name => ArgName},
+                     arg_name => ArgName, kwarg_order => KwargOrder},
             {{map, Spec}, []};
         filter ->
             FnName = get_var_arg(Args, 2),
             check_row_fn_arity(filter, FnName, FnParams),
             {Expr, ArgName} = resolve_fn(FnName, FnReg, FnParams),
             RowType = get_input_row_type(InputIds, G),
-            {{filter, #{expr => Expr, row_type => RowType, arg_name => ArgName}}, []};
+            {{filter, #{expr => Expr, row_type => RowType, arg_name => ArgName,
+                        kwarg_order => KwargOrder}}, []};
         flat_map ->
             FnName = get_var_arg(Args, 2),
             check_row_fn_arity(flat_map, FnName, FnParams),
             {Expr, ArgName} = resolve_fn(FnName, FnReg, FnParams),
             RowType = get_input_row_type(InputIds, G),
-            {{flat_map, #{expr => Expr, row_type => RowType, arg_name => ArgName}}, []};
+            {{flat_map, #{expr => Expr, row_type => RowType, arg_name => ArgName,
+                          kwarg_order => KwargOrder}}, []};
         project ->
             KeepFields = get_string_list_arg(Args, 2),
             {{map, #{kind => project, keep => KeepFields}}, []};

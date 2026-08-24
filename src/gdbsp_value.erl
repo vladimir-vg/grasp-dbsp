@@ -3,7 +3,7 @@
 -export([map_to_struct/2, struct_to_map/1, struct_project/2,
          struct_extend/3, unwrap/1,
          wrap_value/2,
-         eval_expr/3,
+         eval_expr/4,
          columns_to_json/1,
          encode_row/2, decode_row/2,
          bytewise_xor/2]).
@@ -16,7 +16,7 @@ unwrap(Value) -> gdbsp_struct:unwrap_value(Value).
 
 wrap_value(Val, Type) -> gdbsp_struct:wrap_value(Val, Type).
 
-eval_expr(Expr, Row, ArgName) -> gdbsp_eval:eval_with_row(Expr, Row, ArgName).
+eval_expr(Expr, Row, ArgName, KwargOrder) -> gdbsp_eval:eval_with_row(Expr, Row, ArgName, KwargOrder).
 
 columns_to_json(Columns) -> gdbsp_value_json:columns_to_json(Columns).
 

@@ -407,5 +407,5 @@ t34_builtin_resolve_strict_dynamic(_Config) ->
 %%====================================================================
 
 test_stdlib() ->
-    {ok, M} = gdbsp_compile:load_stdlib(),
+    {ok, M} = gdbsp_builtins:load_stdlib(),
     M.

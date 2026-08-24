@@ -547,6 +547,20 @@
     - out:
         - [1, {id: "1", name: "fixed"}]
 
+- description: "std.struct_set with reversed kwargs (name-aware dispatch)"
+  source: |
+    src := source("data")
+    src :: stream(struct("id": i64, "name": string("UTF-8")))
+    fix := function((row) -> std.struct_set(row, value: "fixed", key: "name"))
+    fix :: function((struct("id": i64, "name": string("UTF-8"))) -> struct("id": i64, "name": string("UTF-8")))
+    out := map(src, fix)
+  input:
+    - data:
+        - [1, {id: "1", name: "alice"}]
+  expected:
+    - out:
+        - [1, {id: "1", name: "fixed"}]
+
 - description: "non-literal struct key fails"
   source: |
     src := source("data")

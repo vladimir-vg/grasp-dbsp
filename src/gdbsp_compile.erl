@@ -8,7 +8,6 @@
 -module(gdbsp_compile).
 
 -export([compile/2, compile_with_names/2, infer/2]).
--export([load_stdlib/0, build_stdlib_map/1]).
 
 -include("gdbsp_parse.hrl").
 -include("gdbsp_circuit.hrl").
@@ -38,7 +37,9 @@ compile_with_names(Program, Options) ->
     case infer(Program, ExternalFnReg) of
         {ok, Lowered, FnReg, FnParams} ->
             try
-                case gdbsp_compile_graph:build_from_lowered(Lowered, FnReg, FnParams) of
+                {ok, StdlibMap} = gdbsp_builtins:load_stdlib(),
+                KwargOrder = gdbsp_builtins:build_kwarg_order(StdlibMap),
+                case gdbsp_compile_graph:build_from_lowered(Lowered, FnReg, FnParams, KwargOrder) of
                     {ok, Graph, NameToId} ->
                         Graph2 = case Incr of
                             true  -> gdbsp_compile_incremental:run(Graph);
@@ -59,7 +60,7 @@ compile_with_names(Program, Options) ->
     {error, term()}.
 infer(Program, ExternalFnReg) ->
     try
-        {ok, StdlibMap} = load_stdlib(),
+        {ok, StdlibMap} = gdbsp_builtins:load_stdlib(),
         {InlineFnReg, FnParams} = compile_inline_fns(Program, StdlibMap),
         case duplicate_fn_names(ExternalFnReg, InlineFnReg) of
             [] -> ok;
@@ -121,28 +122,3 @@ duplicate_inline_names(FnDefs) ->
 
 stdlib_collision_names(FnDefs, StdlibMap) ->
     [N || #gdbsp_fn_def{name = N} <- FnDefs, maps:is_key(N, StdlibMap)].
-
-%%====================================================================
-%% stdlib loading
-%%====================================================================
-
--type stdlib_map() :: #{binary() => [#gdbsp_typespec{}]}.
-
--spec load_stdlib() -> {ok, stdlib_map()} | {error, term()}.
-load_stdlib() ->
-    PrivDir = code:priv_dir(grasp_dbsp),
-    Path = filename:join(PrivDir, "stdlib.gdbsp"),
-    case file:read_file(Path) of
-        {ok, Bin} ->
-            {ok, Prog} = gdbsp_parse:parse_string(Bin, #{}),
-            {ok, build_stdlib_map(Prog#gdbsp_program.typespecs)};
-        {error, _} = E -> E
-    end.
-
--spec build_stdlib_map([#gdbsp_typespec{}]) -> stdlib_map().
-build_stdlib_map(Typespecs) ->
-    lists:foldl(
-        fun(#gdbsp_typespec{name = N} = TS, Acc) ->
-            Existing = maps:get(N, Acc, []),
-            Acc#{N => [TS | Existing]}
-        end, #{}, Typespecs).
