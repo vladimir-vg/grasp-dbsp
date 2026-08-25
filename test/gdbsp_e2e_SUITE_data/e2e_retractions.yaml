@@ -63,7 +63,9 @@
 - source: |
     src := source("data")
     src :: stream(struct("dept": i64, "sal": i64))
-    agg := aggregate(src, std.agg_sum_integer, by: ["dept"], value: "sal", as: "total")
+    sum_fn :: aggregate_function((struct("dept": i64, "sal": i64)) -> struct("total": i64))
+    sum_fn := function((row) -> struct("total": std.agg_sum_i64(row.sal)))
+    agg := aggregate(src, sum_fn, by: ["dept"])
 
   input:
     - data:

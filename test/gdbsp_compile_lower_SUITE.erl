@@ -391,9 +391,11 @@ fixpoint_selfref_distinct_error(_Config) ->
 fixpoint_forbidden_operator(_Config) ->
     Src = "circuit bad(base: input, result: r):\n"
           "    result := distinct(r)\n"
-          "    agg := aggregate(r, sum_sal, by: [\"dept\"], value: \"sal\", as: \"total\")\n"
+          "    agg := aggregate(r, sum_v, by: [\"v\"])\n"
           "s := source(\"data\")\n"
           "s :: stream(struct(\"v\": i64))\n"
+          "sum_v :: aggregate_function((struct(\"v\": i64)) -> struct(\"total\": i64))\n"
+          "sum_v := function((row) -> struct(\"total\": std.agg_sum_i64(row.v)))\n"
           "fp := fixpoint(bad(base: s, result: s))\n"
           "out := fp.result\n",
     {error, {fixpoint_error, {_Line, Msg}}} = lower(Src),

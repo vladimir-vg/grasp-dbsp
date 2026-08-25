@@ -67,7 +67,7 @@ its input schemas. The propagation rules:
 | `differentiate` | Same as input schema |
 | `distinct` | Same as input schema |
 | `join` | `on_fields ++ left_extra_fields ++ right_extra_fields` — key fields from left side, non-key fields merged from both sides |
-| `aggregate` | `by_fields ++ [result_field_name]` — group-by fields preserved, value field replaced by aggregate result |
+| `aggregate` | `by_fields ++ result_struct_fields` — group-by fields preserved, aggregate function's returned struct appended |
 | `antijoin` | Same as left input schema |
 
 ### 3.2 Join Schema Details
@@ -80,11 +80,13 @@ For `join(left, right, on: ["k1", "k2"])`:
 
 ### 3.3 Aggregate Schema Details
 
-For `aggregate(input, fn, by: ["g1", "g2"], value: "v", as: "result")`:
-- `by:` fields are preserved in the output with their input types
-- The `value:` field is consumed by the aggregate function and does NOT appear in the output
-- The `as:` field replaces `value:` in the output schema, with the aggregate's return type
-- All other input fields are dropped
+For `aggregate(input, fn, by: ["g1", "g2"])`:
+- `fn` is an aggregate function whose body takes the input row and returns a struct
+- The output schema is `by_fields ++ result_struct_fields`: `by:` fields are
+  preserved with their input types, followed by the returned struct's fields
+- The returned struct must not contain any `by:` field name (a name clash is a
+  `type_conflict` error)
+- All input fields not in `by:` and not produced by the body are dropped
 
 ### 3.4 Project Schema Details
 
@@ -113,20 +115,12 @@ concrete types from the operator's input schema:
 ### 4.2 Example
 
 ```
-count :: aggregate_function((T) -> i64)
+sum_any :: aggregate_function((T) -> T)
 ```
 
-When `count` is used as the aggregate function for an input with value
-type `i64`:
-
-1. The call supplies `T = i64` (the type of the `value:` field)
-2. The system unifies `T` with `i64`
-3. The aggregate's argument type is resolved to `i64`
-4. The return type is `i64`
-
-The type variable `T` allows the same `count` declaration to work with
-any value type — it doesn't depend on the concrete type of the value
-being counted.
+When `sum_any` is resolved at a call site with element type `i64`, `T`
+unifies to `i64` and the return type becomes `i64`. The type variable `T`
+allows the same declaration to work with any element type.
 
 ### 4.3 Constraints
 
@@ -137,22 +131,23 @@ being counted.
 
 ## 5. Aggregate Return Type Inference
 
-Aggregate functions have specific return type rules. When an aggregate
-is used, the return type is inferred from the input value type.
+An aggregate function's return type is the type of its body expression (the
+struct returned by `:= function(...)`). The `aggregate` operator's output
+schema is `by_fields ++ result_struct_fields` (see §3.3).
 
-### 5.1 Built-in Aggregate Return Types
+### 5.1 Built-in Aggregate Primitive Return Types
 
 | Aggregate | Input Type | Return Type | Rule |
 |-----------|-----------|-------------|------|
 | `std.agg_sum_i64` | `i64` | `i64` | Sum over i64 |
+| `std.agg_sum_integer` | `integer` | `integer` | Sum over integer |
 | `std.agg_sum_numeric` | `numeric` | `numeric` | Sum over numeric |
 | `std.agg_sum_f64` | `f64` | `f64` | Sum over f64 |
-| `std.agg_count` | any | `i64` | Always `i64` |
-| `std.agg_avg_i64` | `i64` | `f64` | Integer average → `f64` |
-| `std.agg_avg_numeric` | `numeric` | `numeric` | Numeric average preserved |
-| `std.agg_avg_f64` | `f64` | `f64` | Float average → `f64` |
-| `std.agg_min_i64` / `std.agg_min_numeric` / `std.agg_min_f64` | `i64` / `numeric` / `f64` | same as input | Minimum |
-| `std.agg_max_i64` / `std.agg_max_numeric` / `std.agg_max_f64` | `i64` / `numeric` / `f64` | same as input | Maximum |
+| `std.agg_count` | — | `integer` | Always `integer` |
+| `std.agg_avg_integer` | `integer` | `integer` | `floor(sum / count)`; empty group dropped |
+| `std.agg_min_i64` / `std.agg_min_integer` / `std.agg_min_numeric` / `std.agg_min_f64` | same as input | same as input | Minimum |
+| `std.agg_max_i64` / `std.agg_max_integer` / `std.agg_max_numeric` / `std.agg_max_f64` | same as input | same as input | Maximum |
+| `std.agg_xor_bytes` | `bytes` | `bytes` | Bitwise XOR fold |
 
 ---
 

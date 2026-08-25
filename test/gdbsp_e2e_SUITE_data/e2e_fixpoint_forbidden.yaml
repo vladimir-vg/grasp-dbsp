@@ -1,6 +1,6 @@
 - source: |
     circuit bad(x: input):
-        result := aggregate(x, sum_v, value: "v", as: "total")
+        result := aggregate(x, sum_v, by: ["v"])
     src := source("data")
     src :: stream(struct("v": i64))
     fp := fixpoint(bad(x: src))

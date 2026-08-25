@@ -105,7 +105,10 @@ An aggregate function call. Same structure as call but uses the
 aggregate references.
 
 ```json
-{"aggregate": "std.agg_sum_i64", "args": [{"field": "amount"}]}
+{"aggregate": "std.agg_sum_i64",
+ "args": [{"call": "std.struct_get",
+           "args": [{"arg": "row"}],
+           "kwargs": {"key": {"type": "string", "value": "amount"}}}]}
 {"aggregate": "std.agg_count"}
 ```
 
@@ -313,26 +316,28 @@ vs JSON null. In summary:
 Functions are namespaced. Every function lives under a namespace prefix.
 No new names are added to the global scope.
 
-### 3.1 Aggregate Functions
+### 3.1 Aggregate Primitives
 
-Aggregate functions reduce a set of rows to a single value. They are
-referenced in the `"aggregate"` discriminator in expression trees and
-declared in `.gdbsp` source via `:: aggregate_function(...)`. Each concrete
-aggregate is a `std.agg_*` entry in `priv/stdlib.gdbsp`.
+Aggregate primitives fold a group of rows into a single scalar value. They
+are referenced in the `"aggregate"` discriminator inside aggregate-function
+bodies (see §4.2) and declared in `.gdbsp` source via
+`:: aggregate_function(...)`. Each concrete aggregate is a `std.agg_*` entry
+in `priv/stdlib.gdbsp`.
 
 | Function | Signature | Return Type Rule |
 |----------|-----------|-----------------|
 | `std.agg_sum_i64` | `(i64) → i64` | Sum over i64 |
+| `std.agg_sum_integer` | `(integer) → integer` | Sum over integer |
 | `std.agg_sum_numeric` | `(numeric) → numeric` | Sum over numeric |
 | `std.agg_sum_f64` | `(f64) → f64` | Sum over f64 |
-| `std.agg_count` | `() → i64` | Always `i64` |
-| `std.agg_avg_i64` | `(i64) → f64` | Integer average → `f64` |
-| `std.agg_avg_numeric` | `(numeric) → numeric` | Numeric average preserved |
-| `std.agg_avg_f64` | `(f64) → f64` | Float average → `f64` |
+| `std.agg_count` | `() → integer` | Always `integer` |
+| `std.agg_avg_integer` | `(integer) → integer` | `floor(sum / count)`; empty group dropped |
 | `std.agg_min_i64` | `(i64) → i64` | Minimum |
+| `std.agg_min_integer` | `(integer) → integer` | Minimum |
 | `std.agg_min_numeric` | `(numeric) → numeric` | Minimum |
 | `std.agg_min_f64` | `(f64) → f64` | Minimum |
 | `std.agg_max_i64` | `(i64) → i64` | Maximum |
+| `std.agg_max_integer` | `(integer) → integer` | Maximum |
 | `std.agg_max_numeric` | `(numeric) → numeric` | Maximum |
 | `std.agg_max_f64` | `(f64) → f64` | Maximum |
 | `std.agg_xor_bytes` | `(bytes) → bytes` | Bitwise XOR fold over bytes |
@@ -545,12 +550,15 @@ stream's element type is that `struct(...)`.
 
 ### 4.2 Aggregate Functions
 
-Aggregate functions are referenced directly by their stdlib name in the
-`aggregate` operator:
+Aggregate functions are user-defined: an `aggregate_function` typespec plus a
+`:= function(...)` body that takes the input row and returns a struct. The body
+references built-in aggregate primitives (`std.agg_*`, see §3.1):
 
 ```
-agg := aggregate(src, std.agg_sum_i64, by: ["dept"], value: "sal", as: "total")
+payroll :: aggregate_function((struct("dept": i64, "sal": i64)) -> struct("total": i64))
+payroll := function((row) -> struct("total": std.agg_sum_i64(row.sal)))
+
+agg := aggregate(src, payroll, by: ["dept"])
 ```
 
-Built-in aggregate names are listed in §2 (e.g. `std.agg_sum_integer`,
-`std.agg_count`, `std.agg_avg_f64`).
+The output struct is the `by:` fields followed by the returned struct's fields.

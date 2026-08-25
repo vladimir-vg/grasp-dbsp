@@ -104,7 +104,7 @@ lg_aggregate_info(_Config) ->
     Src = <<
         "inp := source(\"t\")\n"
         "inp :: stream(struct(\"g\": i64, \"v\": i64))\n"
-        "aggd := aggregate(inp, sum_fn, by: [\"g\"], value: \"v\", as: \"r\")\n"
+        "aggd := aggregate(inp, sum_fn, by: [\"g\"])\n"
     >>,
     {ok, LG} = lower(Src),
     Dot = lists:flatten(gdbsp_graphviz:lowered_to_dot(LG)),

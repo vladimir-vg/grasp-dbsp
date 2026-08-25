@@ -93,7 +93,7 @@ through the circuit.
 | 8 | `map` | `node, fn` | 1→1 row transform via a function. |
 | 9 | `flat_map` | `node, fn` | 1→N row expansion. Function returns `array(row)`. |
 | 10 | `join` | `left, right, on: ["f1", ...]` | Equi-join. Key fields must have the same name on both sides. Non-key fields are merged flat into the output. |
-| 11 | `aggregate` | `node, fn, by: ["g1", ...], value: "v", as: "r"` | Group by `by` fields, fold `value` field via `fn`, name result `as` in output. |
+| 11 | `aggregate` | `node, fn, by: ["g1", ...]` | Group by `by` fields, fold each group via aggregate function `fn`, which returns a struct. `by` fields are added to the output. |
 
 ### Extended set
 
@@ -108,7 +108,7 @@ through the circuit.
 
 **Join:** inputs must be structs. `on:` fields must exist on both sides with compatible types. Non-key fields are merged flat; duplicate non-key field names is an error. Key fields appear once in the output with the type from the left side. Disambiguate field names via `map` before the join.
 
-**Aggregate:** input must be a struct. `by:` fields are preserved in the output. `value:` is consumed by the aggregate and replaced by `as:` in the output schema. All other input fields are dropped.
+**Aggregate:** input must be a struct. `fn` is an aggregate function (see below) that takes the whole row and returns a struct. `by:` fields are preserved from the input and prepended to the output struct. All other input fields are dropped. A `by:` field name must not appear in the returned struct (a name clash is a compile error).
 
 **Incrementalization:** the compiler inserts `integrate` / `differentiate` pairs around non-linear operators (join, distinct, aggregate, antijoin). Linears (map, filter, flat_map, neg, plus, delay, project) pass through unchanged. See [compilation.md](compilation.md) §5 for details.
 
@@ -180,9 +180,9 @@ matching `:= function(...)` definition is a signature-only declaration: it is
 available for type inference of other function bodies but has no runtime body,
 so it cannot be used as a `map` / `filter` / `flat_map` function.
 
-Aggregate expressions (`count<>`, `sum<col>`) and closure expressions
-(`closure(...)`) are not allowed in regular function bodies — they are reserved
-for aggregate functions and future work respectively.
+Aggregate calls (`std.agg_*`, see below) are allowed only in aggregate-function
+bodies, not in regular function bodies. Closure expressions (`closure(...)`)
+are reserved for future work.
 
 Inline function bodies currently require **exact (concrete) types** in the
 typespec. Type-variable unification is implemented
@@ -220,19 +220,29 @@ is_positive := function((x) -> x > 0)
 ### Aggregate function
 
 ```
-fn_name :: aggregate_function((pos_type, ..., "key": kw_type, ...) -> result_type)
+fn_name :: aggregate_function((input_row_type) -> result_struct_type)
+fn_name := function((row) -> result_struct_expr)
 ```
 
-Used with `aggregate`. The `value_type` is the type of the `value:` field in the
-aggregate input struct. The runtime resolves the declared name to a built-in
-stdlib aggregate (see [stdlib.md](stdlib.md) §4.2).
-
-Examples:
+An aggregate function has an `aggregate_function` typespec and a
+`:= function(...)` body, exactly like a regular function. The body takes the
+whole input row and returns a **struct**. It is used with `aggregate`:
 
 ```
-sum_sal :: aggregate_function((i64) -> i64)
-count :: aggregate_function((T) -> i64)
+payroll :: aggregate_function((struct("dept": i64, "sal": i64)) -> struct("total": i64))
+payroll := function((row) -> struct("total": std.agg_sum_i64(row.sal)))
+
+total_by_dept := aggregate(emp, payroll, by: ["dept"])
 ```
+
+The body may reference built-in aggregate primitives (`std.agg_*`, see
+[stdlib.md](stdlib.md) §3.1). It must contain at least one aggregate call.
+Aggregate calls cannot be nested, and the row parameter may only appear inside
+an aggregate call's argument (`std.agg_sum_i64(row.sal)` is valid, but
+`row.sal + std.agg_count()` is not).
+
+The output struct type is the `by:` fields followed by the returned struct's
+fields; a `by:` field name must not also appear in the returned struct.
 
 ## Examples
 
@@ -274,11 +284,11 @@ emp_src := source("emp")
 emp_src :: stream(struct("name": string("UTF-8"), "dept": i64, "year": i64, "sal": i64))
 
 salary_ge_150 :: function((struct("name": string("UTF-8"), "dept": i64, "year": i64, "sal": i64)) -> enum("false", "true"))
-sum_sal :: aggregate_function((i64) -> i64)
+sum_sal :: aggregate_function((struct("name": string("UTF-8"), "dept": i64, "year": i64, "sal": i64)) -> struct("total": i64))
+sum_sal := function((row) -> struct("total": std.agg_sum_i64(row.sal)))
 
 high_paid := filter(emp_src, salary_ge_150)
-payroll_agg := aggregate(high_paid, sum_sal, by: ["dept", "year"], value: "sal", as: "total")
-payroll := project(payroll_agg, ["dept", "year", "total"])
+payroll := aggregate(high_paid, sum_sal, by: ["dept", "year"])
 ```
 
 ### Antijoin (stratified negation)
@@ -349,7 +359,7 @@ comment    := "#" .* NEWLINE
 | `map` | `node, fn` | 1→1 row transform. |
 | `flat_map` | `node, fn` | 1→N row expansion. |
 | `join` | `left, right, on: ["f", ...]` | Equi-join. |
-| `aggregate` | `node, fn, by: ["g", ...], value: "v", as: "r"` | Group-by and fold. |
+| `aggregate` | `node, fn, by: ["g", ...]` | Group-by and fold via aggregate function. |
 | `filter` | `node, fn` | Keep or discard rows. |
 | `project` | `node, ["f", ...]` | Drop unlisted fields. |
 | `antijoin` | `left, right, on: ["f", ...]` | Left rows with no right match. |

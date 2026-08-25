@@ -102,7 +102,9 @@ aggregate(_Config) ->
     {ok, Prog} = parse_prog(
         "emp_src := source(\"emp\")\n"
         "emp_src :: stream(struct(\"dept\": i64, \"sal\": i64))\n"
-        "agg := aggregate(emp_src, std.agg_sum_integer, by: [\"dept\"], value: \"sal\", as: \"total\")\n"
+        "sum_fn :: aggregate_function((struct(\"dept\": i64, \"sal\": i64)) -> struct(\"total\": i64))\n"
+        "sum_fn := function((row) -> struct(\"total\": std.agg_sum_i64(row.sal)))\n"
+        "agg := aggregate(emp_src, sum_fn, by: [\"dept\"])\n"
     ),
     {ok, G} = gdbsp_compile:compile(Prog, #{incrementalize => false}),
     Nodes = maps:to_list(G#circuit_graph.nodes),

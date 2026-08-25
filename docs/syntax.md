@@ -234,6 +234,22 @@ require **exact (concrete) types** in the typespec. Type-variable unification is
 implemented (`gdbsp_builtins:unify_types/3`) and used for operator/overload
 resolution, but it is not applied to inline function bodies.
 
+### 5.4 Aggregate Function Bodies
+
+Aggregate functions use the same `:= function((params) -> body_expr)` form,
+paired with an `aggregate_function` typespec. The body takes the input row and
+returns a struct. Its expression may contain aggregate calls (`std.agg_*(...)`)
+which are otherwise forbidden in regular function bodies:
+
+```
+payroll :: aggregate_function((struct("dept": i64, "sal": i64)) -> struct("total": i64))
+payroll := function((row) -> struct("total": std.agg_sum_i64(row.sal)))
+```
+
+An aggregate body must contain at least one aggregate call. Aggregate calls
+cannot be nested, and the row parameter may only appear inside an aggregate
+call's argument.
+
 ---
 
 ## 6. Expressions
@@ -241,12 +257,10 @@ resolution, but it is not applied to inline function bodies.
 Expressions appear in function body definitions. The expression grammar
 supports the full Grasp expression syntax with the following exceptions:
 
-- **Aggregate expressions** (`count<>`, `sum<col>`) — reserved for
-  `aggregate_function` bodies (future).
+- **Aggregate calls** (`std.agg_*(...)`) — allowed only in `aggregate_function`
+  bodies, not in regular function bodies.
 - **Closure expressions** (`closure((x: T) -> body)`) — deferred to future
   work.
-
-Both produce parse errors if encountered in a function body expression.
 
 ### 6.1 Precedence (Low to High)
 

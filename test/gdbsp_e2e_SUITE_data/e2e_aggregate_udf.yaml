@@ -1,0 +1,90 @@
+- source: |
+    src := source("data")
+    src :: stream(struct("k": i64, "a": i64, "b": i64))
+    agg_fn :: aggregate_function((struct("k": i64, "a": i64, "b": i64)) -> struct("s": i64, "m": i64))
+    agg_fn := function((row) -> struct("s": std.agg_sum_i64(row.a), "m": std.agg_max_i64(row.b)))
+    out := aggregate(src, agg_fn, by: ["k"])
+
+  input:
+    - data:
+        - [1, {k: "1", a: "10", b: "5"}]
+        - [1, {k: "1", a: "20", b: "30"}]
+        - [1, {k: "2", a: "5", b: "40"}]
+
+  expected:
+    - out:
+        - [1, {k: "1", s: "30", m: "30"}]
+        - [1, {k: "2", s: "5", m: "40"}]
+
+- source: |
+    src := source("data")
+    src :: stream(struct("k": i64, "x": integer))
+    dbl :: aggregate_function((struct("k": i64, "x": integer)) -> struct("total": integer))
+    dbl := function((row) -> struct("total": std.agg_sum_integer(row.x * 2)))
+    out := aggregate(src, dbl, by: ["k"])
+
+  input:
+    - data:
+        - [1, {k: "1", x: "3"}]
+        - [1, {k: "1", x: "4"}]
+
+  expected:
+    - out:
+        - [1, {k: "1", total: "14"}]
+
+- source: |
+    src := source("data")
+    src :: stream(struct("k": i64, "v": i64))
+    fn :: aggregate_function((struct("k": i64, "v": i64)) -> struct("total": i64, "cnt": integer))
+    fn := function((row) -> struct("total": std.agg_sum_i64(row.v), "cnt": std.agg_count()))
+    out := aggregate(src, fn, by: ["k"])
+
+  input:
+    - data:
+        - [1, {k: "1", v: "10"}]
+        - [1, {k: "1", v: "20"}]
+        - [1, {k: "1", v: "30"}]
+
+  expected:
+    - out:
+        - [1, {k: "1", total: "60", cnt: "3"}]
+
+- source: |
+    src := source("data")
+    src :: stream(struct("k": i64, "v": integer))
+    fn :: aggregate_function((struct("k": i64, "v": integer)) -> struct("avg": integer))
+    fn := function((row) -> struct("avg": std.agg_avg_integer(row.v)))
+    out := aggregate(src, fn, by: ["k"])
+
+  input:
+    - data:
+        - [1, {k: "1", v: "1"}]
+        - [1, {k: "1", v: "2"}]
+        - [1, {k: "2", v: "-1"}]
+        - [1, {k: "2", v: "-2"}]
+
+  expected:
+    - out:
+        - [1, {k: "1", avg: "1"}]
+        - [1, {k: "2", avg: "-2"}]
+
+- source: |
+    src := source("data")
+    src :: stream(struct("k": i64, "v": i64))
+    fn :: aggregate_function((struct("k": i64, "v": i64)) -> struct("total": i64))
+    fn := function((row) -> struct("total": std.agg_sum_i64(row.v)))
+    out := aggregate(src, fn, by: ["k"])
+
+  input:
+    - data:
+        - [1, {k: "1", v: "10"}]
+        - [1, {k: "1", v: "20"}]
+    - data:
+        - [-1, {k: "1", v: "10"}]
+        - [-1, {k: "1", v: "20"}]
+
+  expected:
+    - out:
+        - [1, {k: "1", total: "30"}]
+    - out:
+        - [-1, {k: "1", total: "30"}]

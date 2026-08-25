@@ -162,12 +162,11 @@ groups, which the `join` operator uses for indexing and lookup.
 
 ### 5.4 Aggregate Decomposition
 
-`aggregate(input, fn, by: [...], value: "v", as: "r")` expands to a chain
-of **three** nodes:
+`aggregate(input, fn, by: [...])` expands to a chain of **three** nodes:
 
-1. `map_index` — partitions the input struct into key fields (`by:`) + the value field
-2. `aggregate` — performs the group-by-and-fold using the aggregate function from the registry
-3. `map(unwrap)` — reconstructs a flat struct from the aggregate's internal representation: `by_fields ++ [result_field]`
+1. `map_index` — extracts the key fields (`by:`) and passes the whole row as the value
+2. `aggregate` — performs the group-by-and-fold by interpreting the aggregate function's body: each `std.agg_*` call becomes an accumulator slot, and the body's result expression is evaluated over the slot results
+3. `map(unwrap)` — merges the group-by key with the returned result struct: `by_fields ++ result_struct_fields`
 
 ### 5.5 Antijoin Expansion
 
@@ -189,10 +188,12 @@ IDs after all nodes are placed. References to nodes not yet defined
 
 ### 5.7 Function Resolution
 
-Operators that reference functions (`map`, `filter`, `flat_map`,
-`aggregate`) resolve the function name against the inline function registry
-first, then against the stdlib (see [stdlib.md](stdlib.md) §4). A missing
-function is a compile error: `missing_function`.
+Operators that reference functions (`map`, `filter`, `flat_map`) resolve the
+function name against the inline function registry first, then against the
+stdlib (see [stdlib.md](stdlib.md) §4). `aggregate` resolves against the
+aggregate-function registry (bodies defined via an `aggregate_function`
+typespec plus a `:= function(...)` body). A missing function is a compile
+error: `missing_function`.
 
 ---
 

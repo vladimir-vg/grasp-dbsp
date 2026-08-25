@@ -1,0 +1,86 @@
+- description: "aggregate body returns struct; by fields prepended"
+  source: |
+    src := source("data")
+    src :: stream(struct("k": i64, "a": i64, "b": i64))
+    agg_fn :: aggregate_function((struct("k": i64, "a": i64, "b": i64)) -> struct("s": i64, "m": i64))
+    agg_fn := function((row) -> struct("s": std.agg_sum_i64(row.a), "m": std.agg_max_i64(row.b)))
+    out := aggregate(src, agg_fn, by: ["k"])
+  expected:
+    out:
+      struct:
+        k: i64
+        s: i64
+        m: i64
+
+- description: "aggregate body with count and sum"
+  source: |
+    src := source("data")
+    src :: stream(struct("k": i64, "v": i64))
+    fn :: aggregate_function((struct("k": i64, "v": i64)) -> struct("total": i64, "cnt": integer))
+    fn := function((row) -> struct("total": std.agg_sum_i64(row.v), "cnt": std.agg_count()))
+    out := aggregate(src, fn, by: ["k"])
+  expected:
+    out:
+      struct:
+        k: i64
+        total: i64
+        cnt: integer
+
+- description: "aggregate by-field clash with result struct fails"
+  source: |
+    src := source("data")
+    src :: stream(struct("dept": i64, "sal": i64))
+    fn :: aggregate_function((struct("dept": i64, "sal": i64)) -> struct("dept": i64, "total": i64))
+    fn := function((row) -> struct("dept": std.agg_sum_i64(row.sal), "total": std.agg_sum_i64(row.sal)))
+    out := aggregate(src, fn, by: ["dept"])
+  expected_errors:
+    - class: type_conflict
+
+- description: "aggregate body must return a struct"
+  source: |
+    src := source("data")
+    src :: stream(struct("dept": i64, "sal": i64))
+    fn :: aggregate_function((struct("dept": i64, "sal": i64)) -> i64)
+    fn := function((row) -> std.agg_sum_i64(row.sal))
+    out := aggregate(src, fn, by: ["dept"])
+  expected_errors:
+    - class: type_conflict
+
+- description: "aggregate function without body fails"
+  source: |
+    src := source("data")
+    src :: stream(struct("dept": i64, "sal": i64))
+    sum_sal :: aggregate_function((struct("dept": i64, "sal": i64)) -> struct("total": i64))
+    out := aggregate(src, sum_sal, by: ["dept"])
+  expected_errors:
+    - class: missing_typespec
+
+- description: "aggregate body without an aggregate call fails"
+  source: |
+    src := source("data")
+    src :: stream(struct("dept": i64, "sal": i64))
+    fn :: aggregate_function((struct("dept": i64, "sal": i64)) -> struct("total": i64))
+    fn := function((row) -> struct("total": row.sal))
+    out := aggregate(src, fn, by: ["dept"])
+  expected_errors:
+    - class: no_aggregate_call
+
+- description: "nested aggregate calls are rejected"
+  source: |
+    src := source("data")
+    src :: stream(struct("dept": i64, "sal": i64))
+    fn :: aggregate_function((struct("dept": i64, "sal": i64)) -> struct("total": i64))
+    fn := function((row) -> struct("total": std.agg_sum_i64(std.agg_sum_i64(row.sal))))
+    out := aggregate(src, fn, by: ["dept"])
+  expected_errors:
+    - class: nested_aggregate_call
+
+- description: "row parameter outside an aggregate call is rejected"
+  source: |
+    src := source("data")
+    src :: stream(struct("dept": i64, "sal": i64))
+    fn :: aggregate_function((struct("dept": i64, "sal": i64)) -> struct("total": i64))
+    fn := function((row) -> struct("total": std.agg_sum_i64(row.sal) + row.sal))
+    out := aggregate(src, fn, by: ["dept"])
+  expected_errors:
+    - class: row_ref_outside_aggregate
