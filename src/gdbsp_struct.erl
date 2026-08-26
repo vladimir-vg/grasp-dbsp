@@ -104,7 +104,10 @@ map_to_struct(RawMap, {struct, Fields, Rest}) ->
 
 -type raw_value() :: term().
 -spec wrap_value(raw_value(), gdbsp_column_type()) -> value().
-wrap_value({value, T, V}, {dynamic, InnerType}) when InnerType =/= undefined ->
+wrap_value({value, {dynamic, _}, _} = AlreadyDynamic, dynamic) -> AlreadyDynamic;
+wrap_value({value, {dynamic, _}, _} = AlreadyDynamic, {dynamic, undefined}) ->
+    AlreadyDynamic;
+wrap_value({value, _T, V}, {dynamic, InnerType}) when InnerType =/= undefined ->
     {value, {dynamic, InnerType}, V};
 wrap_value({value, T, V}, {dynamic, undefined}) ->
     {value, {dynamic, T}, V};

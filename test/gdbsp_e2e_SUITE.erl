@@ -165,29 +165,21 @@ run_negative(Prog0, ExpectedErrors) ->
     end.
 
 try_compile_negative(Prog0) ->
-    try
-        %% Use a dummy output name — we expect compilation to fail,
-        %% so this placeholder never actually runs.
-        compile_to_plan(Prog0, [<<"dummy">>], true),
-        compiled
-    catch
-        Class:Reason:_Stacktrace ->
-            {failed, normalize_compile_error(Class, Reason)}
+    %% Use a dummy output name — we expect compilation to fail, so this
+    %% placeholder never actually runs.
+    case gdbsp_loader:compile(Prog0, [<<"dummy">>], true) of
+        {ok, _} -> compiled;
+        {error, Reason} -> {failed, normalize_compile_error(Reason)}
     end.
 
-normalize_compile_error(throw, {fixpoint_error, {_Line, Msg}}) ->
+normalize_compile_error({fixpoint_error, {_Line, Msg}}) ->
     #{<<"class">> => <<"fixpoint_error">>, <<"message">> => iolist_to_binary(Msg)};
-normalize_compile_error(throw, {fixpoint_error, {_Line, Msg, _Args}}) ->
+normalize_compile_error({fixpoint_error, {_Line, Msg, _Args}}) ->
     #{<<"class">> => <<"fixpoint_error">>, <<"message">> => iolist_to_binary(Msg)};
-normalize_compile_error(throw, {compile_error, _} = Reason) ->
+normalize_compile_error(Reason) ->
     Detail = list_to_binary(io_lib:format("~p", [Reason])),
     #{<<"class">> => <<"compile_error">>, <<"detail">> => Detail,
-      <<"message">> => Detail};
-normalize_compile_error(error, Reason) when is_map(Reason) ->
-    Reason;
-normalize_compile_error(_Class, Reason) ->
-    #{<<"class">> => <<"unexpected_error">>,
-      <<"detail">> => list_to_binary(io_lib:format("~p:~p", [_Class, Reason]))}.
+      <<"message">> => Detail}.
 
 check_expected_errors(_Actual, []) ->
     ok;
@@ -244,8 +236,9 @@ run_positive(Prog0, GroupName, InputEpochs, ExpectedEpochs, ExpectedExactEpochs,
     %% Generate lowered graph DOT
     write_e2e_lowered_dot(Prog0, GroupName, Config),
 
-    {Plan, SourceTypeMap, OutputTypes, Graph1} =
-        compile_to_plan(Prog0, OutputNames, true),
+    {ok, #{plan := Plan, source_types := SourceTypeMap,
+           output_types := OutputTypes, graph := Graph1}} =
+        gdbsp_loader:compile(Prog0, OutputNames, true),
 
     %% Generate circuit graph DOT
     write_dot_file("e2e", GroupName, "circuit",
@@ -308,8 +301,9 @@ run_dual(Prog0, GroupName, InputEpochs, ExpectedEpochs,
     ok = assert_epochs(GotNoIncr, EpochExpected, OutputTypes, MatchMode).
 
 run_one_incr_mode(Prog0, GroupName, InputEpochs, OutputNames, Config, Incr) ->
-    {Plan, SourceTypeMap, OutputTypes, Graph1} =
-        compile_to_plan(Prog0, OutputNames, Incr),
+    {ok, #{plan := Plan, source_types := SourceTypeMap,
+           output_types := OutputTypes, graph := Graph1}} =
+        gdbsp_loader:compile(Prog0, OutputNames, Incr),
 
     %% Generate circuit graph DOT for the incr=true run only
     write_dot_file("e2e", GroupName, "circuit",
@@ -396,139 +390,6 @@ assert_epochs([Got | GotRest], [ExpectedEpoch | ExpRest], OutputTypes, MatchMode
     end,
     assert_epochs(GotRest, ExpRest, OutputTypes, MatchMode);
 assert_epochs(_Got, [], _OutputTypes, _MatchMode) -> ok.
-
-%%====================================================================
-%% Compilation
-%%====================================================================
-
-compile_to_plan(Prog0, OutputNames, Incr) ->
-    SourceTypeMap = build_source_type_map(Prog0),
-
-    case gdbsp_compile:compile_with_names(
-           Prog0, #{incrementalize => false}) of
-        {ok, Graph0, NameToId} ->
-            Graph1 = add_output_nodes(Graph0, OutputNames, NameToId),
-            OutTypes = output_types_from_graph(Graph1, NameToId,
-                                                OutputNames, SourceTypeMap),
-            Graph2 = case Incr of
-                true  -> gdbsp_compile_incremental:run(Graph1);
-                false -> Graph1
-            end,
-            Plan = gdbsp_deploy:plan(Graph2),
-            {Plan, SourceTypeMap, OutTypes, Graph1};
-        {error, {fixpoint_error, _} = FixErr} ->
-            throw(FixErr);
-        {error, Reason} ->
-            throw({compile_error, Reason})
-    end.
-
-output_types_from_graph(Graph, NameToId, OutputNames, SourceTypeMap) ->
-    SrcSchemata = build_source_schemata(Graph, NameToId, SourceTypeMap),
-    maps:fold(
-        fun(OutName, _NodeId, Acc) ->
-            case maps:find(OutName, NameToId) of
-                {ok, CId} ->
-                    Type = case maps:find(CId, Graph#circuit_graph.types) of
-                        {ok, T} when T =/= undefined, T =/= dynamic -> T;
-                        _ ->
-                            Schema = maps:get(CId, Graph#circuit_graph.schemas, []),
-                            build_struct_type(Schema, CId, SrcSchemata, Graph, #{})
-                    end,
-                    Acc#{OutName => Type};
-                error -> Acc
-            end
-        end,
-        #{},
-        maps:with(OutputNames, NameToId)).
-
-build_source_schemata(_Graph, NameToId, SourceTypeMap) ->
-    maps:fold(
-        fun(_TableName, {NodeName, {struct, _Fields, _} = Type}, Acc) ->
-            case maps:find(NodeName, NameToId) of
-                {ok, CId} -> Acc#{CId => Type};
-                error -> Acc
-            end;
-           (_TableName, {_NodeName, _Type}, Acc) -> Acc
-        end, #{}, SourceTypeMap).
-
-build_struct_type(Cols, CId, SrcSchemata, Graph, Visited) when map_size(Visited) < 100 ->
-    case maps:find(CId, SrcSchemata) of
-        {ok, {struct, Fields, _}} ->
-            Merged = maps:merge(
-                maps:from_list([{Col, dynamic} || Col <- Cols]),
-                maps:with(Cols, Fields)),
-            {struct, Merged, exact};
-        error ->
-            case maps:find(CId, Graph#circuit_graph.nodes) of
-                {ok, #circuit_node{inputs = [InId | _]}} ->
-                    case maps:is_key(CId, Visited) of
-                        true ->
-                            Fields = maps:from_list([{Col, dynamic} || Col <- Cols]),
-                            {struct, Fields, exact};
-                        false ->
-                            build_struct_type(Cols, InId, SrcSchemata, Graph,
-                                maps:put(CId, true, Visited))
-                    end;
-                _ ->
-                    Fields = maps:from_list([{Col, dynamic} || Col <- Cols]),
-                    {struct, Fields, exact}
-            end
-    end;
-build_struct_type(Cols, _CId, _SrcSchemata, _Graph, _Visited) ->
-    Fields = maps:from_list([{Col, dynamic} || Col <- Cols]),
-    {struct, Fields, exact}.
-
-build_source_type_map(#gdbsp_program{nodes = Nodes, typespecs = TSs}) ->
-    TSMap = lists:foldl(
-        fun(#gdbsp_typespec{name = N, spec = {type, {stream, Inner}}}, Acc) ->
-                Acc#{N => Inner};
-           (#gdbsp_typespec{name = N, spec = {type, T}}, Acc) ->
-                Acc#{N => T};
-           (_, Acc) -> Acc
-        end, #{}, TSs),
-    lists:foldl(
-        fun(#gdbsp_node_def{name = N, op = source, args = Args}, Acc) ->
-            TableName = case Args of
-                [{string, B}] -> B;
-                _ -> undefined
-            end,
-            case maps:find(N, TSMap) of
-                {ok, Type} -> Acc#{TableName => {N, Type}};
-                error -> Acc
-            end;
-           (_, Acc) -> Acc
-        end, #{}, Nodes).
-
-add_output_nodes(Graph, OutputNames, NameToId) ->
-    #circuit_graph{next_id = NextId0, schemas = Schemas0} = Graph,
-    {G, _} = lists:foldl(
-        fun(OutName, {GAcc, AccNextId}) ->
-            case maps:find(OutName, NameToId) of
-                {ok, NodeId} ->
-                    OutputNode = #circuit_node{
-                        id = AccNextId,
-                        op = {output, OutName},
-                        inputs = [NodeId],
-                        meta = #{}
-                    },
-                    OutSchema = maps:get(NodeId, Schemas0, []),
-                    GAcc2 = GAcc#circuit_graph{
-                        nodes = maps:put(AccNextId, OutputNode,
-                                         GAcc#circuit_graph.nodes),
-                        schemas = maps:put(AccNextId, OutSchema,
-                                           GAcc#circuit_graph.schemas),
-                        next_id = AccNextId + 1
-                    },
-                    {GAcc2, AccNextId + 1};
-                error ->
-                    ct:pal("WARNING: output node ~p not found in graph", [OutName]),
-                    {GAcc, AccNextId}
-            end
-        end,
-        {Graph, NextId0},
-        OutputNames
-    ),
-    G.
 
 %%====================================================================
 %% Input / output wiring

@@ -91,8 +91,8 @@ encode_field(json, Node) ->
 encode_field(SchemaType, Val) ->
     encode_value(SchemaType, strip_wrappers(Val)).
 
-strip_wrappers({value, _, {value, _, _} = Inner}) -> strip_wrappers(Inner);
-strip_wrappers({value, _, RawVal}) -> RawVal;
+strip_wrappers({value, Inner}) -> strip_wrappers(Inner);
+strip_wrappers({value, _, RawVal}) -> strip_wrappers(RawVal);
 strip_wrappers(absent) -> absent;
 strip_wrappers(Val) -> Val.
 
@@ -165,6 +165,10 @@ encode_value({enum, _}, Name) when is_atom(Name) -> atom_to_binary(Name, utf8);
 
 encode_value(absent, _) -> null;
 
+encode_value({optional, _}, absent) -> null;
+encode_value({optional, _}, null) -> null;
+encode_value({optional, Inner}, Raw) -> encode_value(Inner, Raw);
+
 encode_value(T, N) when is_integer(N), (
     T =:= i8 orelse T =:= i16 orelse T =:= i32 orelse T =:= i64 orelse
     T =:= u8 orelse T =:= u16 orelse T =:= u32 orelse T =:= u64 orelse
@@ -218,6 +222,7 @@ encode_value(interval, {Months, Days, Us}) ->
 %% the raw top payload of a json node.
 encode_value({json, _}, {value, {json, _}, _} = Node) -> json_node_to_jsx(Node);
 encode_value({json, T}, Payload) -> json_payload_to_jsx(T, Payload);
+encode_value(json, {value, {json, _}, _} = Node) -> json_node_to_jsx(Node);
 
 encode_value({dynamic, _}, absent) -> null;
 encode_value({dynamic, T}, RawVal) ->
@@ -257,6 +262,13 @@ decode_value({enum, Names}, V) when is_binary(V) ->
     end;
 
 decode_value(absent, null) -> {ok, absent};
+
+decode_value({optional, _}, null) -> {ok, absent};
+decode_value({optional, Inner}, V) ->
+    case decode_value(Inner, V) of
+        {ok, Decoded} -> {ok, Decoded};
+        {error, _} = Err -> Err
+    end;
 
 decode_value(T, V) when is_binary(V), (
     T =:= i8 orelse T =:= i16 orelse T =:= i32 orelse T =:= i64 orelse

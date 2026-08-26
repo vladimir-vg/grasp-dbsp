@@ -64,13 +64,46 @@ unop_fn_name('not') -> <<"not">>.
 
 -spec load_stdlib() -> {ok, stdlib_map()} | {error, term()}.
 load_stdlib() ->
-    PrivDir = code:priv_dir(grasp_dbsp),
-    Path = filename:join(PrivDir, "stdlib.gdbsp"),
-    case file:read_file(Path) of
+    case load_stdlib_binary() of
         {ok, Bin} ->
             {ok, Prog} = gdbsp_parse:parse_string(Bin, #{}),
             {ok, build_stdlib_map(Prog#gdbsp_program.typespecs)};
         {error, _} = E -> E
+    end.
+
+%% Locate priv/stdlib.gdbsp. In a normal build it lives under code:priv_dir;
+%% inside an escript it is bundled in the archive, so fall back to reading it
+%% from there.
+load_stdlib_binary() ->
+    case code:priv_dir(grasp_dbsp) of
+        {error, _} -> load_stdlib_from_escript();
+        PrivDir ->
+            case file:read_file(filename:join(PrivDir, "stdlib.gdbsp")) of
+                {ok, _} = Ok -> Ok;
+                {error, _} -> load_stdlib_from_escript()
+            end
+    end.
+
+load_stdlib_from_escript() ->
+    try escript:extract(escript:script_name(), []) of
+        {ok, Sections} ->
+            Archives = [A || {archive, A} <- Sections],
+            case Archives of
+                [ArchiveBin] ->
+                    case zip:extract(ArchiveBin, [memory]) of
+                        {ok, Files} ->
+                            case lists:keyfind("grasp_dbsp/priv/stdlib.gdbsp", 1,
+                                                Files) of
+                                {_, Bin} -> {ok, Bin};
+                                false -> {error, stdlib_not_found}
+                            end;
+                        {error, _} = E -> E
+                    end;
+                _ -> {error, stdlib_not_found}
+            end;
+        {error, _} = E -> E
+    catch
+        _:_ -> {error, stdlib_not_found}
     end.
 
 -spec build_stdlib_map([#gdbsp_typespec{}]) -> stdlib_map().
