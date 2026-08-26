@@ -47,6 +47,8 @@ op_args({antijoin, KeyVars, _LeftValVars}, _Inputs) ->
 op_args({flat_map, P}, _Inputs)       -> P;
 op_args({aggregate, AggBin}, _Inputs) when is_binary(AggBin) ->
     #{function => AggBin};
+op_args({aggregate, Plan}, _Inputs) when is_map(Plan) ->
+    Plan;
 op_args({rec, Name, SccId}, _Inputs) ->
     #{name => Name, scc_id => SccId};
 op_args({rec_output, Name, SccId}, _Inputs) ->

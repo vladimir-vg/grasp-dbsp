@@ -199,21 +199,21 @@ build_join_graph_lowered(G, Args, InputIds) ->
 %% Aggregate lowered — creates map_index → aggregate → map(unwrap)
 %%--------------------------------------------------------------------
 
-build_aggregate_graph_lowered(G, Args, InputIds, FnReg, _AggReg) ->
+build_aggregate_graph_lowered(G, Args, InputIds, _FnReg, AggReg) ->
     FnName = get_var_arg(Args, 2),
-    AggBin = resolve_agg_fn_name(FnName, FnReg),
+    Plan = maps:get(FnName, AggReg),
     {by, ByFields} = get_kw_arg(Args, by, []),
-    {value, ValField} = get_kw_arg(Args, value, <<>>),
-    {as, AsField} = get_kw_arg(Args, 'as', <<>>),
-    IdxSpec = #{key_vars => ByFields, agg_col => ValField},
-    OutRowType = {struct, maps:from_list([{F, dynamic} || F <- ByFields] ++
-                                          [{AsField, dynamic}]), exact},
-    UnwrapSpec = #{kind => agg_unwrap, group_by => ByFields,
-                   output_var => AsField, row_type => OutRowType},
+    {struct, ResultFields, _} = maps:get(result_type, Plan),
+    IdxSpec = #{key_vars => ByFields, agg_row => true},
+    OutRowType = {struct,
+                  maps:merge(maps:from_list([{F, dynamic} || F <- ByFields]),
+                             ResultFields),
+                  exact},
+    UnwrapSpec = #{kind => agg_unwrap, group_by => ByFields, row_type => OutRowType},
+    AggSchema = ByFields ++ maps:keys(ResultFields),
 
-    {G1, AggId} = add_with_sub_nodes(G, {aggregate, AggBin}, InputIds,
+    {G1, AggId} = add_with_sub_nodes(G, {aggregate, Plan}, InputIds,
                                      [{map_index, IdxSpec}]),
-    AggSchema = ByFields ++ [AsField],
     G2 = set_schema(G1, AggId, AggSchema),
 
     UnwrapId = G2#circuit_graph.next_id,
@@ -549,8 +549,10 @@ compute_schema_lowered(Op, Args, InputIds, TS, G) ->
             OutSchema ++ (OutSchema -- InputCols);
         aggregate ->
             {by, ByFields} = get_kw_arg(Args, by, []),
-            {as, AsField} = get_kw_arg(Args, 'as', <<>>),
-            ByFields ++ [AsField];
+            case TS of
+                {struct, Fields, _} -> ByFields ++ (maps:keys(Fields) -- ByFields);
+                _ -> ByFields
+            end;
         join ->
             case TS of
                 {struct, Fields, _} when map_size(Fields) > 0 ->
@@ -803,14 +805,6 @@ do_substitute(Other, _PB, _KB) ->
 
 do_substitute_opt(undefined, _PB, _KB) -> undefined;
 do_substitute_opt(E, PB, KB) -> do_substitute(E, PB, KB).
-
-resolve_agg_fn_name(FnName, FnReg) ->
-    case maps:find(FnName, FnReg) of
-        {ok, _} ->
-            throw({compile_error, {invalid_agg_fn, FnName}});
-        error ->
-            FnName
-    end.
 
 inherit_schema([Id | _], G) -> get_schema(G, Id);
 inherit_schema(_, _) -> [].

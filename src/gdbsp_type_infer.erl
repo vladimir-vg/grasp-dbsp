@@ -52,18 +52,29 @@ struct_fields({struct, Fields, _}) -> Fields;
 struct_fields(_) -> #{}.
 
 %%====================================================================
-%% Aggregate return type
+%% Aggregate helpers
 %%====================================================================
 
-infer_agg_return_type(FnRef, _ValType, _FnReg, StdlibMap) ->
-    case maps:find(FnRef, StdlibMap) of
-        {ok, [#gdbsp_typespec{spec = {aggregate_function, _Pos, _Kw, Ret}} | _]} ->
-            Ret;
+aggregate_result_fields(FnRef, Plan) ->
+    case maps:get(result_type, Plan, undefined) of
+        {struct, Fields, _} -> Fields;
         _ ->
-            error(#{<<"class">> => <<"missing_typespec">>,
-                    <<"node">> => FnRef,
-                    <<"message">> => <<"aggregate function not found in stdlib">>})
+            error(#{<<"class">> => <<"type_conflict">>,
+                    <<"message">> => <<"aggregate function must return a struct">>,
+                    <<"node">> => FnRef})
     end.
+
+check_by_result_clash(ByFields, ResultFields, _FnRef) ->
+    lists:foreach(
+        fun(F) ->
+            case maps:is_key(F, ResultFields) of
+                true ->
+                    error(#{<<"class">> => <<"type_conflict">>,
+                            <<"message">> => <<"by-field clashes with aggregate result field">>,
+                            <<"field">> => F});
+                false -> ok
+            end
+        end, ByFields).
 
 %%====================================================================
 %% Field helpers
@@ -225,17 +236,20 @@ infer_lnode_type(join, Args, InputIds, _Tags, TypeAcc, _TSMap, _FnReg, _AggReg, 
     check_join_key_types(OnFields, LType, RType),
     merge_join_type(LType, RType, OnFields);
 
-infer_lnode_type(aggregate, Args, InputIds, _Tags, TypeAcc, _TSMap, FnReg, _AggReg, _FnParams, StdlibMap) ->
+infer_lnode_type(aggregate, Args, InputIds, _Tags, TypeAcc, _TSMap, _FnReg, AggReg, _FnParams, _StdlibMap) ->
     InputType = lowered_input_type(InputIds, TypeAcc),
     FnRef = get_var_arg(Args, 2),
     {by, ByFields} = get_kw_arg(Args, by, []),
-    {value, ValField} = get_kw_arg(Args, value, <<>>),
-    {as, AsField} = get_kw_arg(Args, 'as', <<>>),
-    ValType = field_type(ValField, InputType),
-    AggRetType = infer_agg_return_type(FnRef, ValType, FnReg, StdlibMap),
-    ByPairs = [{F, field_type(F, InputType)} || F <- ByFields],
-    AllFields = ByPairs ++ [{AsField, AggRetType}],
-    {struct, maps:from_list(AllFields), exact};
+    case maps:find(FnRef, AggReg) of
+        error ->
+            error(#{<<"class">> => <<"missing_typespec">>,
+                    <<"node">> => FnRef});
+        {ok, Plan} ->
+            ResultFields = aggregate_result_fields(FnRef, Plan),
+            check_by_result_clash(ByFields, ResultFields, FnRef),
+            ByPairs = [{F, field_type(F, InputType)} || F <- ByFields],
+            {struct, maps:from_list(ByPairs ++ maps:to_list(ResultFields)), exact}
+    end;
 
 infer_lnode_type(map, Args, InputIds, _Tags, TypeAcc, _TSMap, FnReg, _AggReg, FnParams, StdlibMap) ->
     InputType = lowered_input_type(InputIds, TypeAcc),
