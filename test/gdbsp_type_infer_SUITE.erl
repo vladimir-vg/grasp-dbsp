@@ -146,7 +146,7 @@ run_one_fixture(Fixture, GroupName, Config) ->
 
 run_positive(Prog, ExpectedRaw, GroupName, Config) ->
     Lowered = case gdbsp_compile:infer(Prog) of
-        {ok, L, _FnReg, _FnParams} -> L;
+        {ok, L, _FnReg, _AggReg, _FnParams} -> L;
         {error, Reason} ->
             ct:pal("Inference failed: ~p", [Reason]),
             error({infer_error, Reason})
@@ -177,7 +177,7 @@ run_positive(Prog, ExpectedRaw, GroupName, Config) ->
 
 run_negative(Prog, ExpectedErrorsRaw) ->
     case gdbsp_compile:infer(Prog) of
-        {ok, _Lowered, _FnReg, _FnParams} ->
+        {ok, _Lowered, _FnReg, _AggReg, _FnParams} ->
             ct:fail("expected error but infer succeeded");
         {error, Reason} ->
             check_expected_errors(normalize_error(Reason), ExpectedErrorsRaw)

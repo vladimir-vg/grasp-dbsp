@@ -263,7 +263,7 @@ t24_check_all_matching(_Config) ->
                           line = 2}
         ]
     },
-    {ok, FnJsonMap, _FnParams, []} = gdbsp_compile_expr:check_all_fns(Prog, Stdlib),
+    {ok, FnJsonMap, _AggReg, _FnParams, []} = gdbsp_compile_expr:check_all_fns(Prog, Stdlib),
     true = maps:is_key(<<"square">>, FnJsonMap).
 
 t25_check_all_missing_ts(_Config) ->
@@ -347,7 +347,7 @@ t28_check_all_roundtrip(_Config) ->
                           line = 2}
         ]
     },
-    {ok, FnJsonMap, FnParams, []} = gdbsp_compile_expr:check_all_fns(Prog, Stdlib),
+    {ok, FnJsonMap, _AggReg, FnParams, []} = gdbsp_compile_expr:check_all_fns(Prog, Stdlib),
     #{<<"square">> := #{pos := [<<"x">>], kw := []}} = FnParams,
     Json = maps:get(<<"square">>, FnJsonMap),
     {ok, Expr} = gdbsp_expr:json_to_expr(Json),

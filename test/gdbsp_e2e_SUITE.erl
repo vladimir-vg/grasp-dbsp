@@ -740,7 +740,7 @@ to_map_val(V) -> V.
 
 write_e2e_lowered_dot(Prog0, GroupName, Config) ->
     case gdbsp_compile:infer(Prog0) of
-        {ok, Lowered, _FnReg, _FnParams} ->
+        {ok, Lowered, _FnReg, _AggReg, _FnParams} ->
             write_dot_file("e2e", GroupName, "lowered",
                            gdbsp_graphviz:lowered_to_dot(Lowered),
                            Config);

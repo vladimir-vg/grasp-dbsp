@@ -8,7 +8,7 @@
 %%%-------------------------------------------------------------------
 -module(gdbsp_compile_graph).
 
--export([build_from_lowered/5]).
+-export([build_from_lowered/6]).
 
 -include("gdbsp_circuit.hrl").
 -include("gdbsp_lowered.hrl").
@@ -22,18 +22,18 @@
 -type fn_params() :: #{binary() => #{pos := [binary()], kw := [{binary(), binary()}]}}.
 -type kwarg_order() :: #{binary() => [binary()]}.
 
--spec build_from_lowered(#lowered_graph{}, fn_registry(), fn_params(), kwarg_order(),
-                         gdbsp_builtins:stdlib_map()) ->
+-spec build_from_lowered(#lowered_graph{}, fn_registry(), fn_registry(), fn_params(),
+                         kwarg_order(), gdbsp_builtins:stdlib_map()) ->
     {ok, #circuit_graph{}, #{binary() => node_id()}} | {error, term()}.
 build_from_lowered(#lowered_graph{nodes = LNodes, tag_map = TagMap,
-                                  fixpoints = Fixpoints}, FnReg, FnParams, KwargOrder,
-                   StdlibMap) ->
+                                  fixpoints = Fixpoints}, FnReg, AggReg, FnParams,
+                   KwargOrder, StdlibMap) ->
     NodeList = maps:to_list(LNodes),
     case lowered_topo_sort(NodeList) of
         {ok, Order} ->
             {Graph0, LnIdMap, CircuitFixpointInputs, CircuitFixpointOutputs} =
-                construct_from_lowered(NodeList, Order, FnReg, FnParams, KwargOrder,
-                                       StdlibMap),
+                construct_from_lowered(NodeList, Order, FnReg, AggReg, FnParams,
+                                       KwargOrder, StdlibMap),
             {Graph1, RecOutputTags} = construct_fixpoints(Graph0, Fixpoints, LnIdMap,
                                           CircuitFixpointInputs, CircuitFixpointOutputs),
             ok = validate_rec_source_inputs(Graph1),
@@ -96,7 +96,7 @@ lowered_topo_loop(Q, InDeg, Consumers, Total, Acc) ->
 %% Circuit graph construction from lowered nodes
 %%====================================================================
 
-construct_from_lowered(NodeList, Order, FnReg, FnParams, KwargOrder, StdlibMap) ->
+construct_from_lowered(NodeList, Order, FnReg, AggReg, FnParams, KwargOrder, StdlibMap) ->
     LNodeById = maps:from_list(NodeList),
     {G, LnIdMap, FixInMap, FixOutMap} = lists:foldl(
         fun(LId, {GAcc, IdMapAcc, FIMAcc, FOMAcc}) ->
@@ -132,7 +132,7 @@ construct_from_lowered(NodeList, Order, FnReg, FnParams, KwargOrder, StdlibMap) 
                     G4 = set_type(G3, NodeId, Type),
                     {G4, IdMapAcc#{LId => NodeId}, FIMAcc, FOMAcc};
                 aggregate ->
-                    {G2, NodeId} = build_aggregate_graph_lowered(GAcc, Args, CInputIds, FnReg),
+                    {G2, NodeId} = build_aggregate_graph_lowered(GAcc, Args, CInputIds, FnReg, AggReg),
                     Schema = compute_schema_lowered(Op, Args, CInputIds, Type, G2),
                     G3 = set_schema(G2, NodeId, Schema),
                     G4 = set_type(G3, NodeId, Type),
@@ -199,7 +199,7 @@ build_join_graph_lowered(G, Args, InputIds) ->
 %% Aggregate lowered — creates map_index → aggregate → map(unwrap)
 %%--------------------------------------------------------------------
 
-build_aggregate_graph_lowered(G, Args, InputIds, FnReg) ->
+build_aggregate_graph_lowered(G, Args, InputIds, FnReg, _AggReg) ->
     FnName = get_var_arg(Args, 2),
     AggBin = resolve_agg_fn_name(FnName, FnReg),
     {by, ByFields} = get_kw_arg(Args, by, []),

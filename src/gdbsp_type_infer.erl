@@ -19,7 +19,7 @@
 
 -import(gdbsp_string_util, [parse_string_list/1]).
 
--export([infer_lowered/5]).
+-export([infer_lowered/6]).
 
 -type fn_registry() :: #{binary() => map()}.
 -type fn_params() :: #{binary() => #{pos := [binary()], kw := [{binary(), binary()}]}}.
@@ -117,9 +117,10 @@ get_string_list_arg(Args, Pos) ->
 %%====================================================================
 
 -spec infer_lowered(#lowered_graph{}, #{binary() => gdbsp_column_type()},
-                    fn_registry(), fn_params(), gdbsp_builtins:stdlib_map()) ->
+                    fn_registry(), fn_registry(), fn_params(),
+                    gdbsp_builtins:stdlib_map()) ->
     {ok, #lowered_graph{}} | {error, term()}.
-infer_lowered(#lowered_graph{nodes = Nodes} = LG, TSMap, FnReg, FnParams, StdlibMap) ->
+infer_lowered(#lowered_graph{nodes = Nodes} = LG, TSMap, FnReg, AggReg, FnParams, StdlibMap) ->
     try
         NodeList = maps:to_list(Nodes),
         Sorted = lowered_topo_sort(NodeList),
@@ -131,7 +132,7 @@ infer_lowered(#lowered_graph{nodes = Nodes} = LG, TSMap, FnReg, FnParams, Stdlib
                     true -> ExistingType;
                     false ->
                         infer_lnode_type(Op, Args, InputIds, Tags, TypeAcc,
-                                          TSMap, FnReg, FnParams, StdlibMap)
+                                          TSMap, FnReg, AggReg, FnParams, StdlibMap)
                 end,
                 Node = (maps:get(LId, AccNodes))#lnode{type = Type},
                 {maps:put(LId, Node, AccNodes), TypeAcc#{LId => Type}}
@@ -180,7 +181,7 @@ lowered_topo_loop(Q, InDeg, Consumers, Acc) ->
 is_concrete_type(undefined) -> false;
 is_concrete_type(_) -> true.
 
-infer_lnode_type(source, _Args, _InputIds, Tags, _TypeAcc, TSMap, _FnReg, _FnParams, _StdlibMap) ->
+infer_lnode_type(source, _Args, _InputIds, Tags, _TypeAcc, TSMap, _FnReg, _AggReg, _FnParams, _StdlibMap) ->
     Name = case Tags of [Tag | _] -> Tag; _ -> undefined end,
     case Name of
         undefined ->
@@ -195,13 +196,13 @@ infer_lnode_type(source, _Args, _InputIds, Tags, _TypeAcc, TSMap, _FnReg, _FnPar
             end
     end;
 
-infer_lnode_type(fixpoint_input, _Args, InputIds, _Tags, TypeAcc, _TSMap, _FnReg, _FnParams, _StdlibMap) ->
+infer_lnode_type(fixpoint_input, _Args, InputIds, _Tags, TypeAcc, _TSMap, _FnReg, _AggReg, _FnParams, _StdlibMap) ->
     lowered_input_type(InputIds, TypeAcc);
 
-infer_lnode_type(fixpoint_output, _Args, InputIds, _Tags, TypeAcc, _TSMap, _FnReg, _FnParams, _StdlibMap) ->
+infer_lnode_type(fixpoint_output, _Args, InputIds, _Tags, TypeAcc, _TSMap, _FnReg, _AggReg, _FnParams, _StdlibMap) ->
     lowered_input_type(InputIds, TypeAcc);
 
-infer_lnode_type(plus, _Args, InputIds, _Tags, TypeAcc, _TSMap, _FnReg, _FnParams, _StdlibMap) ->
+infer_lnode_type(plus, _Args, InputIds, _Tags, TypeAcc, _TSMap, _FnReg, _AggReg, _FnParams, _StdlibMap) ->
     Types = [maps:get(Id, TypeAcc, dynamic) || Id <- InputIds],
     case Types of
         [First | Rest] ->
@@ -217,14 +218,14 @@ infer_lnode_type(plus, _Args, InputIds, _Tags, TypeAcc, _TSMap, _FnReg, _FnParam
         [] -> dynamic
     end;
 
-infer_lnode_type(join, Args, InputIds, _Tags, TypeAcc, _TSMap, _FnReg, _FnParams, _StdlibMap) ->
+infer_lnode_type(join, Args, InputIds, _Tags, TypeAcc, _TSMap, _FnReg, _AggReg, _FnParams, _StdlibMap) ->
     LType = lowered_nth_input_type(1, InputIds, TypeAcc),
     RType = lowered_nth_input_type(2, InputIds, TypeAcc),
     {on, OnFields} = get_kw_arg(Args, on, []),
     check_join_key_types(OnFields, LType, RType),
     merge_join_type(LType, RType, OnFields);
 
-infer_lnode_type(aggregate, Args, InputIds, _Tags, TypeAcc, _TSMap, FnReg, _FnParams, StdlibMap) ->
+infer_lnode_type(aggregate, Args, InputIds, _Tags, TypeAcc, _TSMap, FnReg, _AggReg, _FnParams, StdlibMap) ->
     InputType = lowered_input_type(InputIds, TypeAcc),
     FnRef = get_var_arg(Args, 2),
     {by, ByFields} = get_kw_arg(Args, by, []),
@@ -236,12 +237,12 @@ infer_lnode_type(aggregate, Args, InputIds, _Tags, TypeAcc, _TSMap, FnReg, _FnPa
     AllFields = ByPairs ++ [{AsField, AggRetType}],
     {struct, maps:from_list(AllFields), exact};
 
-infer_lnode_type(map, Args, InputIds, _Tags, TypeAcc, _TSMap, FnReg, FnParams, StdlibMap) ->
+infer_lnode_type(map, Args, InputIds, _Tags, TypeAcc, _TSMap, FnReg, _AggReg, FnParams, StdlibMap) ->
     InputType = lowered_input_type(InputIds, TypeAcc),
     {var, FnName} = lists:nth(2, Args),
     infer_row_fn_output_type(FnName, InputType, FnReg, FnParams, StdlibMap);
 
-infer_lnode_type(filter, Args, InputIds, _Tags, TypeAcc, _TSMap, FnReg, FnParams, StdlibMap) ->
+infer_lnode_type(filter, Args, InputIds, _Tags, TypeAcc, _TSMap, FnReg, _AggReg, FnParams, StdlibMap) ->
     InputType = lowered_input_type(InputIds, TypeAcc),
     {var, FnName} = lists:nth(2, Args),
     RetType = infer_row_fn_output_type(FnName, InputType, FnReg, FnParams, StdlibMap),
@@ -254,7 +255,7 @@ infer_lnode_type(filter, Args, InputIds, _Tags, TypeAcc, _TSMap, FnReg, FnParams
                     <<"return_type">> => gdbsp_type:canonical_text(RetType)})
     end;
 
-infer_lnode_type(flat_map, Args, InputIds, _Tags, TypeAcc, _TSMap, FnReg, FnParams, StdlibMap) ->
+infer_lnode_type(flat_map, Args, InputIds, _Tags, TypeAcc, _TSMap, FnReg, _AggReg, FnParams, StdlibMap) ->
     InputType = lowered_input_type(InputIds, TypeAcc),
     {var, BaseFnName} = lists:nth(2, Args),
     case infer_row_fn_output_type(BaseFnName, InputType, FnReg, FnParams, StdlibMap) of
@@ -268,12 +269,12 @@ infer_lnode_type(flat_map, Args, InputIds, _Tags, TypeAcc, _TSMap, FnReg, FnPara
                     <<"return_type">> => gdbsp_type:canonical_text(Other)})
     end;
 
-infer_lnode_type(project, Args, InputIds, _Tags, TypeAcc, _TSMap, _FnReg, _FnParams, _StdlibMap) ->
+infer_lnode_type(project, Args, InputIds, _Tags, TypeAcc, _TSMap, _FnReg, _AggReg, _FnParams, _StdlibMap) ->
     InputType = lowered_input_type(InputIds, TypeAcc),
     KeepFields = get_string_list_arg(Args, 2),
     project_struct(InputType, KeepFields);
 
-infer_lnode_type(_Op, _Args, InputIds, _Tags, TypeAcc, _TSMap, _FnReg, _FnParams, _StdlibMap) ->
+infer_lnode_type(_Op, _Args, InputIds, _Tags, TypeAcc, _TSMap, _FnReg, _AggReg, _FnParams, _StdlibMap) ->
     lowered_input_type(InputIds, TypeAcc).
 
 %%--------------------------------------------------------------------

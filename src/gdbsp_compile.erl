@@ -33,12 +33,12 @@ compile(Program, Options) ->
 compile_with_names(Program, Options) ->
     Incr = maps:get(incrementalize, Options, false),
     case infer(Program) of
-        {ok, Lowered, FnReg, FnParams} ->
+        {ok, Lowered, FnReg, AggReg, FnParams} ->
             try
                 {ok, StdlibMap} = gdbsp_builtins:load_stdlib(),
                 KwargOrder = gdbsp_builtins:build_kwarg_order(StdlibMap),
-                case gdbsp_compile_graph:build_from_lowered(Lowered, FnReg, FnParams,
-                                                            KwargOrder, StdlibMap) of
+                case gdbsp_compile_graph:build_from_lowered(Lowered, FnReg, AggReg,
+                                                            FnParams, KwargOrder, StdlibMap) of
                     {ok, Graph, NameToId} ->
                         Graph2 = case Incr of
                             true  -> gdbsp_compile_incremental:run(Graph);
@@ -55,12 +55,13 @@ compile_with_names(Program, Options) ->
     end.
 
 -spec infer(#gdbsp_program{}) ->
-    {ok, #lowered_graph{}, #{binary() => jsx:json_term()}, fn_params()} |
+    {ok, #lowered_graph{}, #{binary() => jsx:json_term()}, #{binary() => map()},
+     fn_params()} |
     {error, term()}.
 infer(Program) ->
     try
         {ok, StdlibMap} = gdbsp_builtins:load_stdlib(),
-        {InlineFnReg, FnParams} = compile_inline_fns(Program, StdlibMap),
+        {InlineFnReg, InlineAggReg, FnParams} = compile_inline_fns(Program, StdlibMap),
         CallableMap = gdbsp_compile_expr:merge_callable_maps(
             StdlibMap,
             gdbsp_compile_expr:inline_sig_map(Program#gdbsp_program.typespecs)),
@@ -68,8 +69,9 @@ infer(Program) ->
         case gdbsp_compile_lower:run(Program, #{},
                                      gdbsp_builtins:module_members(StdlibMap)) of
             {ok, Lowered0} ->
-                case gdbsp_type_infer:infer_lowered(Lowered0, TSMap, InlineFnReg, FnParams, CallableMap) of
-                    {ok, Lowered} -> {ok, Lowered, InlineFnReg, FnParams};
+                case gdbsp_type_infer:infer_lowered(Lowered0, TSMap, InlineFnReg,
+                                                    InlineAggReg, FnParams, CallableMap) of
+                    {ok, Lowered} -> {ok, Lowered, InlineFnReg, InlineAggReg, FnParams};
                     {error, _} = E -> E
                 end;
             {error, _} = E -> E
@@ -91,7 +93,7 @@ build_ts_map(Typespecs) ->
         end, #{}, Typespecs).
 
 compile_inline_fns(#gdbsp_program{fn_defs = []}, _StdlibMap) ->
-    {#{}, #{}};
+    {#{}, #{}, #{}};
 compile_inline_fns(Program, StdlibMap) ->
     case duplicate_inline_names(Program#gdbsp_program.fn_defs) of
         [] -> ok;
@@ -102,8 +104,8 @@ compile_inline_fns(Program, StdlibMap) ->
         [CollisionName | _] -> throw({compile_error, {stdlib_collision, CollisionName}})
     end,
     case gdbsp_compile_expr:check_all_fns(Program, StdlibMap) of
-        {ok, InlineFnReg, FnParams, _Warnings} ->
-            {InlineFnReg, FnParams};
+        {ok, InlineFnReg, InlineAggReg, FnParams, _Warnings} ->
+            {InlineFnReg, InlineAggReg, FnParams};
         {error, ErrorMap} ->
             throw({compile_error, {inline_fn_errors, ErrorMap}})
     end.

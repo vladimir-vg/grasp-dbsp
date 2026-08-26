@@ -165,13 +165,14 @@ check_fn_body(BodyExpr, TypeEnv, DeclaredRetType, StdlibMap) ->
 %%====================================================================
 
 -spec check_all_fns(#gdbsp_program{}, gdbsp_builtins:stdlib_map()) ->
-    {ok, #{binary() => jsx:json_term()}, #{binary() => map()}, [term()]} |
+    {ok, #{binary() => jsx:json_term()}, #{binary() => map()},
+     #{binary() => map()}, [term()]} |
     {error, #{binary() => term()}}.
 check_all_fns(#gdbsp_program{fn_defs = FnDefs, typespecs = TSs}, StdlibMap) ->
     CallableMap = merge_callable_maps(StdlibMap, inline_sig_map(TSs)),
-    case check_all_fns(FnDefs, TSs, CallableMap, #{}, [], []) of
-        {ok, FnJsonMap, Warnings} ->
-            {ok, FnJsonMap, build_fn_params(FnDefs), Warnings};
+    case check_all_fns(FnDefs, TSs, CallableMap, #{}, #{}, [], []) of
+        {ok, FnJsonMap, AggMap, Warnings} ->
+            {ok, FnJsonMap, AggMap, build_fn_params(FnDefs), Warnings};
         {error, _} = Err -> Err
     end.
 
@@ -196,34 +197,51 @@ build_fn_params(FnDefs) ->
              {FnName, #{pos => Pos, kw => Kw}}
          end || #gdbsp_fn_def{name = FnName, params = Params} <- FnDefs]).
 
-check_all_fns([], _TSs, _StdlibMap, FnJsonMap, _Warnings, Errors) ->
+check_all_fns([], _TSs, _StdlibMap, FnJsonMap, AggMap, _Warnings, Errors) ->
     case Errors of
-        [] -> {ok, FnJsonMap, []};
+        [] -> {ok, FnJsonMap, AggMap, []};
         _ -> {error, maps:from_list(Errors)}
     end;
-check_all_fns([FnDef | Rest], TSs, StdlibMap, FnJsonMap, Warnings, Errors) ->
+check_all_fns([FnDef | Rest], TSs, StdlibMap, FnJsonMap, AggMap, Warnings, Errors) ->
     Name = FnDef#gdbsp_fn_def.name,
     case find_fn_typespec(Name, TSs) of
-        {ok, TS} ->
+        {ok, TS = #gdbsp_typespec{spec = {function, _, _, _}}} ->
             case check_single_fn(FnDef, TS, StdlibMap) of
                 {ok, Json} ->
-                    check_all_fns(Rest, TSs, StdlibMap, FnJsonMap#{Name => Json}, Warnings, Errors);
+                    check_all_fns(Rest, TSs, StdlibMap, FnJsonMap#{Name => Json},
+                                  AggMap, Warnings, Errors);
                 {error, FnErrors} ->
-                    check_all_fns(Rest, TSs, StdlibMap, FnJsonMap, Warnings,
-                                  [{Name, FnErrors} | Errors])
+                    check_all_fns(Rest, TSs, StdlibMap, FnJsonMap, AggMap,
+                                  Warnings, [{Name, FnErrors} | Errors])
+            end;
+        {ok, TS = #gdbsp_typespec{spec = {aggregate_function, _, _, _}}} ->
+            case check_single_agg_fn(FnDef, TS, StdlibMap) of
+                {ok, Plan} ->
+                    check_all_fns(Rest, TSs, StdlibMap, FnJsonMap,
+                                  AggMap#{Name => Plan}, Warnings, Errors);
+                {error, FnErrors} ->
+                    check_all_fns(Rest, TSs, StdlibMap, FnJsonMap, AggMap,
+                                  Warnings, [{Name, FnErrors} | Errors])
             end;
         {error, Reason} ->
-            check_all_fns(Rest, TSs, StdlibMap, FnJsonMap, Warnings,
+            check_all_fns(Rest, TSs, StdlibMap, FnJsonMap, AggMap, Warnings,
                           [{Name, Reason} | Errors])
     end.
 
 find_fn_typespec(Name, TSs) ->
-    case lists:filter(
+    Matching = lists:filter(
         fun(#gdbsp_typespec{name = N, spec = Spec}) ->
-            N =:= Name andalso element(1, Spec) =:= function
-        end, TSs) of
+            N =:= Name andalso
+                (element(1, Spec) =:= function orelse
+                 element(1, Spec) =:= aggregate_function)
+        end, TSs),
+    case Matching of
         [] -> {error, missing_typespec};
-        [TS | _] -> {ok, TS}
+        [TS | _] ->
+            case lists:usort([element(1, S#gdbsp_typespec.spec) || S <- Matching]) of
+                [_] -> {ok, TS};
+                _ -> {error, {cross_kind_conflict, Name}}
+            end
     end.
 
 check_single_fn(FnDef, #gdbsp_typespec{spec = {function, PosTypes, KwMap, RetType}} = TS,
@@ -245,6 +263,14 @@ check_single_fn(FnDef, #gdbsp_typespec{spec = {function, PosTypes, KwMap, RetTyp
                 throw:{lower_error, Line, Reason} ->
                     {error, [{Line, Reason}]}
             end;
+        {error, _} = E -> E
+    end.
+
+check_single_agg_fn(FnDef, #gdbsp_typespec{spec = {aggregate_function, PosTypes, KwMap, _RetType}},
+                    _StdlibMap) ->
+    Params = FnDef#gdbsp_fn_def.params,
+    case validate_params(Params, PosTypes, KwMap) of
+        ok -> {ok, #{}};
         {error, _} = E -> E
     end.
 
