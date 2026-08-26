@@ -101,8 +101,19 @@ infer_expr({slice, Obj, _Start, _Stop, _Step}, Env, StdlibMap) ->
         {ok, ObjType} -> infer_slice_type(ObjType);
         {error, _} = E -> E
     end;
-infer_expr({agg, _Name, _PosArgs, _KwArgs}, _Env, _StdlibMap) ->
-    {error, [aggregates_not_allowed_in_fn_body]}.
+infer_expr({agg, Name, PosArgs, KwArgs}, Env, StdlibMap) ->
+    case infer_list(PosArgs, Env, StdlibMap) of
+        {ok, PosTypes} ->
+            case infer_kw_map(KwArgs, Env, StdlibMap) of
+                {ok, KwPairs} ->
+                    case gdbsp_builtins:resolve_call(Name, PosTypes, KwPairs, StdlibMap) of
+                        {ok, RetType, _Concrete} -> {ok, RetType};
+                        {error, Reason} -> {error, [{fn_lookup_error, Name, Reason}]}
+                    end;
+                {error, _} = E -> E
+            end;
+        {error, _} = E -> E
+    end.
 
 %%====================================================================
 %% std.struct_get — key must be a string literal (field value selection)

@@ -12,7 +12,8 @@
 -export([operand_types/1, is_valid_operand/2, concrete_fn/3]).
 -export([unify_types/3, fn_impl/1, agg_impl/1]).
 -export([exact_match/2]).
--export([load_stdlib/0, build_stdlib_map/1, build_kwarg_order/1, module_members/1]).
+-export([load_stdlib/0, build_stdlib_map/1, build_kwarg_order/1, module_members/1,
+         aggregate_function_names/1]).
 
 -include("gdbsp_type.hrl").
 -include("gdbsp_parse.hrl").
@@ -115,6 +116,19 @@ build_kwarg_order(StdlibMap) ->
             _ -> Acc
         end
     end, #{}, StdlibMap).
+
+%% Set of stdlib names declared as aggregate_function (used to detect
+%% std.agg_* calls during lowering — membership, not name prefix).
+-spec aggregate_function_names(stdlib_map()) -> #{binary() => true}.
+aggregate_function_names(StdlibMap) ->
+    maps:fold(
+        fun(Name, TSpecs, Acc) ->
+            case TSpecs of
+                [#gdbsp_typespec{spec = {aggregate_function, _, _, _}} | _] ->
+                    Acc#{Name => true};
+                _ -> Acc
+            end
+        end, #{}, StdlibMap).
 
 -spec resolve_call(binary(), [gdbsp_column_type()], [{binary(), gdbsp_column_type()}],
                    stdlib_map()) ->

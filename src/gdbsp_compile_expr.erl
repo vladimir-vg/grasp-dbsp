@@ -8,8 +8,9 @@
 %%%-------------------------------------------------------------------
 -module(gdbsp_compile_expr).
 
--export([lower_expr/2, lower_fn_body/2]).
--export([check_fn_body/4, check_all_fns/2, inline_sig_map/1, merge_callable_maps/2]).
+-export([lower_expr/2, lower_fn_body/3, lower_agg_body/3]).
+-export([check_fn_body/4, check_all_fns/2, inline_sig_map/1, merge_callable_maps/2,
+         build_type_env/3]).
 
 -include("gdbsp_parse.hrl").
 -include("gdbsp_expr.hrl").
@@ -19,84 +20,98 @@
 %% Expression Lowering
 %%====================================================================
 
+%% Lowering context: allow_agg => whether std.agg_* calls lower to {agg, ...}
+%% nodes; agg_names => the set of stdlib aggregate-function names.
+
 -spec lower_expr(gdbsp_parse_expr:parse_expr(), #{binary() => binary()}) ->
     expr() | no_return().
-lower_expr({const, _Line, N, integer, _Src, _Type}, _Bindings) ->
+lower_expr(E, Bindings) ->
+    lower_expr(E, Bindings, #{allow_agg => false, agg_names => #{}}).
+
+lower_expr({const, _Line, N, integer, _Src, _Type}, _Bindings, _Ctx) ->
     {value, integer, N};
-lower_expr({const, _Line, V, decimal, _Src, _Type}, _Bindings) ->
+lower_expr({const, _Line, V, decimal, _Src, _Type}, _Bindings, _Ctx) ->
     {value, numeric, V};
-lower_expr({const, _Line, V, float, _Src, _Type}, _Bindings) ->
+lower_expr({const, _Line, V, float, _Src, _Type}, _Bindings, _Ctx) ->
     {value, f64, V};
-lower_expr({const, _Line, S, string, _Src, _Type}, _Bindings) ->
+lower_expr({const, _Line, S, string, _Src, _Type}, _Bindings, _Ctx) ->
     {value, {string, <<"UTF-8">>}, S};
-lower_expr({const, _Line, B, bits, _Src, _Type}, _Bindings) ->
+lower_expr({const, _Line, B, bits, _Src, _Type}, _Bindings, _Ctx) ->
     {value, bits, B};
-lower_expr({const, _Line, absent, _Tag, _Src, _Type}, _Bindings) ->
+lower_expr({const, _Line, absent, _Tag, _Src, _Type}, _Bindings, _Ctx) ->
     {value, absent, absent};
-lower_expr({symbol, _Line, <<"true">>}, _Bindings) ->
+lower_expr({symbol, _Line, <<"true">>}, _Bindings, _Ctx) ->
     {value, {enum, [<<"false">>, <<"true">>]}, <<"true">>};
-lower_expr({symbol, _Line, <<"false">>}, _Bindings) ->
+lower_expr({symbol, _Line, <<"false">>}, _Bindings, _Ctx) ->
     {value, {enum, [<<"false">>, <<"true">>]}, <<"false">>};
-lower_expr({symbol, _Line, <<"null">>}, _Bindings) ->
+lower_expr({symbol, _Line, <<"null">>}, _Bindings, _Ctx) ->
     {value, {enum, [<<"null">>]}, <<"null">>};
-lower_expr({symbol, Line, Name}, _Bindings) ->
+lower_expr({symbol, Line, Name}, _Bindings, _Ctx) ->
     throw({lower_error, Line, {unknown_symbol, Name}});
-lower_expr({var, _Line, Name}, _Bindings) ->
+lower_expr({var, _Line, Name}, _Bindings, _Ctx) ->
     {arg, Name};
-lower_expr({binop, _Line, Op, LHS, RHS}, Bindings) ->
+lower_expr({binop, _Line, Op, LHS, RHS}, Bindings, Ctx) ->
     FnName = gdbsp_builtins:binop_fn_name(Op),
-    L = lower_expr(LHS, Bindings),
-    R = lower_expr(RHS, Bindings),
+    L = lower_expr(LHS, Bindings, Ctx),
+    R = lower_expr(RHS, Bindings, Ctx),
     {call, FnName, [L, R], #{}};
-lower_expr({unop, _Line, Op, E}, Bindings) ->
+lower_expr({unop, _Line, Op, E}, Bindings, Ctx) ->
     FnName = gdbsp_builtins:unop_fn_name(Op),
-    E1 = lower_expr(E, Bindings),
+    E1 = lower_expr(E, Bindings, Ctx),
     {call, FnName, [E1], #{}};
-lower_expr({dot_access, _Line, Obj, Field}, Bindings) ->
-    O = lower_expr(Obj, Bindings),
+lower_expr({dot_access, _Line, Obj, Field}, Bindings, Ctx) ->
+    O = lower_expr(Obj, Bindings, Ctx),
     {call, <<"std.struct_get">>, [O], #{<<"key">> => {value, {string, <<"UTF-8">>}, Field}}};
-lower_expr({array_literal, _Line, Elems}, Bindings) ->
-    Lowered = [lower_expr_elem(El, Bindings) || El <- Elems],
+lower_expr({array_literal, _Line, Elems}, Bindings, Ctx) ->
+    Lowered = [lower_expr_elem(El, Bindings, Ctx) || El <- Elems],
     {call, <<"array">>, Lowered, #{}};
-lower_expr({dict_literal, _Line, KwArgs, Rest}, Bindings) ->
-    KwMap = lower_kw_args(KwArgs, Bindings, #{}),
+lower_expr({dict_literal, _Line, KwArgs, Rest}, Bindings, Ctx) ->
+    KwMap = lower_kw_args(KwArgs, Bindings, Ctx, #{}),
     MapCall = {call, <<"map">>, [], KwMap},
     case Rest of
         undefined ->
             MapCall;
         RestExpr ->
-            R = lower_expr(RestExpr, Bindings),
+            R = lower_expr(RestExpr, Bindings, Ctx),
             {call, <<"map_merge">>, [MapCall, R], #{}}
     end;
-lower_expr({subscript, _Line, Obj, {index, Key}}, Bindings) ->
-    O = lower_expr(Obj, Bindings),
-    K = lower_expr(Key, Bindings),
+lower_expr({subscript, _Line, Obj, {index, Key}}, Bindings, Ctx) ->
+    O = lower_expr(Obj, Bindings, Ctx),
+    K = lower_expr(Key, Bindings, Ctx),
     {get, O, [K]};
-lower_expr({subscript, _Line, Obj, {slice, Start, Stop, Step}}, Bindings) ->
-    O = lower_expr(Obj, Bindings),
-    S1 = maybe_lower_expr(Start, Bindings),
-    S2 = maybe_lower_expr(Stop, Bindings),
-    S3 = maybe_lower_expr(Step, Bindings),
+lower_expr({subscript, _Line, Obj, {slice, Start, Stop, Step}}, Bindings, Ctx) ->
+    O = lower_expr(Obj, Bindings, Ctx),
+    S1 = maybe_lower_expr(Start, Bindings, Ctx),
+    S2 = maybe_lower_expr(Stop, Bindings, Ctx),
+    S3 = maybe_lower_expr(Step, Bindings, Ctx),
     {slice, O, S1, S2, S3};
-lower_expr({call, _Line, Name, Args}, Bindings) ->
-    Lowered = [lower_call_arg(A, Bindings) || A <- Args],
+lower_expr({call, Line, Name, Args}, Bindings, Ctx) ->
+    Lowered = [lower_call_arg(A, Bindings, Ctx) || A <- Args],
     {PosArgs, KwMap} = split_call_args(Lowered),
-    {call, Name, PosArgs, KwMap};
-lower_expr({agg, Line, _Name, _Args}, _Bindings) ->
+    case maps:is_key(Name, maps:get(agg_names, Ctx)) of
+        true ->
+            case maps:get(allow_agg, Ctx) of
+                true -> {agg, Name, PosArgs, KwMap};
+                false -> throw({lower_error, Line, aggregates_not_allowed_in_fn_body})
+            end;
+        false ->
+            {call, Name, PosArgs, KwMap}
+    end;
+lower_expr({agg, Line, _Name, _Args}, _Bindings, _Ctx) ->
     throw({lower_error, Line, aggregates_not_allowed_in_fn_body}).
 
-maybe_lower_expr(undefined, _Bindings) -> undefined;
-maybe_lower_expr(E, Bindings) -> lower_expr(E, Bindings).
+maybe_lower_expr(undefined, _Bindings, _Ctx) -> undefined;
+maybe_lower_expr(E, Bindings, Ctx) -> lower_expr(E, Bindings, Ctx).
 
-lower_expr_elem({rest, _Line, _Var}, _Bindings) ->
+lower_expr_elem({rest, _Line, _Var}, _Bindings, _Ctx) ->
     {value, absent, absent};
-lower_expr_elem(E, Bindings) ->
-    lower_expr(E, Bindings).
+lower_expr_elem(E, Bindings, Ctx) ->
+    lower_expr(E, Bindings, Ctx).
 
-lower_call_arg({kv, Key, Value}, Bindings) ->
-    {kv, Key, lower_expr(Value, Bindings)};
-lower_call_arg(Arg, Bindings) ->
-    lower_expr(Arg, Bindings).
+lower_call_arg({kv, Key, Value}, Bindings, Ctx) ->
+    {kv, Key, lower_expr(Value, Bindings, Ctx)};
+lower_call_arg(Arg, Bindings, Ctx) ->
+    lower_expr(Arg, Bindings, Ctx).
 
 split_call_args(Args) ->
     split_call_args(Args, [], #{}).
@@ -108,25 +123,35 @@ split_call_args([{kv, Key, Value} | Rest], Pos, Kw) ->
 split_call_args([Arg | Rest], Pos, Kw) ->
     split_call_args(Rest, [Arg | Pos], Kw).
 
-lower_kw_args([], _Bindings, Acc) -> Acc;
-lower_kw_args([{kv, Key, Value} | Rest], Bindings, Acc) ->
-    V = lower_expr(Value, Bindings),
-    lower_kw_args(Rest, Bindings, Acc#{Key => V});
-lower_kw_args([Arg | _Rest], _Bindings, _Acc) ->
+lower_kw_args([], _Bindings, _Ctx, Acc) -> Acc;
+lower_kw_args([{kv, Key, Value} | Rest], Bindings, Ctx, Acc) ->
+    V = lower_expr(Value, Bindings, Ctx),
+    lower_kw_args(Rest, Bindings, Ctx, Acc#{Key => V});
+lower_kw_args([Arg | _Rest], _Bindings, _Ctx, _Acc) ->
     throw({lower_error, 0, {non_kv_in_dict, Arg}}).
 
 %%====================================================================
 %% Function Body Lowering
 %%====================================================================
 
--spec lower_fn_body(#gdbsp_fn_def{}, #gdbsp_typespec{}) ->
+-spec lower_fn_body(#gdbsp_fn_def{}, #gdbsp_typespec{}, #{binary() => true}) ->
     expr() | no_return().
 lower_fn_body(#gdbsp_fn_def{params = Params, body = Body, line = Line},
-              #gdbsp_typespec{spec = {function, _PosTypes, KwMap, _RetType}}) ->
+              #gdbsp_typespec{spec = {function, _PosTypes, KwMap, _RetType}}, AggNames) ->
     Bindings = build_fn_bindings(Params, KwMap, Line),
-    lower_expr(Body, Bindings);
-lower_fn_body(_FnDef, #gdbsp_typespec{}) ->
+    lower_expr(Body, Bindings, #{allow_agg => false, agg_names => AggNames});
+lower_fn_body(_FnDef, #gdbsp_typespec{}, _AggNames) ->
     throw({lower_error, 0, non_function_typespec}).
+
+-spec lower_agg_body(#gdbsp_fn_def{}, #gdbsp_typespec{}, #{binary() => true}) ->
+    expr() | no_return().
+lower_agg_body(#gdbsp_fn_def{params = Params, body = Body, line = Line},
+               #gdbsp_typespec{spec = {aggregate_function, _PosTypes, KwMap, _RetType}},
+               AggNames) ->
+    Bindings = build_fn_bindings(Params, KwMap, Line),
+    lower_expr(Body, Bindings, #{allow_agg => true, agg_names => AggNames});
+lower_agg_body(_FnDef, #gdbsp_typespec{}, _AggNames) ->
+    throw({lower_error, 0, non_aggregate_function_typespec}).
 
 build_fn_bindings([], _KwMap, _Line) -> #{};
 build_fn_bindings([{pos, Name} | Rest], KwMap, Line) ->
@@ -250,7 +275,8 @@ check_single_fn(FnDef, #gdbsp_typespec{spec = {function, PosTypes, KwMap, RetTyp
     case validate_params(Params, PosTypes, KwMap) of
         ok ->
             try
-                Body = lower_fn_body(FnDef, TS),
+                AggNames = gdbsp_builtins:aggregate_function_names(StdlibMap),
+                Body = lower_fn_body(FnDef, TS, AggNames),
                 TypeEnv = build_type_env(Params, PosTypes, KwMap),
                 case check_fn_body(Body, TypeEnv, RetType, StdlibMap) of
                     ok ->
@@ -266,11 +292,12 @@ check_single_fn(FnDef, #gdbsp_typespec{spec = {function, PosTypes, KwMap, RetTyp
         {error, _} = E -> E
     end.
 
-check_single_agg_fn(FnDef, #gdbsp_typespec{spec = {aggregate_function, PosTypes, KwMap, _RetType}},
-                    _StdlibMap) ->
+check_single_agg_fn(FnDef,
+                    TS = #gdbsp_typespec{spec = {aggregate_function, PosTypes, KwMap, _RetType}},
+                    StdlibMap) ->
     Params = FnDef#gdbsp_fn_def.params,
     case validate_params(Params, PosTypes, KwMap) of
-        ok -> {ok, #{}};
+        ok -> gdbsp_agg_plan:compile(FnDef, TS, StdlibMap);
         {error, _} = E -> E
     end.
 
