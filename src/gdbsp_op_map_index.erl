@@ -32,13 +32,9 @@ init(#{key_vars := KV, val_vars := VV}) ->
         catch throw:drop_row -> drop
         end
     end});
-init(#{key_vars := KV, agg_col := AC}) ->
+init(#{key_vars := KV, agg_row := _}) ->
     KFn = key_extract_fn(KV),
-    VFn = case AC of
-        undefined -> fun(_Row) -> null end;
-        _ -> field_extract_fn(AC)
-    end,
-    init(#{'fun' => fun(Row) -> {KFn(Row), VFn(Row)} end});
+    init(#{'fun' => fun(Row) -> {KFn(Row), Row} end});
 init(#{'fun' := Fun}) ->
     {#{'fun' => Fun, downstream_label => default}, [default], [default]}.
 

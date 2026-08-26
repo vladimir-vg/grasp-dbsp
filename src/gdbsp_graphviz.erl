@@ -286,8 +286,7 @@ circuit_node_label({map, Spec}, _Schemas, _Id) ->
             Keep = maps:get(keep, Spec, []),
             ["map(project)\n[", lists:join(", ", [binary_to_list(K) || K <- Keep]), "]"];
         agg_unwrap ->
-            Out = maps:get(output_var, Spec, <<>>),
-            ["map(unwrap)\n", binary_to_list(Out)];
+            "map(unwrap)";
         _ ->
             "map"
     end;
@@ -305,11 +304,10 @@ circuit_node_label({map_index, Spec}, _Schemas, _Id) ->
     Vals = maps:get(val_vars, Spec, []),
     KeyStr = [binary_to_list(K) || K <- Keys],
     ValStr = [binary_to_list(V) || V <- Vals],
-    case maps:is_key(agg_col, Spec) of
+    case maps:is_key(agg_row, Spec) of
         true ->
-            Agg = binary_to_list(maps:get(agg_col, Spec, <<>>)),
             ["map_index\nkey: [", lists:join(", ", KeyStr),
-             "]\nagg: ", Agg];
+             "]\nagg: row"];
         false ->
             ["map_index\nkey: [", lists:join(", ", KeyStr),
              "]\nval: [", lists:join(", ", ValStr), "]"]
@@ -318,6 +316,8 @@ circuit_node_label({join, Spec}, _Schemas, _Id) ->
     Shared = maps:get(shared_vars, Spec, []),
     ["join\n[", lists:join(", ", [binary_to_list(S) || S <- Shared]), "]"];
 circuit_node_label({distinct}, _Schemas, _Id) -> "distinct";
+circuit_node_label({aggregate, Name}, _Schemas, _Id) when is_map(Name) ->
+    "agg";
 circuit_node_label({aggregate, Name}, _Schemas, _Id) ->
     ["agg\n", binary_to_list(Name)];
 circuit_node_label({integrate}, _Schemas, _Id) -> "I";

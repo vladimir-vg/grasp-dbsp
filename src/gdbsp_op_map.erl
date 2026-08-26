@@ -36,10 +36,9 @@ init(#{kind := project, keep := KeepVars} = Args) ->
 init(#{kind := head_rename, columns := HeadCols}) ->
     Fun = build_head_rename_fn(HeadCols),
     {#{'fun' => Fun, downstream_label => default}, [default], [default]};
-init(#{kind := agg_unwrap, group_by := GroupBy,
-       output_var := OutVar, row_type := RowType} = Args) ->
+init(#{kind := agg_unwrap, group_by := GroupBy, row_type := RowType} = Args) ->
     Value = maps:get(value_mod, Args, gdbsp_value),
-    Fun = build_agg_unwrap_fn(Value, GroupBy, OutVar, RowType),
+    Fun = build_agg_unwrap_fn(Value, GroupBy, RowType),
     {#{'fun' => Fun, downstream_label => default}, [default], [default]};
 init(#{kind := wrap, row_type := RowType} = Args) ->
     Value = maps:get(value_mod, Args, gdbsp_value),
@@ -153,20 +152,14 @@ build_head_rename_fn(HeadCols) ->
 %%--------------------------------------------------------------------
 %% Aggregate-unwrap row builder + KV-tuple helper.
 
-build_agg_unwrap_fn(Value, [], OutVar, RowType) ->
-    fun({_Key, Result}) ->
-        Value:map_to_struct(#{OutVar => Result}, RowType)
-    end;
-build_agg_unwrap_fn(Value, [G], OutVar, RowType) ->
-    fun({Key, Result}) ->
-        Value:map_to_struct(#{G => Key, OutVar => Result}, RowType)
-    end;
-build_agg_unwrap_fn(Value, GroupBy, OutVar, RowType) ->
-    fun({Key, Result}) ->
-        Map = kv_tuple_to_map(GroupBy, Key),
-        Value:map_to_struct(maps:put(OutVar, Result, Map), RowType)
+build_agg_unwrap_fn(Value, GroupBy, RowType) ->
+    fun({Key, ResultMap}) ->
+        ByMap = kv_tuple_to_map(GroupBy, Key),
+        Merged = maps:merge(ByMap, ResultMap),
+        Value:map_to_struct(Merged, RowType)
     end.
 
+kv_tuple_to_map([], _Key) -> #{};
 kv_tuple_to_map(Vars, Tuple) when is_tuple(Tuple), tuple_size(Tuple) =:= length(Vars) ->
     lists:foldl(fun({V, I}, Acc) ->
         maps:put(V, element(I, Tuple), Acc)

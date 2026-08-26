@@ -115,7 +115,11 @@ collect({agg, Name, PosArgs, KwArgs}, top, RowArg, TypeEnv, StdlibMap, Slots, Id
         [A] -> A;
         _ -> throw({bad_agg_arity, Name})
     end,
-    case collect(ArgExpr, in_arg, RowArg, TypeEnv, StdlibMap, [], 0) of
+    ArgResult = case ArgExpr of
+        none -> {ok, none, [], 0};
+        _ -> collect(ArgExpr, in_arg, RowArg, TypeEnv, StdlibMap, [], 0)
+    end,
+    case ArgResult of
         {ok, ArgExpr2, _SubSlots, _} ->
             case infer_slot_type(Name, PosArgs, KwArgs, TypeEnv, StdlibMap) of
                 {ok, SlotT} ->

@@ -71,6 +71,7 @@
 -export([agg_op_count_init/2, agg_op_count_update/3, agg_op_count_result/1]).
 -export([agg_op_min_init/2, agg_op_min_update/3, agg_op_min_result/1]).
 -export([agg_op_max_init/2, agg_op_max_update/3, agg_op_max_result/1]).
+-export([agg_op_avg_integer_init/2, agg_op_avg_integer_update/3, agg_op_avg_integer_result/1]).
 -export([agg_op_xor_init/2, agg_op_xor_update/3, agg_op_xor_result/1]).
 
 %%====================================================================
@@ -599,15 +600,46 @@ agg_op_count_result(V) -> V.
 
 %% ── min ───────────────────────────────────────────────────────────────
 
-agg_op_min_init(V, _W) -> V.
-agg_op_min_update(A, V, _W) -> erlang:min(A, V).
-agg_op_min_result(V) -> V.
+agg_op_min_init(V, W) -> #{V => W}.
+agg_op_min_update(Acc, V, W) -> agg_op_add_weight(Acc, V, W).
+agg_op_min_result(Acc) ->
+    case [V || {V, W} <- maps:to_list(Acc), W > 0] of
+        [] -> drop;
+        Vs -> lists:min(Vs)
+    end.
 
 %% ── max ───────────────────────────────────────────────────────────────
 
-agg_op_max_init(V, _W) -> V.
-agg_op_max_update(A, V, _W) -> erlang:max(A, V).
-agg_op_max_result(V) -> V.
+agg_op_max_init(V, W) -> #{V => W}.
+agg_op_max_update(Acc, V, W) -> agg_op_add_weight(Acc, V, W).
+agg_op_max_result(Acc) ->
+    case [V || {V, W} <- maps:to_list(Acc), W > 0] of
+        [] -> drop;
+        Vs -> lists:max(Vs)
+    end.
+
+agg_op_add_weight(Acc, V, W) ->
+    W2 = maps:get(V, Acc, 0) + W,
+    case W2 of
+        0 -> maps:remove(V, Acc);
+        _ -> Acc#{V => W2}
+    end.
+
+%% ── avg: integer (floor(sum / count), drops empty groups) ──────────────
+
+agg_op_avg_integer_init(V, W) -> #{sum => V * W, cnt => W}.
+agg_op_avg_integer_update(#{sum := S, cnt := C}, V, W) ->
+    #{sum => S + V * W, cnt => C + W}.
+agg_op_avg_integer_result(#{cnt := 0}) -> drop;
+agg_op_avg_integer_result(#{sum := S, cnt := C}) -> floor_div(S, C).
+
+floor_div(S, C) ->
+    Q = S div C,
+    case S rem C of
+        0 -> Q;
+        R when R < 0 -> Q - 1;
+        _ -> Q
+    end.
 
 %% ── xor (bytes) ───────────────────────────────────────────────────────
 

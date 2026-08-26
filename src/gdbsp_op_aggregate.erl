@@ -1,14 +1,16 @@
 %%%-------------------------------------------------------------------
-%%% @doc Barrier-aware per-key aggregation (non-linear, single-upstream).
+%%% @doc Barrier-aware per-key aggregation via a compiled aggregate plan.
 %%%
-%%% Receives IndexedZSet deltas. Maintains per-key input data (seen)
-%%% and precomputed aggregate results. On barrier, recomputes
-%%% aggregates for changed keys, emits ±1 deltas for diffs.
+%%% Receives IndexedZSet deltas where each value is the whole input row.
+%%% Maintains per-key input data (seen) and precomputed aggregate
+%%% results. On barrier, recomputes aggregates for changed keys and
+%%% emits ±1 deltas for diffs.
 %%%
-%%% State: #{init_fn => fun(), update_fn => fun(),
-%%%          seen => #{Key => #{Val => Weight}},
-%%%          results => #{Key => Agg}, buffer => [{W,{K,V}}],
-%%%          downstream => pid}
+%%% The plan (built by gdbsp_agg_plan) carries ordered accumulator slots
+%%% (each an init/update/result MFA triple plus an argument expression
+%%% over the row) and a result expression that combines slot results into
+%%% the output struct. Slot-argument evaluation failures crash loudly —
+%%% they indicate a type-checker bug, never a skip-able row.
 %%% @end
 %%%-------------------------------------------------------------------
 -module(gdbsp_op_aggregate).
@@ -22,10 +24,8 @@
 -include("gdbsp_op.hrl").
 
 -type op_state() :: #{
-    init_fn    := fun((term(), integer()) -> term()),
-    update_fn  := fun((term(), term(), integer()) -> term()),
-    result_fn  := fun((term()) -> term() | drop),
-    seen       := #{term() => term()},
+    plan       := map(),
+    seen       := #{term() => #{term() => integer()}},
     results    := #{term() => term()},
     buffer     := [{integer(), term()}],
     downstream_label := term()
@@ -34,29 +34,9 @@
 -export_type([op_state/0, op_action/0]).
 
 -spec init(map()) -> {op_state(), [term()], [term()]}.
-init(#{function := <<"std.agg_xor_bytes">>} = Args) ->
-    Value = maps:get(value_mod, Args, gdbsp_value),
-    init(#{
-        init_fn => fun(V, _W) -> {byte_size(V), V} end,
-        update_fn => fun
-            ({poisoned, _} = Acc, _V, _W) -> Acc;
-            ({Len, Acc}, V, _W) when byte_size(V) =:= Len ->
-                {Len, try Value:bytewise_xor(Acc, V)
-                      catch error:undef -> Acc bxor V end};
-            (_, _, _) -> {poisoned, none}
-        end,
-        result_fn => fun({poisoned, _}) -> drop; ({_, Acc}) -> Acc end
-    });
-init(#{function := AggBin} = _Args) when is_binary(AggBin) ->
-    {ok, {{M, IF, _}, {M, UF, _}, {M, RF, _}}} = gdbsp_builtins:agg_impl(AggBin),
-    init(#{
-        init_fn => fun(V, W) -> M:IF(V, W) end,
-        update_fn => fun(A, V, W) -> M:UF(A, V, W) end,
-        result_fn => fun(V) -> M:RF(V) end
-    });
-init(#{init_fn := InitFn, update_fn := UpdateFn, result_fn := ResultFn}) ->
-    {#{init_fn => InitFn, update_fn => UpdateFn, result_fn => ResultFn,
-       seen => #{}, results => #{}, buffer => [], downstream_label => default},
+init(#{slots := _} = Plan) ->
+    {#{plan => Plan, seen => #{}, results => #{}, buffer => [],
+       downstream_label => default},
       [default], [default]}.
 
 
@@ -87,23 +67,17 @@ merge_metas(_) -> #{}.
 %% Internal
 %%====================================================================
 
-compute_aggregate(#{init_fn := InitFn, update_fn := UpdateFn,
-                    result_fn := ResultFn,
-                    seen := Seen, results := Results,
+compute_aggregate(#{plan := Plan, seen := Seen, results := Results,
                     buffer := Buf} = St) ->
-    %% Unwrap IndexedZSet entries from buffer
     Entries = unwrap_buffer(Buf),
-    %% Apply deltas to per-key seen maps, tracking changed keys
     {Seen2, Changed} = apply_to_seen(Entries, Seen, #{}),
-    %% Recompute aggregates for changed keys, emit diffs
-    {Results2, Output} = recompute_changed(Changed, Seen2, Results,
-                                            InitFn, UpdateFn, ResultFn),
+    {Results2, Output} = recompute_changed(Changed, Seen2, Results, Plan),
     {St#{seen := Seen2, results := Results2}, Output}.
 
 unwrap_buffer(Buf) ->
     lists:flatmap(fun unwrap_entry/1, Buf).
 
-%% {1, {Key, [{W, V}, ...]}}
+%% {1, {Key, [{W, Row}, ...]}}
 unwrap_entry({1, {Key, Vals}}) -> [{Key, Vals}];
 unwrap_entry({Key, Vals}) -> [{Key, Vals}].
 
@@ -123,15 +97,11 @@ apply_to_seen([{Key, Pairs} | Rest], Seen, Changed) ->
     end,
     apply_to_seen(Rest, Seen2, Changed2).
 
-recompute_changed(Changed, Seen, Results, InitFn, UpdateFn, ResultFn) ->
+recompute_changed(Changed, Seen, Results, Plan) ->
     maps:fold(
         fun(Key, _, {ResAcc, OutAcc}) ->
             KeySeen = maps:get(Key, Seen, #{}),
-            Acc = fold_key(KeySeen, InitFn, UpdateFn),
-            NewAgg = case Acc of
-                undefined -> undefined;
-                _ -> ResultFn(Acc)
-            end,
+            NewAgg = compute_group(Plan, KeySeen),
             OldAgg = maps:get(Key, Results, undefined),
             ResAcc2 = case NewAgg of
                 undefined -> maps:remove(Key, ResAcc);
@@ -145,26 +115,92 @@ recompute_changed(Changed, Seen, Results, InitFn, UpdateFn, ResultFn) ->
         Changed
     ).
 
-fold_key(KeySeen, InitFn, UpdateFn) ->
-    case maps:to_list(KeySeen) of
-        [] -> undefined;
-        [{V, W} | Rest] ->
-            Acc0 = InitFn(V, W),
-            lists:foldl(
-                fun({V2, W2}, Acc) -> UpdateFn(Acc, V2, W2) end,
-                Acc0,
-                Rest
-            )
+%% Fold the rows for each slot, compute slot results, then evaluate the
+%% result expression over the slot results. Returns the result map (raw
+%% field values), `drop`, or `undefined` (empty group).
+compute_group(Plan, KeySeen) ->
+    case map_size(KeySeen) of
+        0 ->
+            undefined;
+        _ ->
+            Slots = maps:get(slots, Plan),
+            Rows = maps:to_list(KeySeen),
+            SlotResults = [compute_slot(Slot, Rows, Plan) || Slot <- Slots],
+            case lists:any(fun(R) -> R =:= drop end, SlotResults) of
+                true -> drop;
+                false -> eval_result(Plan, SlotResults)
+            end
     end.
 
+compute_slot(#{arg := none, impl := {{M, IF, _}, {M, UF, _}, {M, RF, _}}},
+             Rows, _Plan) ->
+    [{_Row0, W0} | Rest] = Rows,
+    Acc0 = M:IF(none, W0),
+    Acc = lists:foldl(fun({_Row, W}, A) -> M:UF(A, none, W) end, Acc0, Rest),
+    M:RF(Acc);
+compute_slot(#{arg := ArgExpr, impl := {{M, IF, _}, {M, UF, _}, {M, RF, _}}},
+             Rows, Plan) ->
+    [{Row0, W0} | Rest] = Rows,
+    V0 = eval_arg(ArgExpr, Row0, Plan),
+    Acc0 = M:IF(V0, W0),
+    Acc = lists:foldl(
+        fun({Row, W}, A) ->
+            V = eval_arg(ArgExpr, Row, Plan),
+            M:UF(A, V, W)
+        end, Acc0, Rest),
+    M:RF(Acc).
+
+eval_arg(ArgExpr, Row, Plan) ->
+    RowArg = maps:get(row_arg, Plan),
+    KwargOrder = maps:get(kwarg_order, Plan),
+    case gdbsp_eval:eval_with_row(ArgExpr, Row, RowArg, KwargOrder) of
+        {ok, {value, _, V}} -> V;
+        drop_row -> erlang:error({slot_arg_drop_row, ArgExpr});
+        {error, Reason} -> erlang:error({slot_arg_eval_failed, Reason})
+    end.
+
+eval_result(Plan, SlotResults) ->
+    ResultExpr = maps:get(result_expr, Plan),
+    RowArg = maps:get(row_arg, Plan),
+    KwargOrder = maps:get(kwarg_order, Plan),
+    Substituted = substitute_slots(ResultExpr, SlotResults),
+    EmptyRow = {value, {struct, #{}, exact}, #{}},
+    case gdbsp_eval:eval_with_row(Substituted, EmptyRow, RowArg, KwargOrder) of
+        {ok, {value, {struct, _, _}, _} = StructVal} ->
+            gdbsp_value:struct_to_map(StructVal);
+        {ok, Other} ->
+            erlang:error({aggregate_result_not_struct, Other});
+        drop_row ->
+            erlang:error(aggregate_result_drop_row);
+        {error, Reason} ->
+            erlang:error({aggregate_result_eval_failed, Reason})
+    end.
+
+substitute_slots(Expr, RawResults) ->
+    substitute(Expr, RawResults).
+
+substitute({value, T, {slot, N}}, RawResults) ->
+    {value, T, lists:nth(N + 1, RawResults)};
+substitute({value, _, _} = V, _RawResults) -> V;
+substitute({arg, _} = A, _RawResults) -> A;
+substitute({call, Name, PosArgs, KwArgs}, RawResults) ->
+    {call, Name, [substitute(A, RawResults) || A <- PosArgs],
+           maps:map(fun(_K, V) -> substitute(V, RawResults) end, KwArgs)};
+substitute({get, Obj, Keys}, RawResults) ->
+    {get, substitute(Obj, RawResults), [substitute(K, RawResults) || K <- Keys]};
+substitute({slice, Obj, S1, S2, S3}, RawResults) ->
+    {slice, substitute(Obj, RawResults),
+            substitute_opt(S1, RawResults), substitute_opt(S2, RawResults),
+            substitute_opt(S3, RawResults)}.
+
+substitute_opt(undefined, _RawResults) -> undefined;
+substitute_opt(E, RawResults) -> substitute(E, RawResults).
+
 compute_agg_delta(_Key, undefined, NewAgg, Acc) ->
-    %% Key appeared
     [{1, {_Key, NewAgg}} | Acc];
 compute_agg_delta(_Key, _OldAgg, undefined, Acc) ->
-    %% Key disappeared
     [{-1, {_Key, _OldAgg}} | Acc];
 compute_agg_delta(_Key, _OldAgg, drop, Acc) ->
-    %% Key became invalid (poisoned group)
     [{-1, {_Key, _OldAgg}} | Acc];
 compute_agg_delta(_Key, undefined, undefined, Acc) ->
     Acc;
@@ -173,5 +209,4 @@ compute_agg_delta(_Key, undefined, drop, Acc) ->
 compute_agg_delta(_Key, OldAgg, NewAgg, Acc) when OldAgg =:= NewAgg ->
     Acc;
 compute_agg_delta(_Key, OldAgg, NewAgg, Acc) ->
-    %% Key changed
     [{1, {_Key, NewAgg}}, {-1, {_Key, OldAgg}} | Acc].
