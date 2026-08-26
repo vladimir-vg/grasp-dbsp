@@ -13,6 +13,7 @@ Designed as a compilation target — human-readable, LLM-friendly, with external
 - [stdlib.md](stdlib.md) — function and aggregate registry, expression JSON format, value encoding
 - [circuits.md](circuits.md) — circuit definitions: named, parameterised subgraphs with macro expansion
 - [fixpoint-circuits.md](fixpoint-circuits.md) — fixpoint instantiation: iterative convergence within a parent epoch
+- [cli.md](cli.md) — the `gdbsp` command-line tool: subcommands, JSONL wire format, epoch ingress, HTTP API
 
 ## File structure
 

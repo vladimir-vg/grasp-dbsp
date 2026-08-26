@@ -255,6 +255,10 @@ Output from a circuit has the same format as input — epoch batches of
 weighted rows. The runtime selects which nodes serve as outputs externally.
 The same `.gdbsp` source can be used with different output selections.
 
+The concrete JSONL serialization (one line per delta) and the runtime-owned
+epoch ingress (a unit-batch coordinator that segments input rows into epochs)
+are specified in [cli.md](cli.md) §5 and §6.
+
 ---
 
 ## 8. Execution Model
