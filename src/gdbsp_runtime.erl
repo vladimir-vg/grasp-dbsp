@@ -9,6 +9,8 @@
 -export([start/1, stop/1]).
 -export([feed/3, mark_exhausted/2, step/1, await_epoch/2]).
 -export([source_types/1, output_types/1, header/2, lines/3]).
+-export([subscribe/3, serve_loop/1]).
+-export([unsubscribe/3]).
 
 -type runtime() :: map().
 
@@ -75,3 +77,40 @@ header(Rt, Name) ->
 lines(Rt, Name, Epoch) ->
     gdbsp_output_sink:get_lines_by_epoch(
         maps:get(Name, maps:get(sinks, Rt)), Epoch).
+
+%% @doc Register a push subscriber with a named output sink.
+-spec subscribe(runtime(), binary(), pid()) -> ok | {error, unknown}.
+subscribe(Rt, Name, Subscriber) ->
+    case maps:find(Name, maps:get(sinks, Rt)) of
+        {ok, Sink} -> gdbsp_output_sink:subscribe(Sink, Subscriber);
+        error -> {error, unknown}
+    end.
+
+%% @doc Deregister a push subscriber from a named output sink.
+-spec unsubscribe(runtime(), binary(), pid()) -> ok.
+unsubscribe(Rt, Name, Subscriber) ->
+    case maps:find(Name, maps:get(sinks, Rt)) of
+        {ok, Sink} -> gdbsp_output_sink:unsubscribe(Sink, Subscriber);
+        error -> ok
+    end.
+
+%% @doc Spawn a linked loop that commits epochs as inputs arrive. The
+%% loop blocks on idle and is woken with {serve_step}; it exits on stop.
+%% Linked to the caller, so it dies with the serve process.
+-spec serve_loop(runtime()) -> pid().
+serve_loop(Rt) ->
+    spawn_link(fun() -> serve_loop_loop(Rt) end).
+
+serve_loop_loop(Rt) ->
+    receive
+        {serve_step} ->
+            case step(Rt) of
+                {ok, Epoch} ->
+                    await_epoch(Rt, Epoch),
+                    self() ! {serve_step},
+                    serve_loop_loop(Rt);
+                idle -> serve_loop_loop(Rt);
+                exhausted -> ok
+            end;
+        stop -> ok
+    end.

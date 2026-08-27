@@ -10,6 +10,7 @@
 -export([main/1]).
 -export([parse_args/1]).
 -export([run/1, validate/1, serve/1]).
+-export([load_error_msg/1, compile_error_msg/1]).
 
 %%====================================================================
 %% main
@@ -288,9 +289,9 @@ write_lines(Handle, Lines) ->
     lists:foreach(fun(Line) -> write_line(Handle, Line) end, Lines).
 
 write_line(stdout, Json) ->
-    io:format("~s~n", [jsx:encode(Json)]);
+    io:format("~s~n", [gdbsp_jsonl:encode_line(Json)]);
 write_line({file, Io}, Json) ->
-    io:format(Io, "~s~n", [jsx:encode(Json)]).
+    io:format(Io, "~s~n", [gdbsp_jsonl:encode_line(Json)]).
 
 %% Write the header line, which was emitted during open via the runtime.
 write_headers(Rt, Outputs, Handles) ->
@@ -309,54 +310,14 @@ read_input_file(File, Type) ->
         {error, Reason} -> {error, ["cannot read input ", File, ": ",
                                     file:format_error(Reason)]};
         {ok, Bin} ->
-            Lines = binary:split(Bin, <<"\n">>, [global]),
-            decode_lines(Lines, Type, 1, [])
-    end.
-
-decode_lines([], _Type, _N, Acc) ->
-    {ok, lists:reverse(Acc)};
-decode_lines([Line | Rest], Type, N, Acc) ->
-    case strip_cr(Line) of
-        <<>> ->
-            decode_lines(Rest, Type, N, Acc);
-        Trimmed ->
-            case decode_input_line(Type, Trimmed) of
-                {ok, Row} -> decode_lines(Rest, Type, N + 1, [Row | Acc]);
-                {error, Reason} ->
-                    {error, ["line ", integer_to_list(N), ": ", Reason]}
+            case gdbsp_jsonl:decode_body(Type, Bin) of
+                {ok, Rows} ->
+                    {ok, Rows};
+                {error, {Line, Reason}} ->
+                    {error, ["line ", integer_to_list(Line), ": ",
+                             gdbsp_jsonl:format_reason(Reason)]}
             end
     end.
-
-strip_cr(Line) ->
-    Size = byte_size(Line),
-    case Size > 0 andalso binary:last(Line) =:= $\r of
-        true -> binary:part(Line, 0, Size - 1);
-        false -> Line
-    end.
-
-decode_input_line(Type, Line) ->
-    try jsx:decode(Line, [return_maps]) of
-        [W, RowJson] when is_integer(W) ->
-            case gdbsp_value_json:decode_row(Type, RowJson) of
-                {ok, Decoded} ->
-                    {ok, {W, gdbsp_struct:map_to_struct(Decoded, Type)}};
-                {error, Reason} ->
-                    {error, decode_error_msg(Reason)}
-            end;
-        _ ->
-            {error, "expected [weight, row]"}
-    catch
-        _:_ -> {error, "invalid JSON"}
-    end.
-
-decode_error_msg({missing_column, Col}) ->
-    ["missing column: ", Col];
-decode_error_msg({missing_field, F}) ->
-    ["missing field: ", F];
-decode_error_msg({type_mismatch, _T, _V}) ->
-    "type mismatch";
-decode_error_msg(Reason) ->
-    io_lib:format("~p", [Reason]).
 
 %%====================================================================
 %% serve (implemented in gdbsp_http)

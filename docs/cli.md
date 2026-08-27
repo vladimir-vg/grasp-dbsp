@@ -1,7 +1,7 @@
 # Grasp DBSP — CLI
 
 Date: 2026-08-26
-Status: draft
+Status: final
 
 ---
 
