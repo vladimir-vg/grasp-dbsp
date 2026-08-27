@@ -22,9 +22,10 @@
          retraction_cascades/1,
          no_output_between_barriers/1,
          barrier_tag_preserved/1,
-         state_reset/1,
-         multiplicity_expansion/1,
-         numeric_key/1]).
+          state_reset/1,
+          multiplicity_expansion/1,
+          numeric_key/1,
+          emission_in_row_number_order/1]).
 
 all() ->
     [{group, pure}, {group, proc}].
@@ -39,10 +40,11 @@ groups() ->
         retraction_cascades,
         no_output_between_barriers,
         barrier_tag_preserved,
-        state_reset,
-        multiplicity_expansion,
-        numeric_key
-     ]}].
+         state_reset,
+         multiplicity_expansion,
+         numeric_key,
+         emission_in_row_number_order
+      ]}].
 
 init_per_suite(Config) ->
     Config.
@@ -261,4 +263,16 @@ numeric_key(_Config) ->
     [#{<<"v">> := {5, -1}, <<"row_number">> := 1},
      #{<<"v">> := {15, -1}, <<"row_number">> := 2},
      #{<<"v">> := {2, 0}, <<"row_number">> := 3}] = out_maps(Output),
+    ok = cleanup([Op, Up, Down]).
+
+emission_in_row_number_order(_Config) ->
+    {Op, Up, Down} = start_order(order_spec([[<<"k">>, <<"desc">>]])),
+    Op ! mk_delta(0, [{1, mk_row([{<<"k">>, i64, 1}, {<<"v">>, i64, 10}])},
+                      {1, mk_row([{<<"k">>, i64, 3}, {<<"v">>, i64, 30}])},
+                      {1, mk_row([{<<"k">>, i64, 2}, {<<"v">>, i64, 20}])}], Up),
+    Op ! mk_barrier_delta(0, {iter, 0, 0}, [], Up),
+    [{delta, _, Output, _}] = await(Down, 1),
+    [#{<<"k">> := 3, <<"row_number">> := 1},
+     #{<<"k">> := 2, <<"row_number">> := 2},
+     #{<<"k">> := 1, <<"row_number">> := 3}] = out_maps(Output),
     ok = cleanup([Op, Up, Down]).

@@ -86,8 +86,21 @@ compute_order(#{buffer := Buf, seen := Seen, prev := Prev, by := By,
                 rank_col := RankCol, row_number_col := RowNumCol} = St) ->
     Seen2 = gdbsp_zset:apply_deltas(Buf, Seen),
     NewOut = rank_rows(Seen2, By, RankCol, RowNumCol),
-    Output = gdbsp_zset:to_list(gdbsp_zset:subtract_weights(NewOut, Prev)),
+    Diff = gdbsp_zset:subtract_weights(NewOut, Prev),
+    Output = sort_by_row_number(gdbsp_zset:to_list(Diff), RowNumCol),
     {St#{seen := Seen2, prev := NewOut}, Output}.
+
+sort_by_row_number(Rows, RowNumCol) ->
+    lists:sort(
+        fun({_, A}, {_, B}) ->
+            {row_number_of(A, RowNumCol), A} =< {row_number_of(B, RowNumCol), B}
+        end, Rows).
+
+row_number_of({value, {struct, _, _}, TypedValues}, RowNumCol) ->
+    case maps:get(RowNumCol, TypedValues) of
+        {value, _, N} -> N;
+        N -> N
+    end.
 
 rank_rows(Seen, By, RankCol, RowNumCol) ->
     Entries = [{Row, W, key_list(Row, By), canonical_row(Row)}

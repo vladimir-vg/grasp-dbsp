@@ -1,0 +1,6 @@
+src := source("data")
+src :: stream(struct("k": i64, "v": i64))
+
+sorted := order(src, by: [["k", "desc"]], rank_column: "rank", row_number_column: "row_number")
+
+sorted_seq := project(sorted, ["k", "v"])

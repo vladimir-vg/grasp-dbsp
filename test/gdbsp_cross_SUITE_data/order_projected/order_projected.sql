@@ -1,0 +1,6 @@
+CREATE TABLE data (k INTEGER, v INTEGER);
+
+CREATE VIEW sorted_seq AS
+  SELECT k, v
+  FROM data
+  ORDER BY k DESC;
