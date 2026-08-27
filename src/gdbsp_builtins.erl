@@ -750,17 +750,17 @@ fn_impl(_) -> {error, unknown_impl}.
           {module(), atom(), arity()}}} | {error, term()}.
 agg_impl(<<"std.agg_sum_i64">>)      -> {ok, mfa_triple(gdbsp_agg, agg_op_sum)};
 agg_impl(<<"std.agg_sum_integer">>)  -> {ok, mfa_triple(gdbsp_agg, agg_op_sum)};
-agg_impl(<<"std.agg_sum_numeric">>)  -> {ok, mfa_triple(gdbsp_agg, agg_op_sum)};
+agg_impl(<<"std.agg_sum_numeric">>)  -> {ok, mfa_triple(gdbsp_agg, agg_op_sum_numeric)};
 agg_impl(<<"std.agg_sum_f64">>)      -> {ok, mfa_triple(gdbsp_agg, agg_op_sum)};
 agg_impl(<<"std.agg_count">>)         -> {ok, mfa_triple(gdbsp_agg, agg_op_count)};
 agg_impl(<<"std.agg_avg_integer">>)  -> {ok, mfa_triple(gdbsp_agg, agg_op_avg_integer)};
 agg_impl(<<"std.agg_min_i64">>)      -> {ok, mfa_triple(gdbsp_agg, agg_op_min)};
 agg_impl(<<"std.agg_min_integer">>)  -> {ok, mfa_triple(gdbsp_agg, agg_op_min)};
-agg_impl(<<"std.agg_min_numeric">>)  -> {ok, mfa_triple(gdbsp_agg, agg_op_min)};
+agg_impl(<<"std.agg_min_numeric">>)  -> {ok, mfa_triple(gdbsp_agg, agg_op_min_numeric)};
 agg_impl(<<"std.agg_min_f64">>)      -> {ok, mfa_triple(gdbsp_agg, agg_op_min)};
 agg_impl(<<"std.agg_max_i64">>)      -> {ok, mfa_triple(gdbsp_agg, agg_op_max)};
 agg_impl(<<"std.agg_max_integer">>)  -> {ok, mfa_triple(gdbsp_agg, agg_op_max)};
-agg_impl(<<"std.agg_max_numeric">>)  -> {ok, mfa_triple(gdbsp_agg, agg_op_max)};
+agg_impl(<<"std.agg_max_numeric">>)  -> {ok, mfa_triple(gdbsp_agg, agg_op_max_numeric)};
 agg_impl(<<"std.agg_max_f64">>)      -> {ok, mfa_triple(gdbsp_agg, agg_op_max)};
 agg_impl(<<"std.agg_xor_bytes">>)    -> {ok, mfa_triple(gdbsp_agg, agg_op_xor)};
 agg_impl(_) -> {error, not_found}.

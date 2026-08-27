@@ -70,7 +70,7 @@ scalar_roundtrips(_Config) ->
     ok = value_rt(f64, infinity),
     ok = value_rt(f64, neg_infinity),
     ok = value_rt(f32, 2.5),
-    ok = value_rt(numeric, {12345, 2}),
+    ok = value_rt(numeric, {12345, -2}),
     ok = value_rt(string, <<"hello">>),
     ok = value_rt({string, <<"UTF-8">>}, <<"hello">>),
     ok = value_rt(string_with_encoding, {<<"CP1251">>, <<"hi">>}),

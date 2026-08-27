@@ -73,3 +73,51 @@
     - agg:
         - [1, {dept: "10", city: "NYC", total: "300"}]
         - [1, {dept: "10", city: "LA", total: "50"}]
+
+- source: |
+    src := source("data")
+    src :: stream(struct("k": i64, "price": numeric))
+    sum_fn :: aggregate_function((struct("k": i64, "price": numeric)) -> struct("total": numeric))
+    sum_fn := function((row) -> struct("total": std.agg_sum_numeric(row.price)))
+    agg := aggregate(src, sum_fn, by: ["k"])
+
+  input:
+    - data:
+        - [1, {k: "1", price: "10.5"}]
+        - [1, {k: "1", price: "20.25"}]
+
+  expected:
+    - agg:
+        - [1, {k: "1", total: "30.75"}]
+
+- source: |
+    src := source("data")
+    src :: stream(struct("k": i64, "price": numeric))
+    min_fn :: aggregate_function((struct("k": i64, "price": numeric)) -> struct("m": numeric))
+    min_fn := function((row) -> struct("m": std.agg_min_numeric(row.price)))
+    agg := aggregate(src, min_fn, by: ["k"])
+
+  input:
+    - data:
+        - [1, {k: "1", price: "2"}]
+        - [1, {k: "1", price: "1.5"}]
+
+  expected:
+    - agg:
+        - [1, {k: "1", m: "1.5"}]
+
+- source: |
+    src := source("data")
+    src :: stream(struct("k": i64, "price": numeric))
+    max_fn :: aggregate_function((struct("k": i64, "price": numeric)) -> struct("m": numeric))
+    max_fn := function((row) -> struct("m": std.agg_max_numeric(row.price)))
+    agg := aggregate(src, max_fn, by: ["k"])
+
+  input:
+    - data:
+        - [1, {k: "1", price: "2"}]
+        - [1, {k: "1", price: "1.5"}]
+
+  expected:
+    - agg:
+        - [1, {k: "1", m: "2"}]

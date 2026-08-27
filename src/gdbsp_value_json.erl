@@ -423,21 +423,25 @@ parse_float_binary(Bin) ->
 
 numeric_to_string(Coeff, 0) ->
     integer_to_binary(Coeff);
+numeric_to_string(Coeff, Scale) when Scale < 0 ->
+    DecimalPlaces = -Scale,
+    Sign = case Coeff < 0 of true -> <<"-">>; false -> <<>> end,
+    AbsCoeff = abs(Coeff),
+    CoeffStr = integer_to_list(AbsCoeff),
+    Len = length(CoeffStr),
+    case DecimalPlaces >= Len of
+        true ->
+            Padding = lists:duplicate(DecimalPlaces - Len, $0),
+            iolist_to_binary([Sign, "0.", Padding, CoeffStr]);
+        false ->
+            {IntPart, FracPart} = lists:split(Len - DecimalPlaces, CoeffStr),
+            iolist_to_binary([Sign, IntPart, ".", FracPart])
+    end;
 numeric_to_string(Coeff, Scale) when Scale > 0 ->
-    {Sign, Abs} = case Coeff < 0 of
-        true -> {<<"-">>, -Coeff};
-        false -> {<<>>, Coeff}
-    end,
-    AbsStr = integer_to_list(Abs),
-    Len = length(AbsStr),
-    Padded = case Len =< Scale of
-        true -> lists:duplicate(Scale - Len + 1, $0) ++ AbsStr;
-        false -> AbsStr
-    end,
-    PaddedLen = length(Padded),
-    IntPart = lists:sublist(Padded, PaddedLen - Scale),
-    DecPart = lists:sublist(Padded, PaddedLen - Scale + 1, Scale),
-    iolist_to_binary([Sign, IntPart, ".", DecPart]).
+    integer_to_binary(Coeff * pow10(Scale)).
+
+pow10(0) -> 1;
+pow10(N) when N > 0 -> 10 * pow10(N - 1).
 
 string_to_numeric(Bin) ->
     case binary:split(Bin, <<".">>) of
@@ -455,7 +459,7 @@ string_to_numeric(Bin) ->
                 negative -> -AbsCoeff;
                 positive -> AbsCoeff
             end,
-            {ok, {Coeff, Scale}}
+            {ok, {Coeff, -Scale}}
     end.
 
 decode_base64(V) when is_binary(V) ->

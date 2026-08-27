@@ -79,3 +79,24 @@
         - [1, {k: "1", m: "10"}]
     - out:
         - [-1, {k: "1", m: "10"}]
+
+- source: |
+    src := source("data")
+    src :: stream(struct("k": i64, "v": numeric))
+    max_fn :: aggregate_function((struct("k": i64, "v": numeric)) -> struct("m": numeric))
+    max_fn := function((row) -> struct("m": std.agg_max_numeric(row.v)))
+    out := aggregate(src, max_fn, by: ["k"])
+
+  input:
+    - data:
+        - [1, {k: "1", v: "1.5"}]
+        - [1, {k: "1", v: "2"}]
+    - data:
+        - [-1, {k: "1", v: "2"}]
+
+  expected:
+    - out:
+        - [1, {k: "1", m: "2"}]
+    - out:
+        - [-1, {k: "1", m: "2"}]
+        - [1, {k: "1", m: "1.5"}]

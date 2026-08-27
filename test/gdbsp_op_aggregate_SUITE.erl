@@ -25,7 +25,13 @@
          consecutive_barriers/1,
          max_retraction/1,
          min_retraction/1,
-         duplicate_value_unchanged/1]).
+         duplicate_value_unchanged/1,
+         numeric_sum/1,
+         numeric_min/1,
+         numeric_max/1,
+         xor_distinct/1,
+         xor_duplicate_cancels/1,
+         xor_retraction/1]).
 
 all() ->
     [{group, pure}, {group, proc}].
@@ -41,9 +47,15 @@ groups() ->
         barrier_tag_preserved,
         multiple_keys,
         consecutive_barriers,
-        max_retraction,
-        min_retraction,
-        duplicate_value_unchanged
+         max_retraction,
+         min_retraction,
+         duplicate_value_unchanged,
+         numeric_sum,
+         numeric_min,
+         numeric_max,
+         xor_distinct,
+         xor_duplicate_cancels,
+         xor_retraction
      ]}].
 
 init_per_suite(Config) ->
@@ -112,9 +124,17 @@ stop(Pid) -> Pid ! stop.
 mk_row(V) ->
     {value, {struct, #{<<"v">> => i64}, exact}, #{<<"v">> => {value, i64, V}}}.
 
+mk_num_row(V) ->
+    {value, {struct, #{<<"v">> => numeric}, exact}, #{<<"v">> => {value, numeric, V}}}.
+
+mk_bytes_row(B) ->
+    {value, {struct, #{<<"v">> => bytes}, exact}, #{<<"v">> => {value, bytes, B}}}.
+
 %% Build a minimal single-slot plan whose slot folds the row's "v" field and
 %% whose result expression wraps the slot result in struct("total").
-agg_plan({M, IF, UF, RF}) ->
+agg_plan({M, IF, UF, RF}) -> agg_plan_typed({M, IF, UF, RF}, i64).
+
+agg_plan_typed({M, IF, UF, RF}, SlotType) ->
     {ok, StdlibMap} = gdbsp_builtins:load_stdlib(),
     KwargOrder = gdbsp_builtins:build_kwarg_order(StdlibMap),
     ArgExpr = {call, <<"std.struct_get">>, [{arg, <<"row">>}],
@@ -122,16 +142,20 @@ agg_plan({M, IF, UF, RF}) ->
     #{slots => [#{name => <<"std.agg_test">>,
                   impl => {{M, IF, 2}, {M, UF, 3}, {M, RF, 1}},
                   arg => ArgExpr,
-                  result_type => i64}],
+                  result_type => SlotType}],
       result_expr => {call, <<"struct">>, [],
-                      #{<<"total">> => {value, i64, {slot, 0}}}},
-      result_type => {struct, #{<<"total">> => i64}, exact},
+                      #{<<"total">> => {value, SlotType, {slot, 0}}}},
+      result_type => {struct, #{<<"total">> => SlotType}, exact},
       row_arg => <<"row">>,
       kwarg_order => KwargOrder}.
 
 sum_plan() -> agg_plan({gdbsp_agg, agg_op_sum_init, agg_op_sum_update, agg_op_sum_result}).
 min_plan() -> agg_plan({gdbsp_agg, agg_op_min_init, agg_op_min_update, agg_op_min_result}).
 max_plan() -> agg_plan({gdbsp_agg, agg_op_max_init, agg_op_max_update, agg_op_max_result}).
+numeric_sum_plan() -> agg_plan_typed({gdbsp_agg, agg_op_sum_numeric_init, agg_op_sum_numeric_update, agg_op_sum_numeric_result}, numeric).
+numeric_min_plan() -> agg_plan_typed({gdbsp_agg, agg_op_min_numeric_init, agg_op_min_numeric_update, agg_op_min_numeric_result}, numeric).
+numeric_max_plan() -> agg_plan_typed({gdbsp_agg, agg_op_max_numeric_init, agg_op_max_numeric_update, agg_op_max_numeric_result}, numeric).
+xor_plan() -> agg_plan_typed({gdbsp_agg, agg_op_xor_init, agg_op_xor_update, agg_op_xor_result}, bytes).
 
 start_aggregate(Plan) ->
     Up = start_collector(),
@@ -264,4 +288,61 @@ duplicate_value_unchanged(_Config) ->
     Op ! mk_delta(0, [{1, {k1, [{-1, mk_row(30)}]}}], Up),
     Op ! mk_barrier_delta(0, {iter, 0, 1}, [], Up),
     [{delta, #{barrier := {iter, 0, 1}}, [], _}] = await(Down, 1),
+    ok = cleanup([Op, Up, Down]).
+
+numeric_sum(_Config) ->
+    {Op, Up, Down} = start_aggregate(numeric_sum_plan()),
+    %% 10.5 + 20.25 = 30.75 = {3075, -2}
+    Op ! mk_delta(0, [mk_idx(k1, [{1, mk_num_row({105, -1})}]),
+                                  mk_idx(k1, [{1, mk_num_row({2025, -2})}])], Up),
+    Op ! mk_barrier_delta(0, {iter, 0, 0}, [], Up),
+    [{delta, _, [{1, {k1, #{<<"total">> := {3075, -2}}}}], _}] = await(Down, 1),
+    ok = cleanup([Op, Up, Down]).
+
+numeric_min(_Config) ->
+    {Op, Up, Down} = start_aggregate(numeric_min_plan()),
+    %% 2.0 vs 1.5: min is 1.5 = {15, -1} (cross-scale comparison)
+    Op ! mk_delta(0, [mk_idx(k1, [{1, mk_num_row({2, 0})}]),
+                                  mk_idx(k1, [{1, mk_num_row({15, -1})}])], Up),
+    Op ! mk_barrier_delta(0, {iter, 0, 0}, [], Up),
+    [{delta, _, [{1, {k1, #{<<"total">> := {15, -1}}}}], _}] = await(Down, 1),
+    ok = cleanup([Op, Up, Down]).
+
+numeric_max(_Config) ->
+    {Op, Up, Down} = start_aggregate(numeric_max_plan()),
+    %% 2.0 vs 1.5: max is 2.0 = {2, 0}
+    Op ! mk_delta(0, [mk_idx(k1, [{1, mk_num_row({2, 0})}]),
+                                  mk_idx(k1, [{1, mk_num_row({15, -1})}])], Up),
+    Op ! mk_barrier_delta(0, {iter, 0, 0}, [], Up),
+    [{delta, _, [{1, {k1, #{<<"total">> := {2, 0}}}}], _}] = await(Down, 1),
+    ok = cleanup([Op, Up, Down]).
+
+xor_distinct(_Config) ->
+    {Op, Up, Down} = start_aggregate(xor_plan()),
+    Op ! mk_delta(0, [mk_idx(k1, [{1, mk_bytes_row(<<16#0F>>)}]),
+                      mk_idx(k1, [{1, mk_bytes_row(<<16#F0>>)}])], Up),
+    Op ! mk_barrier_delta(0, {iter, 0, 0}, [], Up),
+    [{delta, _, [{1, {k1, #{<<"total">> := <<16#FF>>}}}], _}] = await(Down, 1),
+    ok = cleanup([Op, Up, Down]).
+
+xor_duplicate_cancels(_Config) ->
+    {Op, Up, Down} = start_aggregate(xor_plan()),
+    %% Two identical rows → single seen entry with weight 2 → even → cancels to <<>>
+    Op ! mk_delta(0, [mk_idx(k1, [{1, mk_bytes_row(<<16#0F>>)}]),
+                      mk_idx(k1, [{1, mk_bytes_row(<<16#0F>>)}])], Up),
+    Op ! mk_barrier_delta(0, {iter, 0, 0}, [], Up),
+    [{delta, _, [{1, {k1, #{<<"total">> := <<>>}}}], _}] = await(Down, 1),
+    ok = cleanup([Op, Up, Down]).
+
+xor_retraction(_Config) ->
+    {Op, Up, Down} = start_aggregate(xor_plan()),
+    Op ! mk_delta(0, [mk_idx(k1, [{1, mk_bytes_row(<<16#0F>>)}]),
+                      mk_idx(k1, [{1, mk_bytes_row(<<16#F0>>)}])], Up),
+    Op ! mk_barrier_delta(0, {iter, 0, 0}, [], Up),
+    [{delta, _, [{1, {k1, #{<<"total">> := <<16#FF>>}}}], _}] = await(Down, 1),
+    Op ! mk_delta(0, [{1, {k1, [{-1, mk_bytes_row(<<16#F0>>)}]}}], Up),
+    Op ! mk_barrier_delta(0, {iter, 0, 1}, [], Up),
+    [{delta, _, Output, _}] = await(Down, 1),
+    [{-1, {k1, #{<<"total">> := <<16#FF>>}}},
+     {1, {k1, #{<<"total">> := <<16#0F>>}}}] = lists:sort(Output),
     ok = cleanup([Op, Up, Down]).
