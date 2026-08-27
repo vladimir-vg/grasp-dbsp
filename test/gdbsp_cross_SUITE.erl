@@ -28,57 +28,53 @@ end_per_suite(_Config) ->
     ok.
 
 groups() ->
-    TestDefs = discover_test_dirs(),
-    GroupRefs = [{group, N} || {N, _, _} <- TestDefs],
-    case GroupRefs of
+    FixtureDefs = discover_test_groups(),
+    FixtureRefs = [{group, N} || {N, _, _} <- FixtureDefs],
+    case FixtureRefs of
         [] -> [];
-        _ -> [{all_tests, [parallel], GroupRefs} | TestDefs]
+        _ -> [{all_tests, [parallel], FixtureRefs} | FixtureDefs]
     end.
 
 %%====================================================================
 %% Test discovery
 %%====================================================================
 
-discover_test_dirs() ->
+discover_test_groups() ->
     DataDir = data_dir(),
     case file:list_dir(DataDir) of
         {ok, Entries} ->
-            lists:filtermap(fun(Entry) ->
-                TestDir = filename:join(DataDir, Entry),
-                case filelib:is_dir(TestDir) of
-                    true -> build_test_group(TestDir, Entry);
-                    false -> false
-                end
-            end, Entries);
+            lists:flatmap(fun(Entry) ->
+                build_test_groups(DataDir, Entry)
+            end, lists:sort(Entries));
         {error, _} -> []
     end.
 
-build_test_group(TestDir, Entry) ->
+build_test_groups(DataDir, Entry) ->
+    TestDir = filename:join(DataDir, Entry),
     SqlFile = filename:join(TestDir, Entry ++ ".sql"),
     GdbspFile = filename:join(TestDir, Entry ++ ".gdbsp"),
-    case {filelib:is_file(SqlFile), filelib:is_file(GdbspFile)} of
-        {true, true} ->
-            Scenarios = discover_scenarios(TestDir),
-            case Scenarios of
-                [] -> false;
-                _ ->
-                    GroupName = list_to_atom(Entry),
-                    {ok, SqlContent} = file:read_file(SqlFile),
-                    {ok, GdbspContent} = file:read_file(GdbspFile),
-                    persistent_term:put({?MODULE, GroupName},
-                        {TestDir, SqlContent, GdbspContent, Scenarios}),
-                    {true, {GroupName, [parallel], [fixture_test]}}
-            end;
+    case {filelib:is_dir(TestDir),
+          filelib:is_file(SqlFile),
+          filelib:is_file(GdbspFile)} of
+        {true, true, true} ->
+            {ok, SqlContent} = file:read_file(SqlFile),
+            {ok, GdbspContent} = file:read_file(GdbspFile),
+            [begin
+                 GroupName = list_to_atom(Entry ++ "_" ++ Scenario),
+                 persistent_term:put({?MODULE, GroupName},
+                     {TestDir, Scenario, SqlContent, GdbspContent}),
+                 {GroupName, [parallel], [fixture_test]}
+             end || Scenario <- discover_scenarios(TestDir)];
         _ ->
-            false
+            []
     end.
 
 discover_scenarios(TestDir) ->
     case file:list_dir(TestDir) of
         {ok, Entries} ->
-            [E || E <- Entries,
+            lists:sort([E || E <- Entries,
                   filelib:is_dir(filename:join(TestDir, E)),
-                  not lists:prefix(".", E)];
+                  not lists:prefix(".", E)]);
         {error, _} -> []
     end.
 
@@ -94,10 +90,8 @@ data_dir() ->
 fixture_test(Config) ->
     GroupName = proplists:get_value(name,
         ?config(tc_group_properties, Config)),
-    {TestDir, SqlContent, GdbspContent, Scenarios} =
+    {TestDir, Scenario, SqlContent, GdbspContent} =
         persistent_term:get({?MODULE, GroupName}),
-    lists:foreach(fun(Scenario) ->
-        ct:pal("Running scenario: ~s/~s", [GroupName, Scenario]),
-        gdbsp_cross_runner:run_scenario(
-            TestDir, Scenario, SqlContent, GdbspContent)
-    end, Scenarios).
+    ct:pal("Running scenario: ~s/~s", [GroupName, Scenario]),
+    gdbsp_cross_runner:run_scenario(
+        TestDir, Scenario, SqlContent, GdbspContent).
