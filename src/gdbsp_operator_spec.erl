@@ -64,6 +64,7 @@ lookup_core(join)           -> {ok, gdbsp_op_join};
 lookup_core(differentiate)  -> {ok, gdbsp_op_differentiate};
 lookup_core(antijoin)       -> {ok, gdbsp_op_antijoin};
 lookup_core(aggregate)      -> {ok, gdbsp_op_aggregate};
+lookup_core(order)          -> {ok, gdbsp_op_order};
 lookup_core(delay)         -> {ok, gdbsp_op_delay};
 lookup_core(flat_map)       -> {ok, gdbsp_op_flat_map};
 lookup_core(_)              -> {error, not_found}.
@@ -135,6 +136,7 @@ is_linear(_)              -> false.
 needs_full_input({join, _})         -> true;
 needs_full_input({distinct})        -> true;
 needs_full_input({aggregate, _})    -> true;
+needs_full_input({order, _})        -> true;
 needs_full_input({antijoin, _, _})  -> true;
 needs_full_input(_)                 -> false.
 
@@ -142,5 +144,6 @@ needs_full_input(_)                 -> false.
 produces_full_output({join, _})         -> true;
 produces_full_output({distinct})        -> true;
 produces_full_output({aggregate, _})    -> true;
+produces_full_output({order, _})        -> true;
 produces_full_output({antijoin, _, _})  -> true;
 produces_full_output(_)                 -> false.

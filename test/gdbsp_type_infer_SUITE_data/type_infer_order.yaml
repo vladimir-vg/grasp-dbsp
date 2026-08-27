@@ -1,0 +1,77 @@
+- description: "order adds rank and row_number integer columns"
+  source: |
+    src := source("data")
+    src :: stream(struct("a": i64, "b": i64))
+    out := order(src, by: [["a", "desc"], ["b", "asc"]],
+                 rank_column: "rank", row_number_column: "row_number")
+  expected:
+    out:
+      struct:
+        a: i64
+        b: i64
+        rank: integer
+        row_number: integer
+
+- description: "order with empty by list fails"
+  source: |
+    src := source("data")
+    src :: stream(struct("a": i64))
+    out := order(src, by: [], rank_column: "rank", row_number_column: "row_number")
+  expected_errors:
+    - class: type_conflict
+
+- description: "order missing rank_column fails"
+  source: |
+    src := source("data")
+    src :: stream(struct("a": i64))
+    out := order(src, by: [["a", "asc"]], row_number_column: "row_number")
+  expected_errors:
+    - class: type_conflict
+
+- description: "order missing row_number_column fails"
+  source: |
+    src := source("data")
+    src :: stream(struct("a": i64))
+    out := order(src, by: [["a", "asc"]], rank_column: "rank")
+  expected_errors:
+    - class: type_conflict
+
+- description: "order rank_column clashing with input field fails"
+  source: |
+    src := source("data")
+    src :: stream(struct("a": i64, "rank": i64))
+    out := order(src, by: [["a", "asc"]], rank_column: "rank", row_number_column: "row_number")
+  expected_errors:
+    - class: type_conflict
+
+- description: "order rank_column equal to row_number_column fails"
+  source: |
+    src := source("data")
+    src :: stream(struct("a": i64))
+    out := order(src, by: [["a", "asc"]], rank_column: "rank", row_number_column: "rank")
+  expected_errors:
+    - class: type_conflict
+
+- description: "order by unknown field fails"
+  source: |
+    src := source("data")
+    src :: stream(struct("a": i64))
+    out := order(src, by: [["b", "asc"]], rank_column: "rank", row_number_column: "row_number")
+  expected_errors:
+    - class: missing_field
+
+- description: "order by invalid direction fails"
+  source: |
+    src := source("data")
+    src :: stream(struct("a": i64))
+    out := order(src, by: [["a", "sideways"]], rank_column: "rank", row_number_column: "row_number")
+  expected_errors:
+    - class: type_conflict
+
+- description: "order by malformed entry fails"
+  source: |
+    src := source("data")
+    src :: stream(struct("a": i64))
+    out := order(src, by: [["a"]], rank_column: "rank", row_number_column: "row_number")
+  expected_errors:
+    - class: type_conflict

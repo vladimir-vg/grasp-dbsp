@@ -136,6 +136,7 @@ The result is a directed graph of operators — the **circuit graph**.
 | `filter(node, fn)` | 1 node: `filter` with expression tree from function registry |
 | `flat_map(node, fn)` | 1 node: `flat_map` with expression tree from function registry |
 | `project(node, [...])` | 1 node: `project` with keep-field list |
+| `order(node, by: ..., rank_column: ..., row_number_column: ...)` | 1 node: `order` with the sort spec |
 
 ### 5.2 Fixpoint Construction
 
@@ -217,6 +218,7 @@ between the two modes.
 | `join` | no | yes | yes |
 | `distinct` | no | yes | yes |
 | `aggregate` | no | yes | yes |
+| `order` | no | yes | yes |
 | `antijoin` | no | yes | yes |
 | `integrate` | no | no | yes |
 | `differentiate` | no | no | no |

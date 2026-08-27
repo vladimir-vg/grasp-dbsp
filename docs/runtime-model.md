@@ -174,6 +174,7 @@ and epochs:
 | `join` | Indexed Z-sets for left and right inputs |
 | `distinct` | Z-set of previously emitted rows (for deduplication) |
 | `aggregate` | Per-group accumulated values (for fold operations) |
+| `order` | Full input multiset + previous ranked output (for rank/row-number diffs) |
 
 State is per-operator, per-circuit. There is no shared state between
 operators — only deltas flow between them.

@@ -195,7 +195,8 @@ process(#circuit_node{id = Id, op = Op}, InputModes,
 process(#circuit_node{id = Id, op = Op} = Node, InputModes,
         AccNodes, AccNextId, ModeMap)
   when element(1, Op) =:= join; element(1, Op) =:= distinct;
-       element(1, Op) =:= aggregate; element(1, Op) =:= antijoin ->
+       element(1, Op) =:= aggregate; element(1, Op) =:= order;
+       element(1, Op) =:= antijoin ->
     wrap_nonlinear(Id, Node, InputModes, AccNodes, AccNextId, ModeMap).
 
 %%====================================================================

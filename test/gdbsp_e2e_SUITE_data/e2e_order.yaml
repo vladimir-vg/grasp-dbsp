@@ -1,0 +1,41 @@
+- source: |
+    src := source("data")
+    src :: stream(struct("name": string("UTF-8"), "score": i64))
+    out := order(src, by: [["score", "desc"]], rank_column: "rank", row_number_column: "row_number")
+
+  input:
+    - data:
+        - [1, {name: "a", score: "10"}]
+        - [1, {name: "b", score: "30"}]
+        - [1, {name: "c", score: "20"}]
+        - [1, {name: "d", score: "20"}]
+
+  expected:
+    - out:
+        - [1, {name: "b", score: "30", rank: "1", row_number: "1"}]
+        - [1, {name: "c", score: "20", rank: "2", row_number: "2"}]
+        - [1, {name: "d", score: "20", rank: "2", row_number: "3"}]
+        - [1, {name: "a", score: "10", rank: "4", row_number: "4"}]
+
+- source: |
+    src := source("data")
+    src :: stream(struct("k": i64, "v": i64))
+    out := order(src, by: [["k", "asc"]], rank_column: "rank", row_number_column: "row_number")
+
+  input:
+    - data:
+        - [1, {k: "2", v: "20"}]
+        - [1, {k: "3", v: "30"}]
+    - data:
+        - [1, {k: "1", v: "10"}]
+
+  expected:
+    - out:
+        - [1, {k: "2", v: "20", rank: "1", row_number: "1"}]
+        - [1, {k: "3", v: "30", rank: "2", row_number: "2"}]
+    - out:
+        - [-1, {k: "2", v: "20", rank: "1", row_number: "1"}]
+        - [-1, {k: "3", v: "30", rank: "2", row_number: "2"}]
+        - [1, {k: "1", v: "10", rank: "1", row_number: "1"}]
+        - [1, {k: "2", v: "20", rank: "2", row_number: "2"}]
+        - [1, {k: "3", v: "30", rank: "3", row_number: "3"}]

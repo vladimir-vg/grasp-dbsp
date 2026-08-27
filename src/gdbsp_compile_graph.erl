@@ -270,6 +270,11 @@ make_operator_lowered(G, Op, Args, InputIds, _TS, FnReg, FnParams, KwargOrder, S
         project ->
             KeepFields = get_string_list_arg(Args, 2),
             {{map, #{kind => project, keep => KeepFields}}, []};
+        order ->
+            {by, By} = get_kw_arg(Args, by, []),
+            {rank_column, RankCol} = get_kw_arg(Args, rank_column, undefined),
+            {row_number_column, RowNumCol} = get_kw_arg(Args, row_number_column, undefined),
+            {{order, #{by => By, rank_col => RankCol, row_number_col => RowNumCol}}, []};
         antijoin ->
             {on, SharedVars} = get_kw_arg(Args, on, []),
             [_, RId] = InputIds,
@@ -567,6 +572,10 @@ compute_schema_lowered(Op, Args, InputIds, TS, G) ->
             end;
         project ->
             get_string_list_arg(Args, 2);
+        order ->
+            {rank_column, RankCol} = get_kw_arg(Args, rank_column, undefined),
+            {row_number_column, RowNumCol} = get_kw_arg(Args, row_number_column, undefined),
+            inherit_schema(InputIds, G) ++ [RankCol, RowNumCol];
         distinct -> inherit_schema(InputIds, G);
         plus     -> inherit_schema(InputIds, G);
         map      -> inherit_schema(InputIds, G);

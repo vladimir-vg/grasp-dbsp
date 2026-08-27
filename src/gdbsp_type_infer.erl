@@ -77,6 +77,63 @@ check_by_result_clash(ByFields, ResultFields, _FnRef) ->
         end, ByFields).
 
 %%====================================================================
+%% Order helpers
+%%====================================================================
+
+validate_order_keys([], _InputFields) ->
+    error(#{<<"class">> => <<"type_conflict">>,
+            <<"message">> => <<"order requires a non-empty by list">>});
+validate_order_keys(By, InputFields) ->
+    lists:foreach(
+        fun
+            ([Field, Dir]) when is_binary(Field), is_binary(Dir) ->
+                case maps:is_key(Field, InputFields) of
+                    false ->
+                        error(#{<<"class">> => <<"missing_field">>,
+                                <<"field">> => Field});
+                    true ->
+                        case lists:member(Dir, [<<"asc">>, <<"desc">>]) of
+                            true -> ok;
+                            false ->
+                                error(#{<<"class">> => <<"type_conflict">>,
+                                        <<"message">> => <<"order direction must be asc or desc">>,
+                                        <<"field">> => Field,
+                                        <<"direction">> => Dir})
+                        end
+                end;
+            (Other) ->
+                error(#{<<"class">> => <<"type_conflict">>,
+                        <<"message">> => <<"order by entry must be [field, direction]">>,
+                        <<"entry">> => Other})
+        end, By).
+
+validate_order_columns(RankCol, RowNumCol, InputFields) ->
+    validate_order_column(rank_column, RankCol, InputFields),
+    validate_order_column(row_number_column, RowNumCol, InputFields),
+    case RankCol =:= RowNumCol of
+        true ->
+            error(#{<<"class">> => <<"type_conflict">>,
+                    <<"message">> => <<"rank_column and row_number_column must differ">>});
+        false -> ok
+    end.
+
+validate_order_column(_Kind, undefined, _InputFields) ->
+    error(#{<<"class">> => <<"type_conflict">>,
+            <<"message">> => <<"order requires an explicit column name">>});
+validate_order_column(_Kind, Col, _InputFields) when not is_binary(Col) ->
+    error(#{<<"class">> => <<"type_conflict">>,
+            <<"message">> => <<"order column name must be a string">>});
+validate_order_column(Kind, Col, InputFields) ->
+    case maps:is_key(Col, InputFields) of
+        true ->
+            error(#{<<"class">> => <<"type_conflict">>,
+                    <<"message">> => <<"order column clashes with input field">>,
+                    <<"column">> => Kind,
+                    <<"field">> => Col});
+        false -> ok
+    end.
+
+%%====================================================================
 %% Field helpers
 %%====================================================================
 
@@ -250,6 +307,16 @@ infer_lnode_type(aggregate, Args, InputIds, _Tags, TypeAcc, _TSMap, _FnReg, AggR
             ByPairs = [{F, field_type(F, InputType)} || F <- ByFields],
             {struct, maps:from_list(ByPairs ++ maps:to_list(ResultFields)), exact}
     end;
+
+infer_lnode_type(order, Args, InputIds, _Tags, TypeAcc, _TSMap, _FnReg, _AggReg, _FnParams, _StdlibMap) ->
+    InputType = lowered_input_type(InputIds, TypeAcc),
+    {by, By} = get_kw_arg(Args, by, []),
+    {rank_column, RankCol} = get_kw_arg(Args, rank_column, undefined),
+    {row_number_column, RowNumCol} = get_kw_arg(Args, row_number_column, undefined),
+    InputFields = struct_fields(InputType),
+    ok = validate_order_keys(By, InputFields),
+    ok = validate_order_columns(RankCol, RowNumCol, InputFields),
+    {struct, (InputFields)#{RankCol => integer, RowNumCol => integer}, exact};
 
 infer_lnode_type(map, Args, InputIds, _Tags, TypeAcc, _TSMap, FnReg, _AggReg, FnParams, StdlibMap) ->
     InputType = lowered_input_type(InputIds, TypeAcc),

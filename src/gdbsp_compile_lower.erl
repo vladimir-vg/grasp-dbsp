@@ -18,7 +18,7 @@
 -include("gdbsp_lowered.hrl").
 -include("gdbsp_type.hrl").
 
--define(FORBIDDEN_IN_FIXPOINT, [aggregate, neg, antijoin]).
+-define(FORBIDDEN_IN_FIXPOINT, [aggregate, order, neg, antijoin]).
 
 %%====================================================================
 %% Public API

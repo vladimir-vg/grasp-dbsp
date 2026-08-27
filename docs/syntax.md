@@ -93,7 +93,7 @@ node_rhs := OP "(" args? ")"            # known operator
 
 OP       := "source" | "delay" | "integrate" | "differentiate"
           | "distinct" | "plus" | "neg" | "map" | "flat_map"
-          | "join" | "aggregate" | "filter" | "project"
+          | "join" | "aggregate" | "order" | "filter" | "project"
           | "antijoin" | "fixpoint"
 
 args     := arg ("," arg)*
@@ -119,6 +119,28 @@ merged := plus(
   c
 )
 ```
+
+### 3.2 The `order` operator
+
+`order` sorts the input relation and adds two `integer` columns: `rank`
+(SQL `RANK` — rows tied on the full sort key share a rank, with gaps) and
+`row_number` (1..N, unique). Multiplicities expand to one output occurrence
+per input row. All arguments are explicit, with no defaults:
+
+```
+sorted := order(src,
+                by: [["sal", "desc"], ["name", "asc"]],
+                rank_column: "rank",
+                row_number_column: "row_number")
+```
+
+- `by:` — required, non-empty list of `[field, direction]` pairs;
+  `direction` is `"asc"` or `"desc"`.
+- `rank_column:` / `row_number_column:` — required, distinct, and must not
+  collide with any input field.
+
+`by:` is a nested bracket list (a list of two-element lists), unlike the
+flat bracket lists used by `join` / `aggregate` / `project`.
 
 ---
 

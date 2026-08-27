@@ -21,6 +21,7 @@ op_atom({delay})           -> delay;
 op_atom({antijoin, _, _})  -> antijoin;
 op_atom({flat_map, _})     -> flat_map;
 op_atom({aggregate, _})    -> aggregate;
+op_atom({order, _})        -> order;
 op_atom({rec, _, _})       -> rec;
 op_atom({rec_output, _, _}) -> rec_output;
 op_atom(Op) when is_atom(Op) -> Op.
@@ -49,6 +50,8 @@ op_args({aggregate, AggBin}, _Inputs) when is_binary(AggBin) ->
     #{function => AggBin};
 op_args({aggregate, Plan}, _Inputs) when is_map(Plan) ->
     Plan;
+op_args({order, Spec}, _Inputs) ->
+    Spec;
 op_args({rec, Name, SccId}, _Inputs) ->
     #{name => Name, scc_id => SccId};
 op_args({rec_output, Name, SccId}, _Inputs) ->

@@ -286,6 +286,9 @@ collect_bracket_list(Tokens, Acc) ->
     case Tokens of
         [{']', _} | Rest] -> {lists:reverse(Acc), Rest};
         [{',', _} | Rest] -> collect_bracket_list(Rest, Acc);
+        [{'[', _} | Rest] ->
+            {Items, Rest2} = collect_bracket_list(Rest, []),
+            collect_bracket_list(Rest2, [Items | Acc]);
         [{string, _, V} | Rest] ->
             collect_bracket_list(Rest, [V | Acc]);
         [{identifier, _, V} | Rest] ->
@@ -913,6 +916,7 @@ known_op(<<"map">>)                -> true;
 known_op(<<"flat_map">>)           -> true;
 known_op(<<"join">>)               -> true;
 known_op(<<"aggregate">>)          -> true;
+known_op(<<"order">>)              -> true;
 known_op(<<"filter">>)             -> true;
 known_op(<<"project">>)            -> true;
 known_op(<<"antijoin">>)           -> true;
