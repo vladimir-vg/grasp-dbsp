@@ -1,0 +1,6 @@
+data := source("data")
+data :: stream(struct("k": integer, "a": integer))
+excluded := source("excluded")
+excluded :: stream(struct("k": integer))
+
+kept_set := antijoin(data, excluded, on: ["k"])

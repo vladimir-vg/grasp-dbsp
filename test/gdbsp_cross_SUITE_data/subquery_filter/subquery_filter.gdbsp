@@ -1,0 +1,11 @@
+src := source("data")
+src :: stream(struct("dept": integer, "sal": integer))
+
+sum_fn :: aggregate_function((struct("dept": integer, "sal": integer)) -> struct("total": integer))
+sum_fn := function((row) -> struct("total": std.agg_sum_integer(row.sal)))
+agg := aggregate(src, sum_fn, by: ["dept"])
+
+big_fn :: function((struct("dept": integer, "total": integer)) -> enum("false","true"))
+big_fn := function((row) -> row.total > 100)
+
+high_dept_set := filter(agg, big_fn)

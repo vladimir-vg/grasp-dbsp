@@ -1,0 +1,4 @@
+{"dept": "integer", "sal": "integer", "max_sal": "integer"}
+{"dept": "10", "sal": "100", "max_sal": "300"}
+{"dept": "10", "sal": "300", "max_sal": "300"}
+{"dept": "20", "sal": "50", "max_sal": "50"}

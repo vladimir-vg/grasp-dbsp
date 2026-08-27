@@ -1,0 +1,8 @@
+src := source("data")
+src :: stream(struct("dept": integer, "sal": integer))
+
+max_fn :: aggregate_function((struct("dept": integer, "sal": integer)) -> struct("max_sal": integer))
+max_fn := function((row) -> struct("max_sal": std.agg_max_integer(row.sal)))
+agg := aggregate(src, max_fn, by: ["dept"])
+
+with_max_set := join(src, agg, on: ["dept"])
