@@ -1,0 +1,4 @@
+{"k": "i64", "v": "i64", "rank": "integer", "row_number": "integer"}
+{"k": "3", "v": "30", "rank": "1", "row_number": "1"}
+{"k": "2", "v": "20", "rank": "2", "row_number": "2"}
+{"k": "1", "v": "10", "rank": "3", "row_number": "3"}

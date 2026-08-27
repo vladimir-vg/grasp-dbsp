@@ -1,0 +1,7 @@
+src := source("data")
+src :: stream(struct("dept": i64, "cat": i64, "v": i64))
+
+agg_fn :: aggregate_function((struct("dept": i64, "cat": i64, "v": i64)) -> struct("total": i64, "cnt": integer, "lo": i64, "hi": i64))
+agg_fn := function((row) -> struct("total": std.agg_sum_i64(row.v), "cnt": std.agg_count(), "lo": std.agg_min_i64(row.v), "hi": std.agg_max_i64(row.v)))
+
+agg_set := aggregate(src, agg_fn, by: ["dept", "cat"])
