@@ -1,0 +1,3 @@
+{"dept": "integer", "total": "integer"}
+{"dept": "10", "total": "250"}
+{"dept": "30", "total": "300"}

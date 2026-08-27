@@ -1,0 +1,5 @@
+{"dept": "integer", "sal": "integer"}
+{"dept": "10", "sal": "100"}
+{"dept": "10", "sal": "150"}
+{"dept": "20", "sal": "50"}
+{"dept": "30", "sal": "300"}

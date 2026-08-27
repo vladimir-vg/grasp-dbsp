@@ -1,0 +1,16 @@
+circuit countdown(base: input, result: r):
+    filtered := filter(r, gt_zero)
+    next := map(filtered, dec_fn)
+    combined := plus(input, next)
+    result := distinct(combined)
+
+src := source("seed")
+src :: stream(struct("v": integer))
+
+gt_zero :: function((struct("v": integer)) -> enum("false","true"))
+gt_zero := function((row) -> row.v > 0)
+dec_fn :: function((struct("v": integer)) -> struct("v": integer))
+dec_fn := function((row) -> struct("v": row.v - 1))
+
+fp := fixpoint(countdown(base: src, result: src))
+cnt_set := fp.result

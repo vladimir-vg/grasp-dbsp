@@ -1,0 +1,9 @@
+CREATE TABLE seed (v INTEGER);
+
+CREATE VIEW cnt_set AS
+WITH RECURSIVE cnt(v) AS (
+  SELECT v FROM seed
+  UNION ALL
+  SELECT v - 1 FROM cnt WHERE v > 0
+)
+SELECT v FROM cnt;
