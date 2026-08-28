@@ -13,5 +13,5 @@ edge_for_join := function((row) -> struct("key": row.t, "f": row.f))
 path_for_join :: function((struct("f": integer, "t": integer)) -> struct("key": integer, "t": integer))
 path_for_join := function((row) -> struct("key": row.f, "t": row.t))
 
-fp := fixpoint(tc_body(edge: edge_src, path: edge_src))
+fp := fixpoint(tc_body(edge: edge_src, path: empty()))
 reach_set := fp.path

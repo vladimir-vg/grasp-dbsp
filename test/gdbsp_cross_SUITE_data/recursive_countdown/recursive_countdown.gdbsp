@@ -12,5 +12,5 @@ gt_zero := function((row) -> row.v > 0)
 dec_fn :: function((struct("v": integer)) -> struct("v": integer))
 dec_fn := function((row) -> struct("v": row.v - 1))
 
-fp := fixpoint(countdown(base: src, result: src))
+fp := fixpoint(countdown(base: src, result: empty()))
 cnt_set := fp.result

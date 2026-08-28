@@ -13,7 +13,7 @@
     dec_fn := function((row) -> struct("v": row.v - 1))
     dec_fn :: function((struct("v": integer)) -> struct("v": integer))
 
-    fp := fixpoint(countdown(base: src, result: src))
+    fp := fixpoint(countdown(base: src, result: empty()))
     out := fp.result
 
   input:

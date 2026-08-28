@@ -191,30 +191,85 @@ get_string_list_arg(Args, Pos) ->
                     fn_registry(), fn_registry(), fn_params(),
                     gdbsp_builtins:stdlib_map()) ->
     {ok, #lowered_graph{}} | {error, term()}.
-infer_lowered(#lowered_graph{nodes = Nodes} = LG, TSMap, FnReg, AggReg, FnParams, StdlibMap) ->
+infer_lowered(#lowered_graph{fixpoints = FPs} = LG, TSMap, FnReg, AggReg, FnParams, StdlibMap) ->
     try
-        NodeList = maps:to_list(Nodes),
-        Sorted = lowered_topo_sort(NodeList),
-        {NewNodes, _TypeAcc} = lists:foldl(
-            fun(LId, {AccNodes, TypeAcc}) ->
-                #lnode{op = Op, inputs = InputIds, args = Args, tags = Tags,
-                       type = ExistingType} = maps:get(LId, AccNodes),
-                Type = case is_concrete_type(ExistingType) of
-                    true -> ExistingType;
-                    false ->
-                        infer_lnode_type(Op, Args, InputIds, Tags, TypeAcc,
-                                          TSMap, FnReg, AggReg, FnParams, StdlibMap)
-                end,
-                Node = (maps:get(LId, AccNodes))#lnode{type = Type},
-                {maps:put(LId, Node, AccNodes), TypeAcc#{LId => Type}}
-            end,
-            {Nodes, #{}},
-            Sorted),
-        {ok, LG#lowered_graph{nodes = NewNodes}}
+        case self_ref_pairs(FPs) of
+            [] ->
+                infer_pass(LG, TSMap, FnReg, AggReg, FnParams, StdlibMap, #{});
+            SelfRefs ->
+                infer_selfrefs(LG, TSMap, FnReg, AggReg, FnParams, StdlibMap, SelfRefs)
+        end
     catch
         error:Reason when is_map(Reason) ->
             {error, Reason}
     end.
+
+%% A self-referential fixpoint param's type is the body output type, not its
+%% (possibly empty) base argument. Resolve it by iterating inference to a
+%% fixed point: seed each self-ref fixpoint_input with the body output type
+%% from the previous pass until it stabilises.
+self_ref_pairs(FPs) ->
+    lists:append(
+        [ [{maps:get(input, P), maps:get(body_out, P)}
+           || {_Kw, P} <- maps:to_list(maps:get(params, Info)),
+              maps:get(kind, P) =:= self_ref]
+          || {_H, Info} <- maps:to_list(FPs) ]).
+
+infer_selfrefs(LG, TSMap, FnReg, AggReg, FnParams, StdlibMap, SelfRefs) ->
+    iterate_selfrefs(LG, TSMap, FnReg, AggReg, FnParams, StdlibMap, SelfRefs,
+                     #{}, length(SelfRefs) + 1).
+
+iterate_selfrefs(LG, TSMap, FnReg, AggReg, FnParams, StdlibMap, _SelfRefs, Seed, 0) ->
+    infer_pass(LG, TSMap, FnReg, AggReg, FnParams, StdlibMap, Seed);
+iterate_selfrefs(LG, TSMap, FnReg, AggReg, FnParams, StdlibMap, SelfRefs, Seed, Iter) ->
+    {ok, NewLG} = infer_pass(LG, TSMap, FnReg, AggReg, FnParams, StdlibMap, Seed),
+    NewSeed = self_ref_types(NewLG, SelfRefs),
+    case NewSeed =:= Seed of
+        true ->
+            {ok, NewLG};
+        false ->
+            iterate_selfrefs(LG, TSMap, FnReg, AggReg, FnParams, StdlibMap,
+                             SelfRefs, NewSeed, Iter - 1)
+    end.
+
+self_ref_types(#lowered_graph{nodes = Nodes}, SelfRefs) ->
+    maps:from_list(
+        [{InputId, node_type(Nodes, BodyOutId)} || {InputId, BodyOutId} <- SelfRefs]).
+
+node_type(Nodes, Id) ->
+    case maps:find(Id, Nodes) of
+        {ok, #lnode{type = T}} -> T;
+        error -> undefined
+    end.
+
+infer_pass(#lowered_graph{nodes = Nodes} = LG, TSMap, FnReg, AggReg, FnParams, StdlibMap, Seed) ->
+    SeededNodes = maps:fold(
+        fun(Id, Type, Acc) ->
+            case maps:find(Id, Acc) of
+                {ok, #lnode{} = N} -> maps:put(Id, N#lnode{type = Type}, Acc);
+                error -> Acc
+            end
+        end,
+        Nodes,
+        Seed),
+    NodeList = maps:to_list(SeededNodes),
+    Sorted = lowered_topo_sort(NodeList),
+    {NewNodes, _TypeAcc} = lists:foldl(
+        fun(LId, {AccNodes, TypeAcc}) ->
+            #lnode{op = Op, inputs = InputIds, args = Args, tags = Tags,
+                   type = ExistingType} = maps:get(LId, AccNodes),
+            Type = case is_concrete_type(ExistingType) of
+                true -> ExistingType;
+                false ->
+                    infer_lnode_type(Op, Args, InputIds, Tags, TypeAcc,
+                                      TSMap, FnReg, AggReg, FnParams, StdlibMap)
+            end,
+            Node = (maps:get(LId, AccNodes))#lnode{type = Type},
+            {maps:put(LId, Node, AccNodes), TypeAcc#{LId => Type}}
+        end,
+        {SeededNodes, #{}},
+        Sorted),
+    {ok, LG#lowered_graph{nodes = NewNodes}}.
 
 lowered_topo_sort(NodeList) ->
     NodeMap = maps:from_list(NodeList),
@@ -388,17 +443,27 @@ infer_fn_body_output_type(FnName, FnJson, FnParams, InputType, StdlibMap) ->
     end.
 
 infer_row_fn_output_type(FnName, InputType, FnReg, FnParams, StdlibMap) ->
-    case maps:find(FnName, FnReg) of
-        {ok, FnJson} ->
-            infer_fn_body_output_type(FnName, FnJson, FnParams, InputType, StdlibMap);
-        error ->
-            case gdbsp_builtins:resolve_call(FnName, [InputType], [], StdlibMap) of
-                {ok, RetType, _Concrete} -> RetType;
-                {error, _} ->
-                    error(#{<<"class">> => <<"missing_typespec">>,
-                            <<"node">> => FnName,
-                            <<"message">> => <<"function not found">>})
+    case is_type_var(InputType) of
+        true ->
+            %% Unresolved self-ref input: fall back to the declared signature,
+            %% which unifies the type_var against the declared param type.
+            infer_declared_fn_output_type(FnName, InputType, StdlibMap);
+        false ->
+            case maps:find(FnName, FnReg) of
+                {ok, FnJson} ->
+                    infer_fn_body_output_type(FnName, FnJson, FnParams, InputType, StdlibMap);
+                error ->
+                    infer_declared_fn_output_type(FnName, InputType, StdlibMap)
             end
+    end.
+
+infer_declared_fn_output_type(FnName, InputType, StdlibMap) ->
+    case gdbsp_builtins:resolve_call(FnName, [InputType], [], StdlibMap) of
+        {ok, RetType, _Concrete} -> RetType;
+        {error, _} ->
+            error(#{<<"class">> => <<"missing_typespec">>,
+                    <<"node">> => FnName,
+                    <<"message">> => <<"function not found">>})
     end.
 
 fn_arg_env(FnName, FnParams, InputType) ->

@@ -28,3 +28,51 @@
       struct:
         k: i64
         v: i64
+
+- description: "self-ref accumulator base empty() resolves through filter/map"
+  source: |
+    circuit countdown(base: input, result: r):
+        filtered := filter(r, gt_zero)
+        next := map(filtered, dec_fn)
+        combined := plus(input, next)
+        result := distinct(combined)
+
+    src := source("data")
+    src :: stream(struct("v": integer))
+
+    gt_zero := function((row) -> row.v > 0)
+    gt_zero :: function((struct("v": integer)) -> enum("false","true"))
+    dec_fn := function((row) -> struct("v": row.v - 1))
+    dec_fn :: function((struct("v": integer)) -> struct("v": integer))
+
+    fp := fixpoint(countdown(base: src, result: empty()))
+    out := fp.result
+  expected:
+    fp.result:
+      struct:
+        v: integer
+
+- description: "self-ref accumulator base empty() resolves through map/join"
+  source: |
+    circuit tc_body(edge: e, path: p):
+        path_ready := map(p, path_for_join)
+        edge_ready := map(e, edge_for_join)
+        joined := join(edge_ready, path_ready, on: ["key"])
+        joined_proj := project(joined, ["f", "t"])
+        path := distinct(plus(e, joined_proj))
+
+    edge_src := source("edge")
+    edge_src :: stream(struct("f": integer, "t": integer))
+
+    edge_for_join :: function((struct("f": integer, "t": integer)) -> struct("key": integer, "f": integer))
+    edge_for_join := function((row) -> struct("key": row.t, "f": row.f))
+    path_for_join :: function((struct("f": integer, "t": integer)) -> struct("key": integer, "t": integer))
+    path_for_join := function((row) -> struct("key": row.f, "t": row.t))
+
+    fp := fixpoint(tc_body(edge: edge_src, path: empty()))
+    out := fp.path
+  expected:
+    fp.path:
+      struct:
+        f: integer
+        t: integer
