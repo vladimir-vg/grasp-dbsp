@@ -16,7 +16,6 @@
     {distinct} |
     {aggregate, binary()} |
     {integrate} |
-    {integrate, map()} |
     {differentiate} |
     {delay} |
     {antijoin, [binary()], [binary()]} |

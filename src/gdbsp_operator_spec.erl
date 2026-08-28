@@ -129,6 +129,8 @@ is_linear({neg})          -> true;
 is_linear({plus})         -> true;
 is_linear({map_index, _}) -> true;
 is_linear({delay})        -> true;
+is_linear({rec, _, _})       -> true;
+is_linear({rec_output, _, _}) -> true;
 is_linear({antijoin, _, _})   -> false;
 is_linear(_)              -> false.
 

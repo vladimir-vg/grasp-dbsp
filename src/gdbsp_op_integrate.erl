@@ -6,7 +6,7 @@
 %%% emits all buffered deltas with the barrier tag.
 %%%
 %%% State: #{state => #{Row => Weight}, buffer => [{W,Row}],
-%%%          downstream_label => term(), scc_internal => boolean()}
+%%%          downstream_label => term()}
 %%% @end
 %%%-------------------------------------------------------------------
 -module(gdbsp_op_integrate).

@@ -325,7 +325,6 @@ circuit_node_label({order, Spec}, _Schemas, _Id) ->
     Keys = [binary_to_list(F) || [F, _] <- By],
     ["order by [", lists:join(", ", Keys), "]"];
 circuit_node_label({integrate}, _Schemas, _Id) -> "I";
-circuit_node_label({integrate, _}, _Schemas, _Id) -> "I(scc)";
 circuit_node_label({differentiate}, _Schemas, _Id) -> "D";
 circuit_node_label({delay}, _Schemas, _Id) -> "delay";
 circuit_node_label({antijoin, Keys, Vals}, _Schemas, _Id) ->
@@ -353,7 +352,6 @@ circuit_node_color({distinct}) -> "lightsteelblue";
 circuit_node_color({aggregate, _}) -> "plum";
 circuit_node_color({order, _}) -> "plum";
 circuit_node_color({integrate}) -> "lightblue";
-circuit_node_color({integrate, _}) -> "lightblue";
 circuit_node_color({differentiate}) -> "lightsalmon";
 circuit_node_color({delay}) -> "lightgray";
 circuit_node_color({antijoin, _, _}) -> "lightsteelblue";

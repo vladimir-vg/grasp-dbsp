@@ -200,21 +200,34 @@ error: `missing_function`.
 
 ## 6. Stage 5 — Incrementalization
 
-DBSP circuits operate on **deltas** (insertions and retractions), but
-certain operators require the full accumulated state (**Z-sets**) as input.
-Incrementalization inserts `integrate` / `differentiate` pairs to convert
-between the two modes.
+Every operator is already **delta-native**: it receives `{delta, Meta,
+Deltas}` and emits deltas, maintaining its own internal state. The runtime
+never moves a full Z-set across a process boundary. Incrementalization wraps
+non-linear operators in `integrate` / `differentiate` pairs to expose the
+incremental structure; the wrappers are near-identity at runtime and are kept
+for performance (e.g. future checkpointing and state-management seams), not for
+correctness.
+
+Two orthogonal properties describe an operator, and they must not be conflated:
+
+- **Linear vs non-linear** (compile-time) — whether the operator distributes
+  over Z-set addition. Non-linear operators need `I ∘ Q ∘ D` wrapping.
+- **Blocking vs pass-through** (runtime) — whether the operator buffers until a
+  barrier before emitting (`aggregate`, `order`, `join`, `distinct`, `plus`,
+  `integrate`, `differentiate`, `delay`) or emits each delta immediately
+  (`map`, `filter`, `neg`, `map_index`, `flat_map`, `rec`).
 
 ### 6.1 Operator Classification
 
 | Operator | Linear | Needs Full Input | Produces Full Output |
 |----------|--------|-----------------|---------------------|
-| `source` | — (entry point) | — | — (delta mode by default) |
+| `source` | — (entry point) | — | — (delta) |
 | `map`, `filter`, `flat_map` | yes | no | no |
 | `plus`, `neg` | yes | no | no |
 | `delay` | yes | no | no |
 | `project` | yes | no | no |
 | `map_index` | yes | no | no |
+| `rec`, `rec_output` | yes | no | no |
 | `join` | no | yes | yes |
 | `distinct` | no | yes | yes |
 | `aggregate` | no | yes | yes |
@@ -223,11 +236,18 @@ between the two modes.
 | `integrate` | no | no | yes |
 | `differentiate` | no | no | no |
 
+`rec` / `rec_output` are linear pass-throughs: they coordinate the fixpoint
+iterations and forward deltas, never accumulating a full Z-set.
+
+This classification lives in `gdbsp_operator_spec:is_linear/1`,
+`needs_full_input/1`, and `produces_full_output/1`; the incrementalization pass
+consults it as the single source of truth.
+
 ### 6.2 I/D Insertion Rules
 
 For each non-linear operator:
 
-1. **Integrate** is inserted on each input — converts incoming deltas to Z-sets
+1. **Integrate** is inserted on each delta input — converts incoming deltas to Z-sets
 2. **Differentiate** is inserted on the output — converts the result Z-set back to deltas
 
 ```
@@ -248,11 +268,16 @@ integrate → differentiate   →   (removed)
 differentiate → integrate   →   (removed)
 ```
 
-### 6.4 Output Wrapping
+### 6.4 Output Wrapping and Mixed-mode Reconciliation
 
 Output nodes (designated externally by the runtime) are automatically
-wrapped with `differentiate` if their upstream is in full mode. This
-ensures that externally observable output is always in delta mode.
+wrapped with `differentiate` if their upstream is full, so externally
+observable output is always delta.
+
+A linear multi-input node whose inputs disagree on the integrate role (one
+full, one delta) is reconciled by inserting a `differentiate` before each full
+input, so the node receives a consistent delta stream. The pass never fails on
+a mode mismatch.
 
 ---
 

@@ -13,7 +13,6 @@ op_atom({neg})             -> neg;
 op_atom({plus})            -> plus;
 op_atom({map_index, _})    -> map_index;
 op_atom({integrate})       -> integrate;
-op_atom({integrate, _})    -> integrate;
 op_atom({distinct})        -> distinct;
 op_atom({join, _})         -> join;
 op_atom({differentiate})   -> differentiate;
@@ -36,7 +35,6 @@ op_args({map_index, Spec}, _Inputs) when is_map(Spec) ->
 op_args({map_index, Fun}, _Inputs) when is_function(Fun) ->
     #{'fun' => Fun};
 op_args({integrate}, _Inputs)         -> #{};
-op_args({integrate, Args}, _Inputs)   -> Args;
 op_args({distinct}, _Inputs)          -> #{};
 op_args({join, Spec}, _Inputs) when is_map(Spec) ->
     Spec#{lhs_label => left, rhs_label => right, downstream => undefined};

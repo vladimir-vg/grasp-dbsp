@@ -23,7 +23,6 @@ run(G = #circuit_graph{nodes = Nodes, next_id = NextId}) ->
             OpTag = element(1, Op),
             case OpTag of
                 integrate -> Acc#{_Id => full};
-                rec -> Acc#{_Id => full};
                 _ -> Acc
             end
         end, #{}, Nodes),
@@ -138,13 +137,39 @@ topo_loop(Queue, InDegree, Nodes, ConsumerIndex, ExcludeDelayEdges, Acc) ->
 get_modes(Inputs, ModeMap) ->
     [maps:get(Id, ModeMap, delta) || Id <- Inputs].
 
-merge_modes([]) -> delta;
-merge_modes([M]) -> M;
-merge_modes([M | Rest]) ->
-    case lists:all(fun(X) -> X =:= M end, Rest) of
-        true -> M;
-        false -> error({mode_mismatch, [M | Rest]})
+%% Reconcile the input modes of a linear (delta pass-through) node. When all
+%% inputs already agree, the node simply inherits that mode. When they are
+%% mixed, insert a differentiate before each full-mode input so every input
+%% carries delta and the node emits delta.
+reconcile_linear(Id, Node, InputModes, AccNodes, AccNextId, ModeMap) ->
+    case lists:usort(InputModes) of
+        [M] ->
+            {AccNodes, AccNextId, maps:put(Id, M, ModeMap)};
+        _ ->
+            {NewInputs, Nodes1, NextId1, ModeMap1} =
+                reconcile_delta(Node#circuit_node.inputs, InputModes, Id,
+                                AccNodes, AccNextId, ModeMap),
+            Nodes2 = maps:put(Id, Node#circuit_node{inputs = NewInputs}, Nodes1),
+            {Nodes2, NextId1, maps:put(Id, delta, ModeMap1)}
     end.
+
+reconcile_delta([], [], _ParentId, AccNodes, AccNextId, ModeMap) ->
+    {[], AccNodes, AccNextId, ModeMap};
+reconcile_delta([InId | RestIns], [full | RestModes], ParentId,
+                AccNodes, AccNextId, ModeMap) ->
+    {RestNewIns, Nodes1, NextId1, ModeMap1} =
+        reconcile_delta(RestIns, RestModes, ParentId, AccNodes, AccNextId, ModeMap),
+    DiffId = NextId1,
+    DiffNode = #circuit_node{id = DiffId, op = {differentiate},
+                             inputs = [InId], meta = #{serves => ParentId}},
+    Nodes2 = maps:put(DiffId, DiffNode, Nodes1),
+    ModeMap2 = maps:put(DiffId, delta, ModeMap1),
+    {[DiffId | RestNewIns], Nodes2, NextId1 + 1, ModeMap2};
+reconcile_delta([InId | RestIns], [_M | RestModes], ParentId,
+                AccNodes, AccNextId, ModeMap) ->
+    {RestNewIns, Nodes1, NextId1, ModeMap1} =
+        reconcile_delta(RestIns, RestModes, ParentId, AccNodes, AccNextId, ModeMap),
+    {[InId | RestNewIns], Nodes1, NextId1, ModeMap1}.
 
 %%====================================================================
 %% Per-node processing
@@ -175,29 +200,19 @@ process(#circuit_node{id = Id, op = {output, _}} = Node, InputModes,
 
 process(#circuit_node{id = Id, op = Op}, _InputModes,
         AccNodes, AccNextId, ModeMap)
-  when element(1, Op) =:= integrate; element(1, Op) =:= rec ->
+  when element(1, Op) =:= integrate ->
     {AccNodes, AccNextId, maps:put(Id, full, ModeMap)};
 
 process(#circuit_node{id = Id, op = {differentiate}}, _InputModes,
         AccNodes, AccNextId, ModeMap) ->
     {AccNodes, AccNextId, maps:put(Id, delta, ModeMap)};
 
-process(#circuit_node{id = Id, op = Op}, InputModes,
-         AccNodes, AccNextId, ModeMap)
-  when element(1, Op) =:= map; element(1, Op) =:= filter;
-       element(1, Op) =:= flat_map; element(1, Op) =:= neg;
-       element(1, Op) =:= plus; element(1, Op) =:= map_index;
-       element(1, Op) =:= delay;
-       element(1, Op) =:= rec_output ->
-    OutputMode = merge_modes(InputModes),
-    {AccNodes, AccNextId, maps:put(Id, OutputMode, ModeMap)};
-
 process(#circuit_node{id = Id, op = Op} = Node, InputModes,
-        AccNodes, AccNextId, ModeMap)
-  when element(1, Op) =:= join; element(1, Op) =:= distinct;
-       element(1, Op) =:= aggregate; element(1, Op) =:= order;
-       element(1, Op) =:= antijoin ->
-    wrap_nonlinear(Id, Node, InputModes, AccNodes, AccNextId, ModeMap).
+        AccNodes, AccNextId, ModeMap) ->
+    case gdbsp_operator_spec:is_linear(Op) of
+        true  -> reconcile_linear(Id, Node, InputModes, AccNodes, AccNextId, ModeMap);
+        false -> wrap_nonlinear(Id, Node, InputModes, AccNodes, AccNextId, ModeMap)
+    end.
 
 %%====================================================================
 %% Non-linear wrapping
@@ -214,8 +229,8 @@ wrap_nonlinear(Id, #circuit_node{inputs = Inputs} = Node, InputModes,
     DiffId = NextId1,
 
     Nodes3 = maps:map(
-        fun(_CId, CNode = #circuit_node{inputs = CIns, meta = CMeta}) ->
-            case not maps:is_key(scc_id, CMeta) andalso lists:member(Id, CIns) of
+        fun(_CId, CNode = #circuit_node{inputs = CIns}) ->
+            case lists:member(Id, CIns) of
                 true ->
                     NewCIns = [case I of Id -> DiffId; _ -> I end || I <- CIns],
                     CNode#circuit_node{inputs = NewCIns};
@@ -242,15 +257,7 @@ insert_integrates([InputId | RestInputs], [Mode | RestModes], ParentId,
     case Mode of
         delta ->
             IntId = NextId1,
-            SccInternal = case maps:find(InputId, AccNodes) of
-                {ok, #circuit_node{meta = #{scc_id := _}}} -> true;
-                _ -> false
-            end,
-            IntOp = case SccInternal of
-                true -> {integrate, #{scc_internal => true}};
-                false -> {integrate}
-            end,
-            IntNode = #circuit_node{id = IntId, op = IntOp,
+            IntNode = #circuit_node{id = IntId, op = {integrate},
                                     inputs = [InputId],
                                     meta = #{serves => ParentId}},
             Nodes2 = maps:put(IntId, IntNode, Nodes1),
