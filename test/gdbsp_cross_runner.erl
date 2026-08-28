@@ -531,7 +531,9 @@ string_to_numeric(N) when is_number(N) ->
 
 parse_date_string(Bin) when is_binary(Bin) ->
     case binary:split(Bin, <<"-">>, [global]) of
-        [Y, M, D] -> {b2i(Y), b2i(M), b2i(D)};
+        [Y, M, D] ->
+            calendar:date_to_gregorian_days({b2i(Y), b2i(M), b2i(D)})
+                - calendar:date_to_gregorian_days({2000, 1, 1});
         _ -> Bin
     end.
 

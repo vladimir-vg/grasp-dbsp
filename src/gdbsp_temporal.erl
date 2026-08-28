@@ -1,7 +1,10 @@
 %%%-------------------------------------------------------------------
 %%% @doc Runtime typed-value module — temporal (interval) operations.
 %%%
-%%% Interval values are `{Months, Days, Microseconds}` triples.
+%%% Interval values are `{Months, Days, Microseconds}` triples,
+%%% with `Months` and `Days` stored as `i32` and `Microseconds` as `i64`
+%%% (matching PostgreSQL `interval`; Erlang integers are arbitrary
+%%% precision, so the width is a spec-level note).
 %%% Arithmetic is component-wise with no cross-unit normalization
 %%% (see docs/plans/function-semantics-robustness-plan.md §9).
 %%%

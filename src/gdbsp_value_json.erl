@@ -200,8 +200,8 @@ encode_value(bits, Bin) when is_binary(Bin) ->
 encode_value({bits, _}, Bin) when is_binary(Bin) ->
     #{<<"encoding">> => <<"base64">>, <<"value">> => base64:encode(Bin)};
 
-encode_value(date, {Y, M, D}) ->
-    #{<<"year">> => i2b(Y), <<"month">> => i2b(M), <<"day">> => i2b(D)};
+encode_value(date, Days) when is_integer(Days) ->
+    #{<<"days_since_2000">> => i2b(Days)};
 encode_value(time, {H, Mi, S, Us}) ->
     #{<<"hour">> => i2b(H), <<"minute">> => i2b(Mi),
       <<"second">> => i2b(S), <<"microsecond">> => i2b(Us)};
@@ -305,9 +305,8 @@ decode_value(bits, #{<<"encoding">> := <<"base64">>, <<"value">> := V}) ->
 decode_value({bits, _}, #{<<"encoding">> := <<"base64">>, <<"value">> := V}) ->
     decode_base64(V);
 
-decode_value(date, #{<<"year">> := Y, <<"month">> := M, <<"day">> := D})
-  when is_binary(Y), is_binary(M), is_binary(D) ->
-    {ok, {b2i(Y), b2i(M), b2i(D)}};
+decode_value(date, #{<<"days_since_2000">> := Days}) when is_binary(Days) ->
+    {ok, b2i(Days)};
 decode_value(time, #{<<"hour">> := H, <<"minute">> := Mi,
                      <<"second">> := S, <<"microsecond">> := Us})
   when is_binary(H), is_binary(Mi), is_binary(S), is_binary(Us) ->

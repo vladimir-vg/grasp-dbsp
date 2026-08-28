@@ -5,11 +5,11 @@
 
   input:
     - data:
-        - [1, {id: "1", d: {year: "2026", month: "7", day: "28"}}]
+        - [1, {id: "1", d: {days_since_2000: "9705"}}]
 
   expected:
     - out:
-        - [1, {id: "1", d: {year: "2026", month: "7", day: "28"}}]
+        - [1, {id: "1", d: {days_since_2000: "9705"}}]
 
 - source: |
     src := source("data")

@@ -74,7 +74,7 @@ scalar_roundtrips(_Config) ->
     ok = value_rt(string, <<"hello">>),
     ok = value_rt({string, <<"UTF-8">>}, <<"hello">>),
     ok = value_rt(string_with_encoding, {<<"CP1251">>, <<"hi">>}),
-    ok = value_rt(date, {2020, 1, 2}),
+    ok = value_rt(date, 7306),
     ok = value_rt(time, {12, 30, 0, 0}),
     ok = value_rt(timestamp, 1600000000000000),
     ok = value_rt(timestamp_with_timezone, {1600000000000000, 3600, <<"Europe/Berlin">>}),
