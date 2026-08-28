@@ -865,16 +865,7 @@ get_type(G, NodeId) ->
 %%====================================================================
 
 get_input_row_type([Id | _], G) ->
-    %% Traverse back to find the typespec from the chain of nodes.
-    %% For now, return a simple type based on schema.
-    %% In a full implementation, this would carry types through the graph.
-    Cols = get_schema(G, Id),
-    case Cols of
-         [] -> undefined;
-         _ ->
-             FieldMap = maps:from_list([{C, dynamic} || C <- Cols]),
-             {struct, FieldMap, exact}
-    end.
+    get_type(G, Id).
 
 build_merged_fields(Shared, LeftVal, RightVal, LType, RType) ->
     KeyFields = get_fields(LType, Shared),

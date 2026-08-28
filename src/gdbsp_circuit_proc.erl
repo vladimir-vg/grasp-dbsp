@@ -90,7 +90,7 @@ build_circuit(Plan, Inputs, Outputs, Gen, OpStates, DoKickoff) ->
 
     wire_rec_coordinators(RecPids, CoordPids),
 
-    {UpMaps, DownMaps} = build_wiring_maps(Tuples, ResolveStd),
+    {UpMaps, DownMaps} = build_wiring_maps(Tuples, ResolveWithRO),
 
     wire_all(Tuples, OpRefs, OpPids, Inputs, Outputs, UpMaps, DownMaps),
     validate_wiring(OpPids, RecPids, Inputs, Outputs),
@@ -235,7 +235,6 @@ synthetic_source_done(RecPid) ->
 
 wire_output_consumers(RecPids, ROToRec, Tuples, Resolve) ->
     RecRefToRecPid = maps:from_list([{RecRef, RecPid} || {RecRef, RecPid} <- maps:to_list(RecPids)]),
-    OutputReachability = build_output_reachability(Tuples, Resolve),
     RecConsumerPids = build_rec_consumers(Tuples, ROToRec, RecRefToRecPid),
     maps:foreach(
         fun({rec, _Name, _SccId, _} = RecRef, RecPid) ->
@@ -244,15 +243,14 @@ wire_output_consumers(RecPids, ROToRec, Tuples, Resolve) ->
                                               element(1, RR) =:= output,
                                               maps:get(SR, RecRefToRecPid, undefined) =:= RecPid],
             RecOutputPairs = [{RO, R} || {RO, R} <- maps:to_list(ROToRec), R =:= RecRef],
-            OutputPids = lists:usort(
-                [maps:get(RO, OutputReachability, []) || {RO, _} <- RecOutputPairs]),
-            IndirectOutputs = lists:flatten(OutputPids),
-            OutputConsumers = case DirectOutputs ++ IndirectOutputs of
-                [] -> [];
-                Found -> lists:usort(Found)
-            end,
+            Immediate = lists:usort(lists:flatmap(
+                fun({RO, _}) ->
+                    [Resolve(RR) || {SR, _SL, RR, _RL} <- Tuples, SR =:= RO,
+                                    element(1, RR) =:= op orelse element(1, RR) =:= output]
+                end, RecOutputPairs)),
+            PidConsumers = [P || P <- DirectOutputs ++ Immediate, is_pid(P)],
             RecConsumersForMe = maps:get(RecRef, RecConsumerPids, []),
-            AllConsumers = lists:usort(OutputConsumers ++ RecConsumersForMe),
+            AllConsumers = lists:usort(PidConsumers ++ RecConsumersForMe),
             gen_server:call(RecPid, {set_consumers, AllConsumers})
         end, RecPids).
 
@@ -277,43 +275,17 @@ build_rec_consumers(Tuples, ROToRec, RecRefToRecPid) ->
             end
         end, #{}, Tuples).
 
-build_output_reachability(Tuples, Resolve) ->
-    Forward = lists:foldl(
-        fun({SR, _, RR, _}, Acc) ->
-            maps:update_with(SR, fun(L) -> [RR | L] end, [RR], Acc)
-        end, #{}, Tuples),
-    RefsOfInterest = [SR || {SR, _, _, _} <- Tuples, element(1, SR) =:= rec_output],
-    maps:from_list(
-        lists:map(
-            fun(RORef) ->
-                {RORef, dfs_output_pids(RORef, Forward, Resolve, sets:new([{version, 2}]))}
-            end, lists:usort(RefsOfInterest))).
-
-dfs_output_pids(Ref, Forward, Resolve, Visited) ->
-    case sets:is_element(Ref, Visited) of
-        true -> [];
-        false ->
-            Visited2 = sets:add_element(Ref, Visited),
-            case element(1, Ref) of
-                output ->
-                    Pid = Resolve(Ref),
-                    case is_pid(Pid) of true -> [Pid]; false -> [] end;
-                rec ->
-                    [];
-                _ ->
-                    Children = maps:get(Ref, Forward, []),
-                    lists:flatmap(
-                        fun(Child) ->
-                            dfs_output_pids(Child, Forward, Resolve, Visited2)
-                        end, Children)
-            end
-    end.
-
 %%====================================================================
 %% Wiring maps
 %%====================================================================
 
 build_wiring_maps(Tuples, Resolve) ->
+    %% rec_output is a virtual node (it resolves to its parent Rec pid), so an
+    %% edge *into* rec_output is not a real operator edge: the body output
+    %% already reaches the Rec through its body_output feedback edge. Skipping
+    %% these avoids double-wiring the Rec into a body operator's downstream.
+    RealTuples = [T || T = {_SR, _SL, RR, _RL} <- Tuples,
+                       element(1, RR) =/= rec_output],
     UpMaps = lists:foldl(
         fun({SR, _SL, RR, RL}, Acc) ->
             RcvrPid = Resolve(RR),
@@ -329,7 +301,7 @@ build_wiring_maps(Tuples, Resolve) ->
                     end;
                 false -> Acc
             end
-        end, #{}, Tuples),
+        end, #{}, RealTuples),
     DownMaps = lists:foldl(
         fun({SR, SL, RR, _RL}, Acc) ->
             RcvrPid = Resolve(RR),
@@ -345,7 +317,7 @@ build_wiring_maps(Tuples, Resolve) ->
                     end;
                 false -> Acc
             end
-        end, #{}, Tuples),
+        end, #{}, RealTuples),
     {UpMaps, DownMaps}.
 
 resolve_pid({op, _} = R, RefToPid, _ROToRec, _Inputs, _Outputs) ->
