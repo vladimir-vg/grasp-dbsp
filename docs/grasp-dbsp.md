@@ -7,6 +7,7 @@ Designed as a compilation target — human-readable, LLM-friendly, with external
 
 - [syntax.md](syntax.md) — complete lexical and syntactic specification
 - [type-system.md](type-system.md) — complete type system: scalars, compounds, wrappers, assignability, temporal semantics
+- [sql-type-mapping.md](sql-type-mapping.md) — PostgreSQL and SQLite storage type mapping
 - [type-inference.md](type-inference.md) — how types flow through the circuit
 - [compilation.md](compilation.md) — how `.gdbsp` source compiles to a deployable circuit
 - [runtime-model.md](runtime-model.md) — Z-set model, epochs, deltas, barriers, operator state

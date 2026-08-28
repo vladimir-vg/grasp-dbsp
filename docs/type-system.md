@@ -12,6 +12,9 @@ Every node in a `.gdbsp` circuit carries a type annotation via
 types in their signatures. This document defines every type in the
 system.
 
+For the PostgreSQL/SQLite storage type mapping, see
+[sql-type-mapping.md](sql-type-mapping.md).
+
 ### 1.1 Scalar Types
 
 | Type | Meaning |
@@ -35,7 +38,8 @@ system.
 | `dynamic` | Any value, type-tagged at runtime (see §1.4) |
 | `absent` | **Internal only.** Type for the `ABSENT` literal — represents absence of a value. Assignable only to `optional(T)`. Erased after typechecking. Not expressible in `.gdbsp` source syntax. |
 
-All temporal types use microsecond precision internally and follow
+All temporal types except `date` use microsecond precision internally;
+`date` uses day precision (`i32` days since 2000-01-01). All follow
 proleptic Gregorian calendar conventions.
 
 ### 1.2 Wrapper Types
@@ -133,15 +137,15 @@ Enum values support equality (`=`) and inequality (`!=`) only. No ordering. Iden
 
 ### 3.1 Internal Representation
 
-All temporal types use microsecond precision internally with `i64` storage:
+Temporal types use `i64` storage except `date`, which uses `i32` day precision:
 
 | Type | Internal repr | Range |
 |------|--------------|-------|
-| `date` | `{year, month, day}` | year: any `i64`, month: 1–12, day: 1–31 |
+| `date` | days since 2000-01-01 | `i32`; 4713 BC .. 5874897 AD (PostgreSQL `date` range) |
 | `time` | `{hour, minute, second, microsecond}` | hour: 0–23, minute: 0–59, second: 0–59, microsecond: 0–999999 |
 | `timestamp` | microseconds since 2000-01-01 00:00:00 UTC | any `i64` |
 | `timestamp_with_timezone` | `{epoch_microseconds, offset_seconds, zone?}` | `epoch_microseconds`: any `i64`, `offset_seconds`: -43200..50400, `zone`: optional IANA name |
-| `interval` | `{months, days, microseconds}` | each component: any `i64` |
+| `interval` | `{months, days, microseconds}` | months: `i32`, days: `i32`, microseconds: `i64` |
 
 ### 3.2 Special Values
 
@@ -150,12 +154,15 @@ All temporal types use microsecond precision internally with `i64` storage:
 - `-infinity` — earlier than all finite values
 - `epoch` — 1970-01-01 00:00:00 UTC
 
+For `date`, `epoch` is day −10957 (1970-01-01); `±infinity` are the `i32`
+endpoints.
+
 ### 3.3 Construction
 
 Positions are **not inferred** — all temporal constructors use named parameters:
 
 ```
-date(year: i64, month: i64, day: i64)           → date
+date(year: i64, month: i64, day: i64)           → date (computed as days since 2000-01-01)
 time(hour: i64, minute: i64, second: i64,
      microsecond: i64)                            → time
 timestamp(microseconds_since_2000: i64)           → timestamp
@@ -165,7 +172,7 @@ timestamp_with_timezone(microseconds_since_2000: i64,
                         zone: optional(string))   → timestamp_with_timezone
 timestamp_with_timezone(date: date, time: time,
                         zone: optional(string))   → timestamp_with_timezone
-interval(months: i64, days: i64,
+interval(months: i32, days: i32,
          microseconds: i64)                       → interval
 ```
 

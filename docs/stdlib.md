@@ -38,7 +38,7 @@ encoded value (see §2 of this document).
 {"type": "f64",     "value": "inf"}
 {"type": "numeric", "value": "123.45"}
 {"type": "timestamp", "value": {"epoch_microseconds": "1718640000000000"}}
-{"type": "date",    "value": {"year": "2026", "month": "6", "day": "18"}}
+{"type": "date",    "value": {"days_since_2000": "9665"}}
 {"type": "bytes",   "value": {"encoding": "base64", "value": "AQID"}}
 {"type": "boolean", "value": "true"}
 ```
@@ -255,7 +255,7 @@ within temporal values are encoded as strings.
 | Type | Wire |
 |------|------|
 | `timestamp` | `{"epoch_microseconds": "1718640000000000"}` |
-| `date` | `{"year": "2026", "month": "6", "day": "18"}` |
+| `date` | `{"days_since_2000": "9665"}` |
 | `time` | `{"hour": "14", "minute": "30", "second": "0", "microsecond": "500000"}` |
 | `timestamp_with_timezone` (with zone) | `{"epoch_microseconds": "100", "offset_seconds": "3600", "zone": "Europe/Berlin"}` |
 | `timestamp_with_timezone` (no zone) | `{"epoch_microseconds": "100", "offset_seconds": "0"}` |

@@ -126,7 +126,7 @@ a two-element array `[weight, row]`:
 `weight` is a signed integer (`+1` inserts, `-1` retracts; see
 [runtime-model.md](runtime-model.md) §1). `row` is a JSON object whose values
 use the typed value encoding of [stdlib.md](stdlib.md) §2 (integers as
-strings, dates as objects, `bytes` as base64, and so on).
+strings, `date` as a day count, `bytes` as base64, and so on).
 
 Input rows are decoded against the source node's `stream(...)` type; output
 rows are encoded from the output node's type.
