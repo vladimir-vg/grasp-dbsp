@@ -23,6 +23,7 @@ op_atom({aggregate, _})    -> aggregate;
 op_atom({order, _})        -> order;
 op_atom({rec, _, _})       -> rec;
 op_atom({rec_output, _, _}) -> rec_output;
+op_atom({empty, _})         -> empty;
 op_atom(Op) when is_atom(Op) -> Op.
 
 -spec op_args(term(), [term()]) -> map().
@@ -54,6 +55,7 @@ op_args({rec, Name, SccId}, _Inputs) ->
     #{name => Name, scc_id => SccId};
 op_args({rec_output, Name, SccId}, _Inputs) ->
     #{name => Name, scc_id => SccId};
+op_args({empty, _}, _Inputs)             -> #{};
 op_args(_, _Inputs)                   -> #{}.
 
 -spec input_labels([term()]) -> [atom() | {label, pos_integer()}].
@@ -85,6 +87,7 @@ labels_for({rec, _, _}, Inputs, Meta) ->
         _ -> lists:duplicate(N, source)
     end;
 labels_for({rec_output, _, _}, _Inputs, _Meta) -> [];
+labels_for({empty, _}, _Inputs, _Meta) -> [];
 labels_for(_Op, Inputs, _Meta) -> input_labels(Inputs).
 
 -spec pad_labels([term()], [term()]) -> [term()].

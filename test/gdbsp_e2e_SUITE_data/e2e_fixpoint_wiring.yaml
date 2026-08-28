@@ -8,10 +8,8 @@
 
     src_a := source("ints")
     src_a :: stream(struct("v": i64))
-    src_b := source("unused")
-    src_b :: stream(struct("v": i64))
 
-    fp := fixpoint(unused_base(base: src_b, result: src_a))
+    fp := fixpoint(unused_base(base: empty(), result: src_a))
     out := fp.result
 
   ensure_matches_incremental: true
@@ -19,8 +17,6 @@
   input:
     - ints:
         - [1, {v: "10"}]
-      unused:
-        - [1, {v: "99"}]
 
   expected:
     - out:

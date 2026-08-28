@@ -34,7 +34,8 @@
 -record(lowered_graph, {
     nodes     = #{} :: #{lnode_id() => #lnode{}},
     tag_map   = #{} :: #{lnode_tag() => lnode_id()},
-    fixpoints = #{} :: #{fixpoint_hash() => fixpoint_info()}
+    fixpoints = #{} :: #{fixpoint_hash() => fixpoint_info()},
+    uid       = 0  :: non_neg_integer()
 }).
 
 -endif.

@@ -1,0 +1,30 @@
+- description: "plus with empty unifies to the concrete operand type"
+  source: |
+    src := source("data")
+    src :: stream(struct("v": i64))
+    out := plus(src, empty())
+  expected:
+    out:
+      struct:
+        v: i64
+
+- description: "plus(empty, src) unifies to the concrete operand type"
+  source: |
+    src := source("data")
+    src :: stream(struct("v": i64))
+    out := plus(empty(), src)
+  expected:
+    out:
+      struct:
+        v: i64
+
+- description: "join with empty right unifies to the left struct"
+  source: |
+    src := source("data")
+    src :: stream(struct("k": i64, "v": i64))
+    out := join(src, empty(), on: ["k"])
+  expected:
+    out:
+      struct:
+        k: i64
+        v: i64

@@ -51,6 +51,9 @@ merge_join_type(LType, RType, OnFields) ->
 struct_fields({struct, Fields, _}) -> Fields;
 struct_fields(_) -> #{}.
 
+is_type_var({type_var, _}) -> true;
+is_type_var(_) -> false.
+
 %%====================================================================
 %% Aggregate helpers
 %%====================================================================
@@ -270,9 +273,13 @@ infer_lnode_type(fixpoint_input, _Args, InputIds, _Tags, TypeAcc, _TSMap, _FnReg
 infer_lnode_type(fixpoint_output, _Args, InputIds, _Tags, TypeAcc, _TSMap, _FnReg, _AggReg, _FnParams, _StdlibMap) ->
     lowered_input_type(InputIds, TypeAcc);
 
+infer_lnode_type(empty, _Args, _InputIds, _Tags, _TypeAcc, _TSMap, _FnReg, _AggReg, _FnParams, _StdlibMap) ->
+    {type_var, <<"Empty">>};
+
 infer_lnode_type(plus, _Args, InputIds, _Tags, TypeAcc, _TSMap, _FnReg, _AggReg, _FnParams, _StdlibMap) ->
     Types = [maps:get(Id, TypeAcc, dynamic) || Id <- InputIds],
-    case Types of
+    Concrete = [T || T <- Types, not is_type_var(T)],
+    case Concrete of
         [First | Rest] ->
             FirstText = gdbsp_type:canonical_text(First),
             case lists:all(
@@ -283,7 +290,11 @@ infer_lnode_type(plus, _Args, InputIds, _Tags, TypeAcc, _TSMap, _FnReg, _AggReg,
                     error(#{<<"class">> => <<"type_conflict">>,
                             <<"message">> => <<"plus input type mismatch">>})
             end;
-        [] -> dynamic
+        [] ->
+            case Types of
+                [{type_var, _} = V | _] -> V;
+                _ -> dynamic
+            end
     end;
 
 infer_lnode_type(join, Args, InputIds, _Tags, TypeAcc, _TSMap, _FnReg, _AggReg, _FnParams, _StdlibMap) ->
@@ -423,6 +434,12 @@ is_boolean_subset(_) -> false.
 %%--------------------------------------------------------------------
 
 check_join_key_types(OnFields, LType, RType) ->
+    case is_type_var(LType) orelse is_type_var(RType) of
+        true -> ok;
+        false -> check_join_key_types_strict(OnFields, LType, RType)
+    end.
+
+check_join_key_types_strict(OnFields, LType, RType) ->
     LFields = struct_fields(LType),
     RFields = struct_fields(RType),
     lists:foreach(

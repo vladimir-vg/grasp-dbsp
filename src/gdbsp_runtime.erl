@@ -16,7 +16,8 @@
 
 %% @doc Instantiate a running circuit from a gdbsp_loader:compile/3 result.
 -spec start(map()) -> {ok, runtime()} | {error, term()}.
-start(#{plan := Plan, source_types := SourceTypes, output_types := OutputTypes}) ->
+start(#{plan := Plan, source_types := SourceTypes, output_types := OutputTypes,
+        empty_types := EmptyTypes}) ->
     InputNodes = maps:map(
         fun(_Table, _Src) ->
             {ok, Pid} = gdbsp_input_node:start_link(),
@@ -27,11 +28,16 @@ start(#{plan := Plan, source_types := SourceTypes, output_types := OutputTypes})
             {ok, Pid} = gdbsp_output_sink:start_link(Type),
             Pid
         end, OutputTypes),
+    Empties = maps:map(
+        fun(_Name, _Type) ->
+            {ok, Pid} = gdbsp_op_empty:start_link(),
+            Pid
+        end, EmptyTypes),
     {ok, Circuit} = gdbsp_circuit_proc:start_link(),
-    ok = gen_server:call(Circuit, {circuit_update, Plan, InputNodes, Sinks}),
-    {ok, Ingress} = gdbsp_ingress:start_link(InputNodes),
+    ok = gen_server:call(Circuit, {circuit_update, Plan, InputNodes, Sinks, Empties}),
+    {ok, Ingress} = gdbsp_ingress:start_link(InputNodes, Empties),
     {ok, #{circuit => Circuit, input_nodes => InputNodes, sinks => Sinks,
-           ingress => Ingress, source_types => SourceTypes,
+           empties => Empties, ingress => Ingress, source_types => SourceTypes,
            output_types => OutputTypes}}.
 
 -spec stop(runtime()) -> ok.
@@ -41,6 +47,8 @@ stop(Rt) ->
                  maps:get(sinks, Rt, #{})),
     maps:foreach(fun(_, P) -> catch gdbsp_input_node:stop(P) end,
                  maps:get(input_nodes, Rt, #{})),
+    maps:foreach(fun(_, P) -> catch gdbsp_op_empty:stop(P) end,
+                 maps:get(empties, Rt, #{})),
     ok.
 
 -spec feed(runtime(), binary(), [{integer(), term()}]) -> ok.

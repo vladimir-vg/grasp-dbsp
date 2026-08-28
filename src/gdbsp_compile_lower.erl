@@ -26,7 +26,7 @@
                            <<"delay">>, <<"distinct">>, <<"plus">>, <<"neg">>,
                            <<"map">>, <<"filter">>, <<"flat_map">>,
                            <<"project">>, <<"join">>, <<"aggregate">>,
-                           <<"order">>, <<"antijoin">>]).
+                           <<"order">>, <<"antijoin">>, <<"empty">>]).
 
 %%====================================================================
 %% Public API
@@ -457,6 +457,8 @@ create_fixpoint_inputs(Params, KwMap, FpHmac, LG, Line) ->
                     ExtName = <<Var/binary, ".", Field/binary>>,
                     resolve_fixpoint_input(ExtName, KwBin, FpHmac, Internal,
                                            LGAcc, AccById, Line);
+                {ok, {expr, {call, <<"empty">>, []}}} ->
+                    resolve_empty_input(KwBin, FpHmac, Internal, LGAcc, AccById);
                 _ ->
                     {LGAcc, AccById}
             end
@@ -483,6 +485,18 @@ resolve_fixpoint_input(ExtName, KwBin, FpHmac, Internal, LGAcc, AccById, Line) -
                     "unresolved fixpoint argument ~s for ~s",
                     [ExtName, KwBin]))
     end.
+
+-spec resolve_empty_input(binary(), fixpoint_hash(), binary(),
+                           #lowered_graph{}, #{binary() => lnode_id()}) ->
+    {#lowered_graph{}, #{binary() => lnode_id()}}.
+resolve_empty_input(KwBin, FpHmac, Internal, LGAcc, AccById) ->
+    {LG0, EmptyId} = add_node(empty, [], [], [], undefined, LGAcc),
+    FpInName = fixpoint_input_name(FpHmac, KwBin),
+    {LG2, InpId} = add_node(fixpoint_input, [EmptyId],
+                            [{string, KwBin}, {fixpoint, FpHmac}],
+                            [], undefined, LG0),
+    LG3 = register_internal_name(LG2, FpInName, InpId),
+    {LG3, AccById#{Internal => InpId}}.
 
 -spec build_fixpoint_metadata(#{atom() => binary()}, [atom()],
                                #{binary() => lnode_id()},
@@ -732,6 +746,15 @@ join_names(Names) ->
 %% Content-addressed node insertion
 %%--------------------------------------------------------------------
 
+add_node(empty, Inputs, Args, Tags, Type, LG) ->
+    Uid = LG#lowered_graph.uid,
+    Id = <<"empty_", (integer_to_binary(Uid))/binary>>,
+    Node = #lnode{
+        id = Id, op = empty, inputs = Inputs,
+        args = Args, tags = Tags, type = Type},
+    LG2 = add_tags(LG, Tags, Id),
+    {LG2#lowered_graph{nodes = maps:put(Id, Node, LG2#lowered_graph.nodes),
+                       uid = Uid + 1}, Id};
 add_node(Op, Inputs, Args, Tags, Type, LG) ->
     NonNodeArgs = nonnode_args_for_hash(Args, LG#lowered_graph.tag_map),
     Hash = content_hash(Op, Inputs, NonNodeArgs),

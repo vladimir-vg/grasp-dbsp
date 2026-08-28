@@ -94,7 +94,7 @@ node_rhs := OP "(" args? ")"            # known operator
 OP       := "source" | "delay" | "integrate" | "differentiate"
           | "distinct" | "plus" | "neg" | "map" | "flat_map"
           | "join" | "aggregate" | "order" | "filter" | "project"
-          | "antijoin" | "fixpoint"
+          | "antijoin" | "fixpoint" | "empty"
 
 args     := arg ("," arg)*
 arg      := NAME                        # variable reference to another node

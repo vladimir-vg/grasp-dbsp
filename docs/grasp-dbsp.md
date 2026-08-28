@@ -366,6 +366,7 @@ comment    := "#" .* NEWLINE
 | `project` | `node, ["f", ...]` | Drop unlisted fields. |
 | `antijoin` | `left, right, on: ["f", ...]` | Left rows with no right match. |
 | `fixpoint` | `circuit_name, kw_args` | Iterate circuit to convergence. |
+| `empty` | (none) | Nullary stream: emits zero rows, echoes barriers. |
 
 ## Naming conventions
 

@@ -237,7 +237,8 @@ run_positive(Prog0, GroupName, InputEpochs, ExpectedEpochs, ExpectedExactEpochs,
     write_e2e_lowered_dot(Prog0, GroupName, Config),
 
     {ok, #{plan := Plan, source_types := SourceTypeMap,
-           output_types := OutputTypes, graph := Graph1}} =
+           output_types := OutputTypes, empty_types := EmptyTypes,
+           graph := Graph1}} =
         gdbsp_loader:compile(Prog0, OutputNames, true),
 
     %% Generate circuit graph DOT
@@ -245,19 +246,21 @@ run_positive(Prog0, GroupName, InputEpochs, ExpectedEpochs, ExpectedExactEpochs,
                    gdbsp_graphviz:circuit_to_dot(Graph1), Config),
 
     SourceMap = spawn_inputs(SourceTypeMap),
+    Empties = spawn_empties(EmptyTypes),
     OutputCols = spawn_output_collectors(OutputNames),
 
     {ok, Circuit} = gdbsp_circuit_proc:start_link(),
     Inputs = maps:map(fun(_TableName, {InputPid, _Type}) -> InputPid end, SourceMap),
     Outputs = maps:map(fun(_Name, Col) -> gdbsp_test_collector_proc:pid(Col) end,
                        OutputCols),
-    ok = gen_server:call(Circuit, {circuit_update, Plan, Inputs, Outputs}),
+    ok = gen_server:call(Circuit, {circuit_update, Plan, Inputs, Outputs, Empties}),
 
     try
-        run_epochs(SourceMap, OutputCols, InputEpochs, EpochExpected,
+        run_epochs(SourceMap, Empties, OutputCols, InputEpochs, EpochExpected,
                    OutputTypes, 0, MatchMode)
     after
         catch gen_server:call(Circuit, stop),
+        maps:foreach(fun(_Name, _P) -> catch gdbsp_op_empty:stop(_P) end, Empties),
         maps:foreach(fun(_Name, Col) ->
             catch gdbsp_test_collector_proc:stop(Col)
         end, OutputCols)
@@ -302,7 +305,8 @@ run_dual(Prog0, GroupName, InputEpochs, ExpectedEpochs,
 
 run_one_incr_mode(Prog0, GroupName, InputEpochs, OutputNames, Config, Incr) ->
     {ok, #{plan := Plan, source_types := SourceTypeMap,
-           output_types := OutputTypes, graph := Graph1}} =
+           output_types := OutputTypes, empty_types := EmptyTypes,
+           graph := Graph1}} =
         gdbsp_loader:compile(Prog0, OutputNames, Incr),
 
     %% Generate circuit graph DOT for the incr=true run only
@@ -310,19 +314,21 @@ run_one_incr_mode(Prog0, GroupName, InputEpochs, OutputNames, Config, Incr) ->
                    gdbsp_graphviz:circuit_to_dot(Graph1), Config),
 
     SourceMap = spawn_inputs(SourceTypeMap),
+    Empties = spawn_empties(EmptyTypes),
     OutputCols = spawn_output_collectors(OutputNames),
 
     {ok, Circuit} = gdbsp_circuit_proc:start_link(),
     Inputs = maps:map(fun(_TableName, {InputPid, _Type}) -> InputPid end, SourceMap),
     Outputs = maps:map(fun(_Name, Col) -> gdbsp_test_collector_proc:pid(Col) end,
                        OutputCols),
-    ok = gen_server:call(Circuit, {circuit_update, Plan, Inputs, Outputs}),
+    ok = gen_server:call(Circuit, {circuit_update, Plan, Inputs, Outputs, Empties}),
 
     try
-        Results = run_epochs_collect(SourceMap, OutputCols, InputEpochs, 0),
+        Results = run_epochs_collect(SourceMap, Empties, OutputCols, InputEpochs, 0),
         {Results, OutputTypes}
     after
         catch gen_server:call(Circuit, stop),
+        maps:foreach(fun(_Name, _P) -> catch gdbsp_op_empty:stop(_P) end, Empties),
         maps:foreach(fun(_Name, Col) ->
             catch gdbsp_test_collector_proc:stop(Col)
         end, OutputCols)
@@ -330,11 +336,11 @@ run_one_incr_mode(Prog0, GroupName, InputEpochs, OutputNames, Config, Incr) ->
 
 %% Collect epoch deltas without asserting against expected.
 %% Returns a list of maps: #{norm_row() => weight()}, one per epoch.
-run_epochs_collect(_SourceMap, _OutputCols, [], _Epoch) ->
+run_epochs_collect(_SourceMap, _Empties, _OutputCols, [], _Epoch) ->
     [];
-run_epochs_collect(SourceMap, OutputCols, [InputEpoch | InputRest], Epoch) ->
+run_epochs_collect(SourceMap, Empties, OutputCols, [InputEpoch | InputRest], Epoch) ->
     send_epoch_deltas(InputEpoch, SourceMap, Epoch),
-    send_epoch_done(SourceMap, Epoch),
+    send_epoch_done(SourceMap, Empties, Epoch),
 
     maps:foreach(fun(_Name, Col) ->
         gdbsp_test_collector_proc:await_done(Col, Epoch, 10000)
@@ -342,7 +348,7 @@ run_epochs_collect(SourceMap, OutputCols, [InputEpoch | InputRest], Epoch) ->
 
     AllGot = collect_and_consolidate(OutputCols, Epoch),
     ct:pal("EPOCH ~w got: ~p", [Epoch, AllGot]),
-    [AllGot | run_epochs_collect(SourceMap, OutputCols, InputRest, Epoch + 1)].
+    [AllGot | run_epochs_collect(SourceMap, Empties, OutputCols, InputRest, Epoch + 1)].
 
 %% Compare two result lists epoch by epoch.
 compare_epoch_results(GotA, GotB) when length(GotA) =/= length(GotB) ->
@@ -401,6 +407,12 @@ spawn_inputs(SourceTypeMap) ->
         {Pid, Type}
     end, SourceTypeMap).
 
+spawn_empties(EmptyTypes) ->
+    maps:map(fun(_Name, _Type) ->
+        {ok, Pid} = gdbsp_op_empty:start_link(),
+        Pid
+    end, EmptyTypes).
+
 spawn_output_collectors(OutputNames) ->
     maps:from_list([
         {Name, gdbsp_test_collector_proc:start()}
@@ -411,17 +423,17 @@ spawn_output_collectors(OutputNames) ->
 %% Epoch execution
 %%====================================================================
 
-run_epochs(_SourceMap, _OutputCols, [], [], _OutputTypes, _Epoch, _MatchMode) ->
+run_epochs(_SourceMap, _Empties, _OutputCols, [], [], _OutputTypes, _Epoch, _MatchMode) ->
     ok;
-run_epochs(_SourceMap, _OutputCols,
+run_epochs(_SourceMap, _Empties, _OutputCols,
            [], [_ExpectedEpoch | _ExpectedRest],
            _OutputTypes, Epoch, _MatchMode) ->
     ct:fail("expected output for epoch ~w but input exhausted", [Epoch]);
-run_epochs(SourceMap, OutputCols,
+run_epochs(SourceMap, Empties, OutputCols,
            [InputEpoch | InputRest], [ExpectedEpoch | ExpectedRest],
            OutputTypes, Epoch, MatchMode) ->
     send_epoch_deltas(InputEpoch, SourceMap, Epoch),
-    send_epoch_done(SourceMap, Epoch),
+    send_epoch_done(SourceMap, Empties, Epoch),
 
     maps:foreach(fun(_Name, Col) ->
         gdbsp_test_collector_proc:await_done(Col, Epoch, 10000)
@@ -438,9 +450,9 @@ run_epochs(SourceMap, OutputCols,
         exact -> ok = exact_match(AllExpected, AllGot, Epoch)
     end,
 
-    run_epochs(SourceMap, OutputCols, InputRest, ExpectedRest,
+    run_epochs(SourceMap, Empties, OutputCols, InputRest, ExpectedRest,
                OutputTypes, Epoch + 1, MatchMode);
-run_epochs(_SourceMap, _OutputCols,
+run_epochs(_SourceMap, _Empties, _OutputCols,
            [_InputEpoch | _InputRest], [], _OutputTypes, _Epoch, _MatchMode) ->
     ok.
 
@@ -459,10 +471,13 @@ send_epoch_deltas(EpochMap, SourceMap, Epoch) ->
         end
     end, EpochMap).
 
-send_epoch_done(SourceMap, Epoch) ->
+send_epoch_done(SourceMap, Empties, Epoch) ->
     maps:foreach(fun(_TableName, {InputPid, _Type}) ->
         InputPid ! {delta, #{epoch => Epoch, barrier => epoch_done}, [], self()}
-    end, SourceMap).
+    end, SourceMap),
+    maps:foreach(fun(_Name, EmptyPid) ->
+        EmptyPid ! {delta, #{epoch => Epoch, barrier => epoch_done}, [], self()}
+    end, Empties).
 
 convert_input_row([W, RowMap], Type) ->
     {ok, Decoded} = gdbsp_value_json:decode_row(Type, RowMap),

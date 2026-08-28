@@ -333,7 +333,9 @@ circuit_node_label({antijoin, Keys, Vals}, _Schemas, _Id) ->
 circuit_node_label({rec, Name, SccId}, _Schemas, _Id) ->
     io_lib:format("rec(~s)\nscc: ~w", [Name, SccId]);
 circuit_node_label({rec_output, Name, SccId}, _Schemas, _Id) ->
-    io_lib:format("rec_out(~s)\nscc: ~w", [Name, SccId]).
+    io_lib:format("rec_out(~s)\nscc: ~w", [Name, SccId]);
+circuit_node_label({empty, _Name}, _Schemas, _Id) ->
+    "empty".
 
 circuit_schema_suffix([]) -> "";
 circuit_schema_suffix(Schema) ->
@@ -356,7 +358,8 @@ circuit_node_color({differentiate}) -> "lightsalmon";
 circuit_node_color({delay}) -> "lightgray";
 circuit_node_color({antijoin, _, _}) -> "lightsteelblue";
 circuit_node_color({rec, _, _}) -> "lightgray";
-circuit_node_color({rec_output, _, _}) -> "lightgray".
+circuit_node_color({rec_output, _, _}) -> "lightgray";
+circuit_node_color({empty, _}) -> "white".
 
 %%--------------------------------------------------------------------
 %% Circuit edge rendering

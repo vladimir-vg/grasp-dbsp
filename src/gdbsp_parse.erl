@@ -201,6 +201,9 @@ collect_fixpoint_kwargs(Tokens, Acc) ->
         Toks -> collect_fixpoint_args(Toks, Acc)
     end.
 
+parse_fixpoint_kw_val([{identifier, _, V}, {'(', _} | Rest]) ->
+    {CallArgs, Rest2} = collect_inline_call_args(Rest, []),
+    {{expr, {call, V, CallArgs}}, Rest2};
 parse_fixpoint_kw_val(Tokens) ->
     case Tokens of
         [{identifier, _, V}, {dot, _}, {identifier, _, F} | Rest] ->
@@ -922,6 +925,7 @@ known_op(<<"project">>)            -> true;
 known_op(<<"antijoin">>)           -> true;
 known_op(<<"member_access">>)     -> true;
 known_op(<<"fixpoint">>)           -> true;
+known_op(<<"empty">>)              -> true;
 known_op(_)                        -> false.
 
 skip_newlines(Tokens) ->

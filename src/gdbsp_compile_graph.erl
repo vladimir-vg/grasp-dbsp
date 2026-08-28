@@ -137,6 +137,12 @@ construct_from_lowered(NodeList, Order, FnReg, AggReg, FnParams, KwargOrder, Std
                     G3 = set_schema(G2, NodeId, Schema),
                     G4 = set_type(G3, NodeId, Type),
                     {G4, IdMapAcc#{LId => NodeId}, FIMAcc, FOMAcc};
+                empty ->
+                    {G2, NodeId} = add_circuit_node(GAcc, {empty, LId}, CInputIds, #{}),
+                    Schema = compute_schema_lowered(empty, Args, CInputIds, Type, G2),
+                    G3 = set_schema(G2, NodeId, Schema),
+                    G4 = set_type(G3, NodeId, Type),
+                    {G4, IdMapAcc#{LId => NodeId}, FIMAcc, FOMAcc};
                 _ ->
                     {OpTuple, SubNodes} = make_operator_lowered(
                         GAcc, Op, Args, CInputIds, Type, FnReg, FnParams, KwargOrder,
@@ -337,7 +343,8 @@ construct_one_fixpoint(G0, _FpHmac, FixInfo, LnIdMap, CInputMap,
     RecIdList = maps:values(RIds) ++ maps:values(ROIds),
     ROIdSet   = maps:from_list([{Id, Id} || {_, Id} <- maps:to_list(ROIds)]),
     G3 = mark_scc_body_nodes(G2, RecIdList, ROIdSet, SccId),
-    G4 = rewire_body_consumers(G3, BodyToRO, SccId),
+    G3b = mark_scc_body_empties(G3, maps:values(RIds), maps:values(ROIds), SccId),
+    G4 = rewire_body_consumers(G3b, BodyToRO, SccId),
     G5 = propagate_fixpoint_schemas(G4, BaseParams, CInputMap, RIds, ROIds),
 
     NewROAcc = maps:merge(ROIdsAcc, maps:from_list(
@@ -544,6 +551,11 @@ compute_schema_lowered(Op, Args, InputIds, TS, G) ->
                 {struct, Fields, _} -> maps:keys(Fields);
                 _ -> []
             end;
+        empty ->
+            case TS of
+                {struct, Fields, _} -> maps:keys(Fields);
+                _ -> []
+            end;
         flat_map ->
             _FnName = get_var_arg(Args, 2),
             OutSchema = case TS of
@@ -707,6 +719,65 @@ build_consumer_index(Nodes) ->
         end,
         #{},
         Nodes).
+
+%% Body-internal empties are nullary and sit *upstream* of the body
+%% operators they feed, so a downstream-only traversal never reaches them.
+%% Mark any empty node that feeds an SCC body operator (reachable from the
+%% rec nodes, stopping at rec_output / foreign rec boundaries), so the rec
+%% can drive it with translated iteration barriers.
+mark_scc_body_empties(#circuit_graph{nodes = Nodes} = G, RecIds, RecOutputIds, SccId) ->
+    RecIdSet = sets:from_list(RecIds, [{version, 2}]),
+    RecOutputIdSet = sets:from_list(RecOutputIds, [{version, 2}]),
+    ConsumerIndex = build_consumer_index(Nodes),
+    EmptyIdSet = sets:from_list(
+        [Id || {Id, #circuit_node{op = {empty, _}}} <- maps:to_list(Nodes)],
+        [{version, 2}]),
+    BodyIds = scc_body_bfs(Nodes, RecIds, RecIdSet, RecOutputIdSet, ConsumerIndex,
+                           sets:new([{version, 2}])),
+    MarkIds = lists:usort(lists:flatmap(
+        fun(BId) ->
+            #circuit_node{inputs = Ins} = maps:get(BId, Nodes),
+            [InId || InId <- Ins, sets:is_element(InId, EmptyIdSet)]
+        end, BodyIds)),
+    Nodes2 = lists:foldl(
+        fun(Id, Acc) ->
+            case maps:find(Id, Acc) of
+                {ok, #circuit_node{meta = Meta} = Node} ->
+                    maps:put(Id, Node#circuit_node{meta = maps:put(scc_id, SccId, Meta)},
+                             Acc);
+                error -> Acc
+            end
+        end, Nodes, MarkIds),
+    G#circuit_graph{nodes = Nodes2}.
+
+scc_body_bfs(_Nodes, [], _RecIdSet, _RecOutputIdSet, _ConsumerIndex, Body) ->
+    lists:sort(sets:to_list(Body));
+scc_body_bfs(Nodes, [Id | Rest], RecIdSet, RecOutputIdSet, ConsumerIndex, Body) ->
+    #circuit_node{op = Op} = maps:get(Id, Nodes),
+    case element(1, Op) of
+        rec_output ->
+            scc_body_bfs(Nodes, Rest, RecIdSet, RecOutputIdSet, ConsumerIndex, Body);
+        rec ->
+            case sets:is_element(Id, RecIdSet) of
+                true ->
+                    Children = maps:get(Id, ConsumerIndex, []),
+                    scc_body_bfs(Nodes, Rest ++ Children, RecIdSet, RecOutputIdSet,
+                                 ConsumerIndex, Body);
+                false ->
+                    scc_body_bfs(Nodes, Rest, RecIdSet, RecOutputIdSet,
+                                 ConsumerIndex, Body)
+            end;
+        _ ->
+            case sets:is_element(Id, Body) of
+                true ->
+                    scc_body_bfs(Nodes, Rest, RecIdSet, RecOutputIdSet,
+                                 ConsumerIndex, Body);
+                false ->
+                    Children = maps:get(Id, ConsumerIndex, []),
+                    scc_body_bfs(Nodes, Rest ++ Children, RecIdSet, RecOutputIdSet,
+                                 ConsumerIndex, sets:add_element(Id, Body))
+            end
+    end.
 
 %%====================================================================
 

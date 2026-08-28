@@ -32,23 +32,23 @@ start_link() ->
 init({}) ->
     {ok, #{gen => 0}}.
 
-handle_call({circuit_update, Plan, Inputs, Outputs}, _From,
+handle_call({circuit_update, Plan, Inputs, Outputs, Empties}, _From,
             #{gen := Gen} = State) ->
     ok = stop_gen(Gen, State),
     Gen2 = Gen + 1,
-    State2 = build_circuit(Plan, Inputs, Outputs, Gen2, #{}, true),
+    State2 = build_circuit(Plan, Inputs, Outputs, Empties, Gen2, #{}, true),
     {reply, ok, maps:merge(State2, #{gen => Gen2})};
-handle_call({circuit_update_with_states, Plan, Inputs, Outputs, OpStates}, _From,
+handle_call({circuit_update_with_states, Plan, Inputs, Outputs, OpStates, Empties}, _From,
             #{gen := Gen} = State) ->
     ok = stop_gen(Gen, State),
     Gen2 = Gen + 1,
-    State2 = build_circuit(Plan, Inputs, Outputs, Gen2, OpStates, true),
+    State2 = build_circuit(Plan, Inputs, Outputs, Empties, Gen2, OpStates, true),
     {reply, ok, maps:merge(State2, #{gen => Gen2})};
-handle_call({circuit_deploy, Plan, Inputs, Outputs}, _From,
+handle_call({circuit_deploy, Plan, Inputs, Outputs, Empties}, _From,
             #{gen := Gen} = State) ->
     ok = stop_gen(Gen, State),
     Gen2 = Gen + 1,
-    State2 = build_circuit(Plan, Inputs, Outputs, Gen2, #{}, false),
+    State2 = build_circuit(Plan, Inputs, Outputs, Empties, Gen2, #{}, false),
     {reply, ok, maps:merge(State2, #{gen => Gen2})};
 handle_call(get_operators, _From, #{operators := Ops} = State) ->
     {reply, {ok, Ops}, State};
@@ -68,13 +68,20 @@ handle_info(_Msg, State) ->
 %% Circuit deployment
 %%====================================================================
 
-build_circuit(Plan, Inputs, Outputs, Gen, OpStates, DoKickoff) ->
+build_circuit(Plan, Inputs, Outputs, Empties, Gen, OpStates, DoKickoff) ->
     #{wiring := Tuples, configs := Configs} = Plan,
     OpRefs = [R || R = {op, _} <- maps:keys(Configs)],
     OpPids = maps:from_list([{R, spawn_op(R, Configs, OpStates)} || R <- OpRefs]),
     RecRefs = [R || R = {rec, _, _, _} <- maps:keys(Configs)],
     RecPids = maps:from_list([{R, spawn_rec(R, Configs)} || R <- RecRefs]),
-    RefToPid = maps:merge(OpPids, RecPids),
+    EmptyRefs = [R || R = {empty, _, _} <- maps:keys(Configs)],
+    EmptyPids = maps:from_list([{R, spawn_empty(R)} || R <- EmptyRefs]),
+    EmptyByScc = maps:fold(
+        fun({empty, _, _} = Ref, Pid, Acc) ->
+            SccId = maps:get(scc_id, maps:get(Ref, Configs)),
+            maps:update_with(SccId, fun(L) -> [Pid | L] end, [Pid], Acc)
+        end, #{}, EmptyPids),
+    RefToPid = maps:merge(maps:merge(OpPids, RecPids), EmptyPids),
 
     RORefs = lists:usort([SR || {SR, _, _, _} <- Tuples, element(1, SR) =:= rec_output]),
     ROToRec = rec_output_to_rec(RecRefs, RORefs, Configs),
@@ -82,24 +89,25 @@ build_circuit(Plan, Inputs, Outputs, Gen, OpStates, DoKickoff) ->
     CoordPids = spawn_coordinators(RecPids, Configs),
 
     ResolveStd = fun(Ref) ->
-        resolve_pid(Ref, RefToPid, #{}, Inputs, Outputs)
+        resolve_pid(Ref, RefToPid, #{}, Inputs, Outputs, Empties)
     end,
     ResolveWithRO = fun(Ref) ->
-        resolve_pid(Ref, RefToPid, ROToRec, Inputs, Outputs)
+        resolve_pid(Ref, RefToPid, ROToRec, Inputs, Outputs, Empties)
     end,
 
     wire_rec_coordinators(RecPids, CoordPids),
 
     {UpMaps, DownMaps} = build_wiring_maps(Tuples, ResolveWithRO),
 
-    wire_all(Tuples, OpRefs, OpPids, Inputs, Outputs, UpMaps, DownMaps),
-    validate_wiring(OpPids, RecPids, Inputs, Outputs),
+    wire_all(Tuples, OpRefs, OpPids, EmptyRefs, EmptyPids, Inputs, Outputs, Empties,
+             UpMaps, DownMaps),
+    validate_wiring(OpPids, RecPids, EmptyPids, Inputs, Outputs, Empties),
 
-    wire_rec_body(RecPids, Tuples, ResolveStd),
+    wire_rec_body(RecPids, Tuples, ResolveStd, EmptyByScc),
     wire_rec_source(RecPids, RecRefs, Tuples, ResolveWithRO, Inputs, Outputs, DoKickoff),
     wire_output_consumers(RecPids, ROToRec, Tuples, ResolveWithRO),
 
-    AllPids = maps:merge(OpPids, RecPids),
+    AllPids = maps:merge(maps:merge(OpPids, RecPids), EmptyPids),
     #{gen => Gen, operators => AllPids, recs => RecPids, coordinators => CoordPids}.
 %%====================================================================
 %% Process spawning
@@ -122,6 +130,10 @@ spawn_op({op, _} = Ref, Configs, OpStates) ->
 spawn_rec({rec, Name, SccId, _} = Ref, Configs) ->
     #{name := Name, scc_id := SccId} = maps:get(Ref, Configs),
     {ok, Pid} = gdbsp_rec_proc:start_link(#{name => Name, scc_id => SccId}),
+    Pid.
+
+spawn_empty(_Ref) ->
+    {ok, Pid} = gdbsp_op_empty:start_link(),
     Pid.
 
 wrap_args(gdbsp_op_map, Args) when is_function(Args) -> #{'fun' => Args};
@@ -189,13 +201,18 @@ wire_rec_coordinators(RecPids, CoordPids) ->
             gen_server:call(RecPid, {set_coordinator, CoordPid})
         end, RecPids).
 
-wire_rec_body(RecPids, Tuples, Resolve) ->
+wire_rec_body(RecPids, Tuples, Resolve, EmptyByScc) ->
+    FirstRecNames = first_rec_names(RecPids),
     maps:foreach(
         fun({rec, Name, SccId, _} = RecRef, RecPid) ->
             BodyInputPids = [Resolve(RR) || {SR, _SL, RR, _RL} <- Tuples,
                                               SR =:= RecRef,
                                               element(1, RR) =:= op],
-            gen_server:call(RecPid, {set_body_inputs, BodyInputPids}),
+            ExtraEmpties = case maps:get(SccId, FirstRecNames) =:= Name of
+                true -> lists:usort(maps:get(SccId, EmptyByScc, []));
+                false -> []
+            end,
+            gen_server:call(RecPid, {set_body_inputs, BodyInputPids ++ ExtraEmpties}),
             BodyOutputPids = [Resolve(SR) || {SR, _SL, RR, RL} <- Tuples,
                                               RR =:= RecRef, RL =:= body_output],
             BodyOut = case BodyOutputPids of
@@ -204,6 +221,18 @@ wire_rec_body(RecPids, Tuples, Resolve) ->
             end,
             gen_server:call(RecPid, {set_body_output, BodyOut})
         end, RecPids).
+
+%% Deterministically pick the lexicographically-smallest rec name per SCC,
+%% so body-internal empties attach to exactly one rec of the SCC.
+first_rec_names(RecPids) ->
+    Pairs = [{SccId, Name} || {{rec, Name, SccId, _}, _} <- maps:to_list(RecPids)],
+    lists:foldl(
+        fun({SccId, Name}, Acc) ->
+            case maps:find(SccId, Acc) of
+                {ok, Min} when Min =< Name -> Acc;
+                _ -> Acc#{SccId => Name}
+            end
+        end, #{}, Pairs).
 
 wire_rec_source(RecPids, RecRefs, Tuples, Resolve, Inputs, Outputs, DoKickoff) ->
     maps:foreach(
@@ -320,13 +349,22 @@ build_wiring_maps(Tuples, Resolve) ->
         end, #{}, RealTuples),
     {UpMaps, DownMaps}.
 
-resolve_pid({op, _} = R, RefToPid, _ROToRec, _Inputs, _Outputs) ->
+resolve_pid({op, _} = R, RefToPid, _ROToRec, _Inputs, _Outputs, _Empties) ->
     Pid = maps:get(R, RefToPid, undefined),
     resolve_pid_check(R, Pid);
-resolve_pid({rec, _, _, _} = R, RefToPid, _ROToRec, _Inputs, _Outputs) ->
+resolve_pid({rec, _, _, _} = R, RefToPid, _ROToRec, _Inputs, _Outputs, _Empties) ->
     Pid = maps:get(R, RefToPid, undefined),
     resolve_pid_check(R, Pid);
-resolve_pid({rec_output, _, _, _} = R, _RefToPid, ROToRec, _Inputs, _Outputs) ->
+resolve_pid({empty, _, _} = R, RefToPid, _ROToRec, _Inputs, _Outputs, Empties) ->
+    case maps:find(R, RefToPid) of
+        {ok, Pid} ->
+            resolve_pid_check(R, Pid);
+        error ->
+            Name = element(2, R),
+            Pid = maps:get(Name, Empties, undefined),
+            resolve_pid_check(R, Pid)
+    end;
+resolve_pid({rec_output, _, _, _} = R, _RefToPid, ROToRec, _Inputs, _Outputs, _Empties) ->
     RecRef = maps:get(R, ROToRec, undefined),
     case RecRef of
         undefined ->
@@ -336,10 +374,10 @@ resolve_pid({rec_output, _, _, _} = R, _RefToPid, ROToRec, _Inputs, _Outputs) ->
             Pid = maps:get(RecRef, _RefToPid, undefined),
             resolve_pid_check(R, Pid)
     end;
-resolve_pid({source, Name, _} = R, _RefToPid, _ROToRec, Inputs, _Outputs) ->
+resolve_pid({source, Name, _} = R, _RefToPid, _ROToRec, Inputs, _Outputs, _Empties) ->
     Pid = maps:get(Name, Inputs, undefined),
     resolve_pid_check(R, Pid);
-resolve_pid({output, Name, _} = R, _RefToPid, _ROToRec, _Inputs, Outputs) ->
+resolve_pid({output, Name, _} = R, _RefToPid, _ROToRec, _Inputs, Outputs, _Empties) ->
     Pid = maps:get(Name, Outputs, undefined),
     resolve_pid_check(R, Pid).
 
@@ -352,7 +390,8 @@ resolve_pid_check(Ref, undefined) ->
 %% Wire operators
 %%====================================================================
 
-wire_all(Tuples, OpRefs, OpPids, Inputs, Outputs, UpMaps, DownMaps) ->
+wire_all(Tuples, OpRefs, OpPids, EmptyRefs, EmptyPids, Inputs, Outputs, Empties,
+         UpMaps, DownMaps) ->
     WiringRef = make_ref(),
     SenderPid = self(),
     FunWire = fun(Pid, Up, Down) ->
@@ -368,6 +407,16 @@ wire_all(Tuples, OpRefs, OpPids, Inputs, Outputs, UpMaps, DownMaps) ->
             Down = maps:get(Ref, DownMaps, #{}),
             FunWire(Pid, Up, Down)
         end, OpRefs),
+
+    %% Wire body-internal empties (spawned by this circuit)
+    EmptyPidsList = maps:values(EmptyPids),
+    lists:foreach(
+        fun(Ref) ->
+            Pid = maps:get(Ref, EmptyPids),
+            Up = maps:get(Ref, UpMaps, #{}),
+            Down = maps:get(Ref, DownMaps, #{}),
+            FunWire(Pid, Up, Down)
+        end, EmptyRefs),
 
     %% Wire sources
     SourceRefs = lists:usort(
@@ -389,6 +438,27 @@ wire_all(Tuples, OpRefs, OpPids, Inputs, Outputs, UpMaps, DownMaps) ->
             end
         end, SourceRefs),
 
+    %% Wire top-level empties (external feeders passed in Empties)
+    AllEmptyRefs = lists:usort(
+        [SR || {SR, _SL, _RR, _RL} <- Tuples, element(1, SR) =:= empty]),
+    TopEmptyRefs = AllEmptyRefs -- EmptyRefs,
+    TopEmptyPids = lists:filtermap(
+        fun({empty, Name, _}) ->
+            case maps:find(Name, Empties) of
+                {ok, Pid} -> {true, Pid};
+                error -> false
+            end
+        end, TopEmptyRefs),
+    lists:foreach(
+        fun({empty, Name, _} = Ref) ->
+            case maps:find(Name, Empties) of
+                {ok, Pid} ->
+                    Down = maps:get(Ref, DownMaps, #{}),
+                    FunWire(Pid, #{}, Down);
+                error -> ok
+            end
+        end, TopEmptyRefs),
+
     %% Wire outputs
     OutputRefs = lists:usort(
         [RR || {_SR, _SL, RR, _RL} <- Tuples, element(1, RR) =:= output]),
@@ -409,7 +479,7 @@ wire_all(Tuples, OpRefs, OpPids, Inputs, Outputs, UpMaps, DownMaps) ->
             end
         end, OutputRefs),
 
-    ExpectedPids = lists:usort(OpPidsList ++ SrcPids ++ OutPids),
+    ExpectedPids = lists:usort(OpPidsList ++ EmptyPidsList ++ SrcPids ++ TopEmptyPids ++ OutPids),
     gather_wiring_acks(WiringRef, ExpectedPids, 5000).
 
 gather_wiring_acks(_WiringRef, [], _Timeout) ->
@@ -423,11 +493,13 @@ gather_wiring_acks(WiringRef, ExpectPids, Timeout) ->
                [length(ExpectPids), Timeout, ExpectPids])
     end.
 
-validate_wiring(OpPids, RecPids, Inputs, Outputs) ->
+validate_wiring(OpPids, RecPids, EmptyPids, Inputs, Outputs, Empties) ->
     AllPids = maps:values(OpPids)
         ++ maps:values(RecPids)
+        ++ maps:values(EmptyPids)
         ++ maps:values(Inputs)
-        ++ maps:values(Outputs),
+        ++ maps:values(Outputs)
+        ++ maps:values(Empties),
     Dead = lists:filter(fun(P) -> not is_process_alive(P) end, AllPids),
     case Dead of
         [] -> ok;

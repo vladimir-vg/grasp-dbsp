@@ -64,7 +64,7 @@ deltas_for_epoch(Msgs, Epoch) ->
 
 unit_batch(_Config) ->
     Stubs = start_stubs([<<"t">>]),
-    {ok, Ing} = gdbsp_ingress:start_link(Stubs),
+    {ok, Ing} = gdbsp_ingress:start_link(Stubs, #{}),
 
     ok = gdbsp_ingress:feed(Ing, <<"t">>, [{1, a}, {1, b}, {1, c}]),
     ok = gdbsp_ingress:mark_exhausted(Ing, <<"t">>),
@@ -82,7 +82,7 @@ unit_batch(_Config) ->
 
 multi_table_lockstep(_Config) ->
     Stubs = start_stubs([<<"a">>, <<"b">>]),
-    {ok, Ing} = gdbsp_ingress:start_link(Stubs),
+    {ok, Ing} = gdbsp_ingress:start_link(Stubs, #{}),
 
     ok = gdbsp_ingress:feed(Ing, <<"a">>, [{1, a1}, {1, a2}]),
     ok = gdbsp_ingress:feed(Ing, <<"b">>, [{1, b1}]),
@@ -103,7 +103,7 @@ multi_table_lockstep(_Config) ->
 
 empty_batches_for_exhausted(_Config) ->
     Stubs = start_stubs([<<"a">>, <<"b">>]),
-    {ok, Ing} = gdbsp_ingress:start_link(Stubs),
+    {ok, Ing} = gdbsp_ingress:start_link(Stubs, #{}),
 
     ok = gdbsp_ingress:feed(Ing, <<"a">>, [{1, a1}]),
     ok = gdbsp_ingress:mark_exhausted(Ing, <<"a">>),
@@ -118,7 +118,7 @@ empty_batches_for_exhausted(_Config) ->
 
 monotonic_epoch(_Config) ->
     Stubs = start_stubs([<<"t">>]),
-    {ok, Ing} = gdbsp_ingress:start_link(Stubs),
+    {ok, Ing} = gdbsp_ingress:start_link(Stubs, #{}),
 
     ok = gdbsp_ingress:feed(Ing, <<"t">>, [{1, x}, {1, y}, {1, z}]),
     ok = gdbsp_ingress:mark_exhausted(Ing, <<"t">>),
@@ -132,7 +132,7 @@ monotonic_epoch(_Config) ->
 
 exhausted_signal(_Config) ->
     Stubs = start_stubs([<<"t">>]),
-    {ok, Ing} = gdbsp_ingress:start_link(Stubs),
+    {ok, Ing} = gdbsp_ingress:start_link(Stubs, #{}),
 
     %% Not exhausted while no table has been marked exhausted.
     idle = gdbsp_ingress:step(Ing),

@@ -1,0 +1,70 @@
+# empty() stream constant — a nullary stream that emits zero rows and
+# echoes every barrier it receives. Covers:
+#   - top-level empty() as a plus operand
+#   - empty() as a join operand
+#   - empty() as the base of a self-referential accumulator
+#   - body-internal empty() driven by the fixpoint rec
+
+- description: "plus with empty unifies to the concrete operand"
+  source: |
+    src := source("data")
+    src :: stream(struct("v": i64))
+    out := plus(src, empty())
+  ensure_matches_incremental: true
+  input:
+    - data:
+        - [1, {v: "10"}]
+        - [1, {v: "20"}]
+  expected:
+    - out:
+        - [1, {v: "10"}]
+        - [1, {v: "20"}]
+
+- description: "join with empty right operand yields no rows"
+  source: |
+    src := source("data")
+    src :: stream(struct("k": i64, "v": i64))
+    out := join(src, empty(), on: ["k"])
+  ensure_matches_incremental: true
+  input:
+    - data:
+        - [1, {k: "1", v: "10"}]
+  expected:
+    - out: []
+
+- description: "empty as the base of a self-referential accumulator"
+  source: |
+    circuit acc(base: input, result: r):
+        result := distinct(plus(input, r))
+
+    src := source("data")
+    src :: stream(struct("v": i64))
+
+    fp := fixpoint(acc(base: src, result: empty()))
+    out := fp.result
+  ensure_matches_incremental: true
+  input:
+    - data:
+        - [1, {v: "42"}]
+  expected:
+    - out:
+        - [1, {v: "42"}]
+
+- description: "body-internal empty() combined with the self-ref feedback"
+  source: |
+    circuit body_empty(base: input, result: r):
+        combined := plus(r, empty())
+        result := distinct(plus(input, combined))
+
+    src := source("data")
+    src :: stream(struct("v": i64))
+
+    fp := fixpoint(body_empty(base: src, result: empty()))
+    out := fp.result
+  ensure_matches_incremental: true
+  input:
+    - data:
+        - [1, {v: "7"}]
+  expected:
+    - out:
+        - [1, {v: "7"}]

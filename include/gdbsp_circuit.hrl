@@ -19,6 +19,7 @@
     {differentiate} |
     {delay} |
     {antijoin, [binary()], [binary()]} |
+    {empty, binary()} |
     {rec, binary(), non_neg_integer()} |
     {rec_output, binary(), non_neg_integer()}.
 

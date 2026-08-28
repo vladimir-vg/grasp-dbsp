@@ -11,7 +11,7 @@
 -module(gdbsp_ingress).
 -behaviour(gen_server).
 
--export([start_link/1]).
+-export([start_link/2]).
 -export([feed/3, mark_exhausted/2, step/1, epoch/1, is_exhausted/1]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2]).
 
@@ -20,9 +20,11 @@
 %%====================================================================
 
 %% Inputs :: #{Table :: binary() => InputNodePid :: pid()}
--spec start_link(#{binary() => pid()}) -> {ok, pid()} | {error, term()}.
-start_link(Inputs) ->
-    gen_server:start_link(?MODULE, Inputs, []).
+%% Empties :: #{Name :: binary() => EmptyPid :: pid()}
+-spec start_link(#{binary() => pid()}, #{binary() => pid()}) ->
+    {ok, pid()} | {error, term()}.
+start_link(Inputs, Empties) ->
+    gen_server:start_link(?MODULE, {Inputs, Empties}, []).
 
 -spec feed(pid(), binary(), [{integer(), term()}]) -> ok.
 feed(Pid, Table, Rows) ->
@@ -51,10 +53,11 @@ is_exhausted(Pid) ->
 %% gen_server callbacks
 %%====================================================================
 
-init(Inputs) ->
+init({Inputs, Empties}) ->
     Tables = maps:keys(Inputs),
     {ok, #{
         inputs => Inputs,
+        empties => Empties,
         buffers => maps:from_list([{T, queue:new()} || T <- Tables]),
         exhausted => sets:new(),
         epoch => 0
@@ -98,7 +101,8 @@ all_exhausted(#{buffers := Buffers, exhausted := Exh}) ->
         true, Buffers),
     AllExhausted andalso not has_pending(#{buffers => Buffers}).
 
-commit_epoch(#{buffers := Buffers, inputs := Inputs, epoch := Epoch} = State) ->
+commit_epoch(#{buffers := Buffers, inputs := Inputs, empties := Empties,
+               epoch := Epoch} = State) ->
     case {has_pending(State), all_exhausted(State)} of
         {false, true} -> exhausted;
         {false, false} -> idle;
@@ -122,5 +126,11 @@ commit_epoch(#{buffers := Buffers, inputs := Inputs, epoch := Epoch} = State) ->
                                 [], self()}
                 end,
                 Deliveries),
+            maps:foreach(
+                fun(_Name, EmptyPid) ->
+                    EmptyPid ! {delta, #{epoch => Epoch1, barrier => epoch_done},
+                                [], self()}
+                end,
+                Empties),
             {State#{buffers := Buffers1, epoch := Epoch1}, Epoch1}
     end.

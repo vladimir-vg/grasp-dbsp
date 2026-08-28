@@ -274,10 +274,11 @@ run_gdbsp(Prog, InputData, ExpectedInfo) ->
         Acc#{K => T}
     end, #{}, SourceTypeMap),
 
-    {Plan, _SourceMapFromPlan, _OutputTypes} =
+    {Plan, _SourceMapFromPlan, _OutputTypes, EmptyNames} =
         compile_to_plan(Prog, OutputNames),
 
     SourceMap = spawn_inputs(SourceTypes),
+    Empties = spawn_empties(EmptyNames),
     OutputCols = spawn_output_collectors(OutputNames),
 
     {ok, Circuit} = gdbsp_circuit_proc:start_link(),
@@ -286,12 +287,12 @@ run_gdbsp(Prog, InputData, ExpectedInfo) ->
     OutputPids = maps:map(fun(_Name, Col) ->
         gdbsp_test_collector_proc:pid(Col)
     end, OutputCols),
-    ok = gen_server:call(Circuit, {circuit_update, Plan, InputPids, OutputPids}),
+    ok = gen_server:call(Circuit, {circuit_update, Plan, InputPids, OutputPids, Empties}),
 
     try
         Epoch = 0,
         send_all_inputs(InputData, SourceMap, SourceTypes, Epoch),
-        send_epoch_done(SourceMap, Epoch),
+        send_epoch_done(SourceMap, Empties, Epoch),
 
         maps:foreach(fun(_Name, Col) ->
             gdbsp_test_collector_proc:await_done(Col, Epoch, 30000)
@@ -309,6 +310,7 @@ run_gdbsp(Prog, InputData, ExpectedInfo) ->
         end, #{}, AllDeltas)
     after
         catch gen_server:call(Circuit, stop),
+        maps:foreach(fun(_Name, _P) -> catch gdbsp_op_empty:stop(_P) end, Empties),
         maps:foreach(fun(_Name, Col) ->
             catch gdbsp_test_collector_proc:stop(Col)
         end, OutputCols)
@@ -323,8 +325,11 @@ compile_to_plan(Prog, OutputNames) ->
             OutTypes = maps:fold(fun(OutName, _NodeId, Acc) ->
                 Acc#{OutName => dynamic}
             end, #{}, maps:with(OutputNames, NameToId)),
+            EmptyNames = [Name || {_Id, #circuit_node{op = {empty, Name}, meta = Meta}}
+                                      <- maps:to_list(Graph1#circuit_graph.nodes),
+                                  not maps:is_key(scc_id, Meta)],
             Plan = gdbsp_deploy:plan(Graph1),
-            {Plan, SourceTypeMap, OutTypes};
+            {Plan, SourceTypeMap, OutTypes, EmptyNames};
         {error, Reason} ->
             error({compile_error, Reason})
     end.
@@ -366,6 +371,12 @@ spawn_inputs(SourceTypes) ->
         {Pid, Type}
     end, SourceTypes).
 
+spawn_empties(EmptyNames) ->
+    maps:from_list([
+        {Name, begin {ok, Pid} = gdbsp_op_empty:start_link(), Pid end}
+        || Name <- EmptyNames
+    ]).
+
 spawn_output_collectors(OutputNames) ->
     maps:from_list([
         {Name, gdbsp_test_collector_proc:start()}
@@ -390,12 +401,15 @@ convert_input_row(RowMap, Type) ->
     StructRow = gdbsp_struct:map_to_struct(Decoded, Type),
     {1, StructRow}.
 
-send_epoch_done(SourceMap, Epoch) ->
+send_epoch_done(SourceMap, Empties, Epoch) ->
     maps:foreach(fun(_TableName, {InputPid, _Type}) ->
         InputPid ! {delta,
                     #{epoch => Epoch, barrier => epoch_done},
                     [], self()}
-    end, SourceMap).
+    end, SourceMap),
+    maps:foreach(fun(_Name, EmptyPid) ->
+        EmptyPid ! {delta, #{epoch => Epoch, barrier => epoch_done}, [], self()}
+    end, Empties).
 
 consolidate_and_expand(Deltas, OutputName) ->
     consolidate_ordered(Deltas, [], OutputName).

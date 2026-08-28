@@ -19,6 +19,7 @@
     plan         => map(),
     source_types => #{binary() => {binary(), term()}},
     output_types => #{binary() => term()},
+    empty_types  => #{binary() => term()},
     graph        => #circuit_graph{}
 }.
 
@@ -105,9 +106,11 @@ compile(Program, OutputNames, Incr) ->
                         false -> Graph1
                     end,
                     Plan = gdbsp_deploy:plan(Graph2),
+                    EmptyTypes = empty_types_from_graph(Graph1),
                     {ok, #{plan => Plan,
                            source_types => SourceTypeMap,
                            output_types => OutTypes,
+                           empty_types => EmptyTypes,
                            graph => Graph1}}
             end;
         {error, Reason} ->
@@ -116,6 +119,22 @@ compile(Program, OutputNames, Incr) ->
 
 find_unknown_outputs(OutputNames, NameToId) ->
     [N || N <- OutputNames, not maps:is_key(N, NameToId)].
+
+%%====================================================================
+%% Empty stream discovery (top-level feeders only)
+%%====================================================================
+
+empty_types_from_graph(Graph) ->
+    maps:fold(
+        fun(Id, #circuit_node{op = {empty, Name}, meta = Meta}, Acc) ->
+            case maps:is_key(scc_id, Meta) of
+                true -> Acc;
+                false ->
+                    Type = maps:get(Id, Graph#circuit_graph.types, dynamic),
+                    Acc#{Name => Type}
+            end;
+           (_, _, Acc) -> Acc
+        end, #{}, Graph#circuit_graph.nodes).
 
 %%====================================================================
 %% Output type derivation

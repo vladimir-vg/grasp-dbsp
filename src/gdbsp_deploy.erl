@@ -26,6 +26,7 @@
     {op, reference()} |
     {source, binary(), reference()} |
     {output, binary(), reference()} |
+    {empty, binary(), reference()} |
     {rec, binary(), non_neg_integer(), reference()} |
     {rec_output, binary(), non_neg_integer(), reference()}.
 
@@ -92,6 +93,7 @@ assign_refs(Nodes) ->
 -spec node_ref(operator()) -> ref().
 node_ref({source, Name})           -> {source, Name, make_ref()};
 node_ref({output, Name})           -> {output, Name, make_ref()};
+node_ref({empty, Name})            -> {empty, Name, make_ref()};
 node_ref({rec, Name, SccId})       -> {rec, Name, SccId, make_ref()};
 node_ref({rec_output, Name, SccId}) -> {rec_output, Name, SccId, make_ref()};
 node_ref(_Op)                      -> {op, make_ref()}.
@@ -156,6 +158,12 @@ config_for({rec, Name, SccId}, _Inputs, _Ref, Meta, _Overrides, _ValueMod) ->
            meta => #{has_body_out => HasBodyOut}}};
 config_for({rec_output, _, _}, _Inputs, _Ref, _Meta, _Overrides, _ValueMod) ->
     skip;
+config_for({empty, _}, _Inputs, _Ref, Meta, _Overrides, _ValueMod) ->
+    case maps:get(scc_id, Meta, undefined) of
+        undefined -> skip;
+        SccId -> {ok, #{mod => gdbsp_op_empty, args => #{}, labels => [],
+                        scc_id => SccId}}
+    end;
 config_for(Op, Inputs, _Ref, Meta, Overrides, ValueMod) ->
     Atom = gdbsp_circuit:op_atom(Op),
     case gdbsp_operator_spec:lookup(Atom, Overrides) of

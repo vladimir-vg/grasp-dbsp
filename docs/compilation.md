@@ -71,6 +71,11 @@ inputs, and the same non-input arguments receive the same hash and are
 merged into a single lowered node. This eliminates redundant computation
 in the final circuit graph.
 
+`empty()` nodes are the exception: each occurrence is assigned a fresh,
+monotonic identifier (`empty_N`) rather than a content hash, because two
+`empty()` streams can sit in different clock domains (top-level vs.
+fixpoint-body) and must remain distinct.
+
 ### 3.2 Fixpoint Expansion
 
 Fixpoint calls (`fixpoint(Name(kw: args...))`) are classified as either
@@ -137,6 +142,7 @@ The result is a directed graph of operators — the **circuit graph**.
 | `flat_map(node, fn)` | 1 node: `flat_map` with expression tree from function registry |
 | `project(node, [...])` | 1 node: `project` with keep-field list |
 | `order(node, by: ..., rank_column: ..., row_number_column: ...)` | 1 node: `order` with the sort spec |
+| `empty()` | 1 node: `empty` — nullary, zero rows, echoes barriers |
 
 ### 5.2 Fixpoint Construction
 
@@ -228,6 +234,7 @@ Two orthogonal properties describe an operator, and they must not be conflated:
 | `project` | yes | no | no |
 | `map_index` | yes | no | no |
 | `rec`, `rec_output` | yes | no | no |
+| `empty` | yes | no | no |
 | `join` | no | yes | yes |
 | `distinct` | no | yes | yes |
 | `aggregate` | no | yes | yes |
@@ -301,6 +308,7 @@ Each circuit node gets a ref used in wiring and configs:
 |-----------|-----|
 | Source node | `{source, TableName, Ref}` |
 | Output node | `{output, OutputName, Ref}` |
+| Empty node | `{empty, Name, Ref}` |
 | Internal operator | `{op, Ref}` |
 | Rec operator | `{rec, Name, SccId, Ref}` |
 | RecOutput operator | `{rec_output, Name, SccId, Ref}` |
@@ -311,6 +319,13 @@ Source and output nodes are not assigned runtime operators in the configs.
 They are managed externally by the runtime:
 - Source nodes receive data from external input processes
 - Output nodes emit data to external collectors or subscribers
+
+Top-level `empty()` nodes (no `scc_id`) are likewise managed externally: the
+runtime spawns an `gdbsp_op_empty` feeder per node and drives it with
+`epoch_done` alongside the sources. Body-internal `empty()` nodes (inside a
+fixpoint circuit) carry an `scc_id`, are spawned by the circuit process, and
+are attached to the SCC's rec `body_input_pids` so they echo the iteration
+barriers in lockstep with the body operators.
 
 ### 7.4 Value Module
 
