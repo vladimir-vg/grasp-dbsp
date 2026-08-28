@@ -19,6 +19,8 @@
          inline_fn_map/1,
          inline_plus_in_distinct/1, map_output_schema_from_fn_return/1,
          join_renamed_key/1,
+         map_row_type_preserves_concrete_type/1,
+         join_merged_fields_preserve_concrete_types/1,
          stdlib_parse_ok/1, stdlib_has_arithmetic/1,
          stdlib_typespec_correct/1, stdlib_agg_overloads/1,
          stdlib_missing_file/1, stdlib_operator_tvar/1]).
@@ -32,6 +34,8 @@ all() ->
      delay_inputs_not_empty_for_chain, delay_ordering_independent,
      inline_fn_map,
      inline_plus_in_distinct, map_output_schema_from_fn_return, join_renamed_key,
+     map_row_type_preserves_concrete_type,
+     join_merged_fields_preserve_concrete_types,
      stdlib_parse_ok, stdlib_has_arithmetic,
      stdlib_typespec_correct, stdlib_agg_overloads,
      stdlib_missing_file, stdlib_operator_tvar].
@@ -312,6 +316,38 @@ join_renamed_key(_Config) ->
                                     element(1, N#circuit_node.op) =:= join]),
     {join, JoinSpec} = JoinNode#circuit_node.op,
     [<<"key">>] = maps:get(shared_vars, JoinSpec),
+    ok.
+
+%%--------------------------------------------------------------------
+%% Bug A — compile-graph preserves inferred concrete types
+%%--------------------------------------------------------------------
+
+map_row_type_preserves_concrete_type(_Config) ->
+    {ok, Prog} = parse_prog(
+        "src := source(\"t\")\n"
+        "src :: stream(struct(\"f\": i64, \"t\": i64))\n"
+        "id := function((row) -> row)\n"
+        "id :: function((struct(\"f\": i64, \"t\": i64)) -> struct(\"f\": i64, \"t\": i64))\n"
+        "mapped := map(src, id)\n"),
+    {ok, G} = gdbsp_compile:compile(Prog, #{incrementalize => false}),
+    MapNode = hd([N || {_, N} <- maps:to_list(G#circuit_graph.nodes),
+                       element(1, N#circuit_node.op) =:= map]),
+    {map, #{row_type := {struct, #{<<"f">> := i64, <<"t">> := i64}, _}}} =
+        MapNode#circuit_node.op,
+    ok.
+
+join_merged_fields_preserve_concrete_types(_Config) ->
+    {ok, Prog} = parse_prog(
+        "left := source(\"L\")\n"
+        "left :: stream(struct(\"k\": i64, \"a\": i64))\n"
+        "right := source(\"R\")\n"
+        "right :: stream(struct(\"k\": i64, \"b\": i64))\n"
+        "joined := join(left, right, on: [\"k\"])\n"),
+    {ok, G} = gdbsp_compile:compile(Prog, #{incrementalize => false}),
+    {_, JoinNode} = hd([{Id, N} || {Id, N} <- maps:to_list(G#circuit_graph.nodes),
+                                    element(1, N#circuit_node.op) =:= join]),
+    {join, #{merged_fields := #{<<"k">> := i64, <<"a">> := i64, <<"b">> := i64}}} =
+        JoinNode#circuit_node.op,
     ok.
 
 %%--------------------------------------------------------------------

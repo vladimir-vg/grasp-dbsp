@@ -1,0 +1,33 @@
+- source: |
+    circuit tc_body(edge: e, path: p):
+        path_ready := map(p, path_for_join)
+        edge_ready := map(e, edge_for_join)
+        joined := join(edge_ready, path_ready, on: ["key"])
+        joined_proj := project(joined, ["f", "t"])
+        path := distinct(plus(e, joined_proj))
+
+    edge_src := source("edge")
+    edge_src :: stream(struct("f": integer, "t": integer))
+
+    edge_for_join :: function((struct("f": integer, "t": integer)) -> struct("key": integer, "f": integer))
+    edge_for_join := function((row) -> struct("key": row.t, "f": row.f))
+    path_for_join :: function((struct("f": integer, "t": integer)) -> struct("key": integer, "t": integer))
+    path_for_join := function((row) -> struct("key": row.f, "t": row.t))
+
+    fp := fixpoint(tc_body(edge: edge_src, path: edge_src))
+
+    cnt_fn :: aggregate_function((struct("f": integer, "t": integer)) -> struct("cnt": integer))
+    cnt_fn := function((row) -> struct("cnt": std.agg_count()))
+    reach_counts := aggregate(fp.path, cnt_fn, by: ["f"])
+
+  input:
+    - edge:
+        - [1, {f: "1", t: "2"}]
+        - [1, {f: "2", t: "3"}]
+        - [1, {f: "3", t: "4"}]
+
+  expected:
+    - reach_counts:
+        - [1, {f: "1", cnt: "3"}]
+        - [1, {f: "2", cnt: "2"}]
+        - [1, {f: "3", cnt: "1"}]
