@@ -33,6 +33,9 @@
     fixpoint_selfref_metadata/1,
     fixpoint_selfref_distinct_valid/1,
     fixpoint_selfref_distinct_error/1,
+    fixpoint_selfref_inline_plus_expanded/1,
+    fixpoint_selfref_inline_map_expanded/1,
+    inline_operator_unknown_error/1,
     fixpoint_forbidden_operator/1,
     fixpoint_trivial_no_fixpoint_info/1,
     member_access_resolved/1,
@@ -63,6 +66,9 @@ all() ->
      fixpoint_selfref_metadata,
      fixpoint_selfref_distinct_valid,
      fixpoint_selfref_distinct_error,
+     fixpoint_selfref_inline_plus_expanded,
+     fixpoint_selfref_inline_map_expanded,
+     inline_operator_unknown_error,
      fixpoint_forbidden_operator,
      fixpoint_trivial_no_fixpoint_info,
       member_access_resolved,
@@ -386,6 +392,49 @@ fixpoint_selfref_distinct_error(_Config) ->
           "out := fp.result\n",
     {error, {fixpoint_error, {_Line, Msg}}} = lower(Src),
     true = (binary:match(Msg, <<"distinct">>) =/= nomatch),
+    ok.
+
+fixpoint_selfref_inline_plus_expanded(_Config) ->
+    Src = "circuit acc(base: input, result: r):\n"
+          "    result := distinct(plus(input, r))\n"
+          "s := source(\"data\")\n"
+          "s :: stream(struct(\"v\": i64))\n"
+          "fp := fixpoint(acc(base: s, result: s))\n"
+          "out := fp.result\n",
+    {ok, LG} = lower(Src),
+    %% The distinct node must consume a plus node (not zero inputs).
+    DistinctNode = hd([N || {_, N} <- maps:to_list(LG#lowered_graph.nodes),
+                              lnode_op(N) =:= distinct]),
+    [PlusInput] = lnode_inputs(DistinctNode),
+    PlusNode = maps:get(PlusInput, LG#lowered_graph.nodes),
+    plus = lnode_op(PlusNode),
+    2 = length(lnode_inputs(PlusNode)),
+    ok.
+
+fixpoint_selfref_inline_map_expanded(_Config) ->
+    Src = "circuit acc(base: input, result: r):\n"
+          "    result := distinct(map(r, fn))\n"
+          "s := source(\"data\")\n"
+          "s :: stream(struct(\"v\": i64))\n"
+          "fp := fixpoint(acc(base: s, result: s))\n"
+          "out := fp.result\n",
+    {ok, LG} = lower(Src),
+    %% Inline `map` (a non-plus operator) must also expand into a node.
+    DistinctNode = hd([N || {_, N} <- maps:to_list(LG#lowered_graph.nodes),
+                              lnode_op(N) =:= distinct]),
+    [MapInput] = lnode_inputs(DistinctNode),
+    map = lnode_op(maps:get(MapInput, LG#lowered_graph.nodes)),
+    ok.
+
+inline_operator_unknown_error(_Config) ->
+    Src = "circuit bad(base: input, result: r):\n"
+          "    result := distinct(foo(input, r))\n"
+          "s := source(\"data\")\n"
+          "s :: stream(struct(\"v\": i64))\n"
+          "fp := fixpoint(bad(base: s, result: s))\n"
+          "out := fp.result\n",
+    {error, {fixpoint_error, {_Line, Msg}}} = lower(Src),
+    true = (binary:match(Msg, <<"unknown operator">>) =/= nomatch),
     ok.
 
 fixpoint_forbidden_operator(_Config) ->

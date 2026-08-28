@@ -17,6 +17,8 @@
          missing_fn/1, duplicate_node/1,
          delay_inputs_not_empty_for_chain/1, delay_ordering_independent/1,
          inline_fn_map/1,
+         inline_plus_in_distinct/1, map_output_schema_from_fn_return/1,
+         join_renamed_key/1,
          stdlib_parse_ok/1, stdlib_has_arithmetic/1,
          stdlib_typespec_correct/1, stdlib_agg_overloads/1,
          stdlib_missing_file/1, stdlib_operator_tvar/1]).
@@ -29,6 +31,7 @@ all() ->
      missing_fn, duplicate_node,
      delay_inputs_not_empty_for_chain, delay_ordering_independent,
      inline_fn_map,
+     inline_plus_in_distinct, map_output_schema_from_fn_return, join_renamed_key,
      stdlib_parse_ok, stdlib_has_arithmetic,
      stdlib_typespec_correct, stdlib_agg_overloads,
      stdlib_missing_file, stdlib_operator_tvar].
@@ -242,6 +245,73 @@ inline_fn_map(_Config) ->
     MapNode = hd([N || {_, N} <- Nodes, element(1, N#circuit_node.op) =:= map]),
     %% Identity function body is just the arg reference
     {map, #{expr := {arg, <<"row">>}}} = MapNode#circuit_node.op,
+    ok.
+
+%%--------------------------------------------------------------------
+%% Inline operator expression tests (Bug A + Bug B)
+%%--------------------------------------------------------------------
+
+inline_plus_in_distinct(_Config) ->
+    {ok, Prog} = parse_prog(
+        "a := source(\"A\")\n"
+        "a :: stream(struct(\"x\": i64))\n"
+        "b := source(\"B\")\n"
+        "b :: stream(struct(\"x\": i64))\n"
+        "r := distinct(plus(a, b))\n"
+    ),
+    {ok, G} = gdbsp_compile:compile(Prog, #{incrementalize => false}),
+    Nodes = G#circuit_graph.nodes,
+    DistinctNode = hd([N || {_, N} <- maps:to_list(Nodes),
+                              element(1, N#circuit_node.op) =:= distinct]),
+    [PlusId] = DistinctNode#circuit_node.inputs,
+    PlusNode = maps:get(PlusId, Nodes),
+    {plus} = PlusNode#circuit_node.op,
+    2 = length(PlusNode#circuit_node.inputs),
+    ok.
+
+map_output_schema_from_fn_return(_Config) ->
+    {ok, Prog} = parse_prog(
+        "src := source(\"t\")\n"
+        "src :: stream(struct(\"f\": i64, \"t\": i64))\n"
+        "rename :: function((struct(\"f\": i64, \"t\": i64)) -> struct(\"key\": i64, \"f\": i64))\n"
+        "rename := function((row) -> struct(\"key\": row.t, \"f\": row.f))\n"
+        "mapped := map(src, rename)\n"
+    ),
+    {ok, G} = gdbsp_compile:compile(Prog, #{incrementalize => false}),
+    Nodes = G#circuit_graph.nodes,
+    {MapId, _} = hd([{Id, N} || {Id, N} <- maps:to_list(Nodes),
+                                 element(1, N#circuit_node.op) =:= map]),
+    Schema = maps:get(MapId, G#circuit_graph.schemas),
+    [<<"f">>, <<"key">>] = lists:sort(Schema),
+    ok.
+
+join_renamed_key(_Config) ->
+    {ok, Prog} = parse_prog(
+        "left := source(\"L\")\n"
+        "left :: stream(struct(\"k\": i64, \"a\": i64))\n"
+        "right := source(\"R\")\n"
+        "right :: stream(struct(\"k\": i64, \"b\": i64))\n"
+        "to_key_l :: function((struct(\"k\": i64, \"a\": i64)) -> struct(\"key\": i64, \"a\": i64))\n"
+        "to_key_l := function((row) -> struct(\"key\": row.k, \"a\": row.a))\n"
+        "to_key_r :: function((struct(\"k\": i64, \"b\": i64)) -> struct(\"key\": i64, \"b\": i64))\n"
+        "to_key_r := function((row) -> struct(\"key\": row.k, \"b\": row.b))\n"
+        "l := map(left, to_key_l)\n"
+        "r := map(right, to_key_r)\n"
+        "joined := join(l, r, on: [\"key\"])\n"
+    ),
+    {ok, G} = gdbsp_compile:compile(Prog, #{incrementalize => false}),
+    Nodes = G#circuit_graph.nodes,
+    IdxNodes = [N || {_, N} <- maps:to_list(Nodes),
+                       element(1, N#circuit_node.op) =:= map_index],
+    2 = length(IdxNodes),
+    lists:foreach(fun(N) ->
+        {map_index, Spec} = N#circuit_node.op,
+        [<<"key">>] = maps:get(key_vars, Spec)
+    end, IdxNodes),
+    {_, JoinNode} = hd([{Id, N} || {Id, N} <- maps:to_list(Nodes),
+                                    element(1, N#circuit_node.op) =:= join]),
+    {join, JoinSpec} = JoinNode#circuit_node.op,
+    [<<"key">>] = maps:get(shared_vars, JoinSpec),
     ok.
 
 %%--------------------------------------------------------------------

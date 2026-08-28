@@ -161,7 +161,7 @@ build_join_graph_lowered(G, Args, InputIds) ->
     LSchema = get_schema(G, LId),
     RSchema = get_schema(G, RId),
     {on, OnFields} = get_kw_arg(Args, on, []),
-    Shared = lists:filter(fun(F) -> lists:member(F, RSchema) end, LSchema),
+    Shared = OnFields,
     LeftVal = LSchema -- Shared,
     RightVal = RSchema -- Shared,
     LType = get_input_row_type([LId], G),
@@ -578,7 +578,11 @@ compute_schema_lowered(Op, Args, InputIds, TS, G) ->
             inherit_schema(InputIds, G) ++ [RankCol, RowNumCol];
         distinct -> inherit_schema(InputIds, G);
         plus     -> inherit_schema(InputIds, G);
-        map      -> inherit_schema(InputIds, G);
+        map      ->
+            case TS of
+                {struct, Fields, _} -> maps:keys(Fields);
+                _ -> inherit_schema(InputIds, G)
+            end;
         filter   -> inherit_schema(InputIds, G);
         neg      -> inherit_schema(InputIds, G);
         integrate   -> inherit_schema(InputIds, G);

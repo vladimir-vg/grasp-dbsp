@@ -20,6 +20,14 @@
 
 -define(FORBIDDEN_IN_FIXPOINT, [aggregate, order, neg, antijoin]).
 
+%% Operators that may appear as inline call expressions in node args,
+%% e.g. `distinct(plus(a, b))` or `distinct(map(x, fn))`.
+-define(INLINE_OPERATORS, [<<"source">>, <<"integrate">>, <<"differentiate">>,
+                           <<"delay">>, <<"distinct">>, <<"plus">>, <<"neg">>,
+                           <<"map">>, <<"filter">>, <<"flat_map">>,
+                           <<"project">>, <<"join">>, <<"aggregate">>,
+                           <<"order">>, <<"antijoin">>]).
+
 %%====================================================================
 %% Public API
 %%====================================================================
@@ -206,8 +214,8 @@ lower_nodes(NameTable, Order, CircuitMap, ModuleEnv, LG0, ExpansionStack) ->
 lower_regular_node(Name, Info, ModuleEnv, LG) ->
     #node_info{op = Op, args = Args, typespec = TS, line = Line} = Info,
     Args2 = resolve_module_members(Args, ModuleEnv, Line),
-    Inputs = resolve_inputs(Args2, LG#lowered_graph.tag_map),
-    {NewLG, _NodeId} = add_node(Op, Inputs, Args2, [Name], TS, LG),
+    {LG1, Inputs} = resolve_inputs(Args2, LG#lowered_graph.tag_map, LG),
+    {NewLG, _NodeId} = add_node(Op, Inputs, Args2, [Name], TS, LG1),
     NewLG.
 
 %%--------------------------------------------------------------------
@@ -342,9 +350,10 @@ expand_trivial(FpName, BodyNodes, Params, KwMap, CircuitMap,
                 _ ->
                     Tag = <<Prefix/binary, BodyName/binary>>,
                     SubstitutedArgs = substitute_params(BodyArgs, InternalToArg),
-                    Inputs = resolve_inputs(SubstitutedArgs, LG#lowered_graph.tag_map),
+                    {LG1, Inputs} = resolve_inputs(SubstitutedArgs,
+                                                   LG#lowered_graph.tag_map, LG),
                     {NewLG, _NodeId} = add_node(BodyOp, Inputs, SubstitutedArgs,
-                                                [BodyName, Tag], undefined, LG),
+                                                [BodyName, Tag], undefined, LG1),
                     NewLG
             end
         end,
@@ -390,8 +399,10 @@ expand_selfref(_FpName, NodeName, CircuitName, Params, BodyNodes,
                     {NewLG, BIds#{BN => NodeId}};
                 _ ->
                     SubstitutedArgs = substitute_params(BArgs, InternalNameMap),
-                    Inputs = resolve_inputs(SubstitutedArgs, LG#lowered_graph.tag_map),
-                    {LG3, NodeId} = add_node(BOp, Inputs, SubstitutedArgs, [BN], undefined, LG),
+                    {LG2, Inputs} = resolve_inputs(SubstitutedArgs,
+                                                   LG#lowered_graph.tag_map, LG),
+                    {LG3, NodeId} = add_node(BOp, Inputs, SubstitutedArgs,
+                                             [BN], undefined, LG2),
                     {LG3, BIds#{BN => NodeId}}
             end
         end,
@@ -614,9 +625,9 @@ expand_body_nodes([#gdbsp_node_def{name = BodyName, op = BodyOp,
             expand_fixpoint(Info#node_info.name, Info, CircuitMap,
                             LG0, #{}, Stack);
         _ ->
-            Inputs = resolve_inputs(SubstArgs, LG0#lowered_graph.tag_map),
+            {LG1a, Inputs} = resolve_inputs(SubstArgs, LG0#lowered_graph.tag_map, LG0),
             {NewLG, _NodeId} = add_node(BodyOp, Inputs, SubstArgs,
-                                        [BodyName, Tag], undefined, LG0),
+                                        [BodyName, Tag], undefined, LG1a),
             NewLG
     end,
     expand_body_nodes(Rest, InternalToArg, Prefix, Stack,
@@ -779,32 +790,50 @@ fixpoint_input_name(FpHmac, ParamBin) ->
 %% Input resolution
 %%====================================================================
 
-resolve_inputs(Args, TagMap) ->
-    lists:filtermap(fun
-        ({var, Name}) ->
-            case maps:find(Name, TagMap) of
-                {ok, Id} -> {true, Id};
-                error -> false
-            end;
-        ({member_access, Var, Field}) ->
-            Tag = <<Var/binary, ".", Field/binary>>,
-            case maps:find(Tag, TagMap) of
-                {ok, Id} -> {true, Id};
-                error -> false
-            end;
-        ({_Kw, {var, Name}}) ->
-            case maps:find(Name, TagMap) of
-                {ok, Id} -> {true, Id};
-                error -> false
-            end;
-        ({_Kw, {member_access, Var, Field}}) ->
-            Tag = <<Var/binary, ".", Field/binary>>,
-            case maps:find(Tag, TagMap) of
-                {ok, Id} -> {true, Id};
-                error -> false
-            end;
-        (_) -> false
-    end, Args).
+resolve_inputs(Args, TagMap, LG) ->
+    {Ids, LG2} = lists:mapfoldl(
+        fun(Arg, LGAcc) -> resolve_arg(Arg, TagMap, LGAcc) end,
+        LG, Args),
+    {LG2, [Id || Id <- Ids, Id =/= none]}.
+
+resolve_arg({var, Name}, TagMap, LG) ->
+    {resolve_tag(Name, TagMap), LG};
+resolve_arg({member_access, Var, Field}, TagMap, LG) ->
+    Tag = <<Var/binary, ".", Field/binary>>,
+    {resolve_tag(Tag, TagMap), LG};
+resolve_arg({_Kw, {var, Name}}, TagMap, LG) ->
+    {resolve_tag(Name, TagMap), LG};
+resolve_arg({_Kw, {member_access, Var, Field}}, TagMap, LG) ->
+    Tag = <<Var/binary, ".", Field/binary>>,
+    {resolve_tag(Tag, TagMap), LG};
+resolve_arg({expr, {call, OpBin, CallArgs}}, TagMap, LG) ->
+    expand_inline_call(OpBin, CallArgs, TagMap, LG);
+resolve_arg(_, _TagMap, LG) ->
+    {none, LG}.
+
+resolve_tag(Name, TagMap) ->
+    case maps:find(Name, TagMap) of
+        {ok, Id} -> Id;
+        error -> none
+    end.
+
+%% Lower an inline operator call `OpBin(CallArgs...)` into an anonymous
+%% node, returning the node id. Recursively expands nested inline calls.
+expand_inline_call(OpBin, CallArgs, TagMap, LG) ->
+    Op = inline_op_atom(OpBin),
+    {LG2, InputIds} = resolve_inputs(CallArgs, TagMap, LG),
+    {LG3, NodeId} = add_node(Op, InputIds, CallArgs, [], undefined, LG2),
+    {NodeId, LG3}.
+
+inline_op_atom(OpBin) ->
+    case lists:member(OpBin, ?INLINE_OPERATORS) of
+        true ->
+            binary_to_existing_atom(OpBin, utf8);
+        false ->
+            throw_lower_error(-1, iolist_to_binary(
+                io_lib:format("unknown operator in inline expression: ~s",
+                              [OpBin])))
+    end.
 
 nonnode_args_for_hash(Args, TagMap) ->
     lists:filter(fun
@@ -913,6 +942,8 @@ substitute_params(Args, SubMap) ->
                 {ok, Replacement} -> {Kw, Replacement};
                 error -> {Kw, {member_access, Var, Field}}
             end;
+           ({expr, {call, Name, CallArgs}}) ->
+            {expr, {call, Name, substitute_params(CallArgs, SubMap)}};
            (Other) -> Other
         end,
         Args).
@@ -928,6 +959,8 @@ substitute_param_val({member_access, Var, Field}, SubMap) ->
         {ok, Replacement} -> Replacement;
         error -> {member_access, Var, Field}
     end;
+substitute_param_val({expr, {call, Name, CallArgs}}, SubMap) ->
+    {expr, {call, Name, substitute_params(CallArgs, SubMap)}};
 substitute_param_val(Other, _SubMap) -> Other.
 
 %%====================================================================
