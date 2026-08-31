@@ -1,0 +1,4 @@
+{"dept_id": "integer", "dept_name": "string", "max_salary": "integer", "emp_count": "integer"}
+{"dept_id": "10", "dept_name": "Engineering", "max_salary": "200000", "emp_count": "4"}
+{"dept_id": "20", "dept_name": "Sales", "max_salary": "100000", "emp_count": "2"}
+{"dept_id": "30", "dept_name": "HR", "max_salary": "80000", "emp_count": "2"}

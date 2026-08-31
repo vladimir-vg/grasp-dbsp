@@ -1,0 +1,4 @@
+{"dept_id": "integer", "dept_name": "string"}
+{"dept_id": "10", "dept_name": "Engineering"}
+{"dept_id": "20", "dept_name": "Sales"}
+{"dept_id": "30", "dept_name": "HR"}

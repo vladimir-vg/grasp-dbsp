@@ -1,0 +1,51 @@
+emp := source("employees")
+emp :: stream(struct("emp_id": integer, "name": string("UTF-8"), "dept_id": integer, "manager_id": integer, "salary": integer))
+
+dept := source("departments")
+dept :: stream(struct("dept_id": integer, "dept_name": string("UTF-8")))
+
+has_mgr :: function((struct("emp_id": integer, "name": string("UTF-8"), "dept_id": integer, "manager_id": integer, "salary": integer)) -> enum("false","true"))
+has_mgr := function((row) -> row.manager_id != 0)
+
+to_edge :: function((struct("emp_id": integer, "name": string("UTF-8"), "dept_id": integer, "manager_id": integer, "salary": integer)) -> struct("sub": integer, "mgr": integer))
+to_edge := function((row) -> struct("sub": row.emp_id, "mgr": row.manager_id))
+
+with_mgr := filter(emp, has_mgr)
+direct_reports := map(with_mgr, to_edge)
+
+circuit chain_body(direct: e, chain: p):
+    p_ready := map(p, p_for_join)
+    e_ready := map(e, e_for_join)
+    joined := join(e_ready, p_ready, on: ["key"])
+    joined_proj := project(joined, ["sub", "mgr"])
+    chain := distinct(plus(e, joined_proj))
+
+e_for_join :: function((struct("sub": integer, "mgr": integer)) -> struct("key": integer, "sub": integer))
+e_for_join := function((row) -> struct("key": row.mgr, "sub": row.sub))
+
+p_for_join :: function((struct("sub": integer, "mgr": integer)) -> struct("key": integer, "mgr": integer))
+p_for_join := function((row) -> struct("key": row.sub, "mgr": row.mgr))
+
+fp := fixpoint(chain_body(direct: direct_reports, chain: empty()))
+report_chain_set := fp.chain
+
+emp_dept := join(emp, dept, on: ["dept_id"])
+
+stats_fn :: aggregate_function((struct("dept_id": integer, "emp_id": integer, "name": string("UTF-8"), "manager_id": integer, "salary": integer, "dept_name": string("UTF-8"))) -> struct("max_salary": integer, "emp_count": integer))
+stats_fn := function((row) -> struct("max_salary": std.agg_max_integer(row.salary), "emp_count": std.agg_count()))
+
+dept_stats_set := aggregate(emp_dept, stats_fn, by: ["dept_id", "dept_name"])
+
+max_fn :: aggregate_function((struct("emp_id": integer, "name": string("UTF-8"), "dept_id": integer, "manager_id": integer, "salary": integer)) -> struct("max_salary": integer))
+max_fn := function((row) -> struct("max_salary": std.agg_max_integer(row.salary)))
+
+dept_max := aggregate(emp, max_fn, by: ["dept_id"])
+
+with_max := join(emp, dept_max, on: ["dept_id"])
+
+is_max :: function((struct("dept_id": integer, "emp_id": integer, "name": string("UTF-8"), "manager_id": integer, "salary": integer, "max_salary": integer)) -> enum("false","true"))
+is_max := function((row) -> row.salary = row.max_salary)
+
+top := filter(with_max, is_max)
+
+top_earners_set := project(top, ["emp_id", "name", "salary", "dept_id"])

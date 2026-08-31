@@ -1,0 +1,4 @@
+{"emp_id": "integer", "name": "string", "salary": "integer", "dept_id": "integer"}
+{"emp_id": "1", "name": "Alice", "salary": "200000", "dept_id": "10"}
+{"emp_id": "5", "name": "Eve", "salary": "100000", "dept_id": "20"}
+{"emp_id": "7", "name": "Grace", "salary": "80000", "dept_id": "30"}

@@ -1,0 +1,9 @@
+{"emp_id": "integer", "name": "string", "dept_id": "integer", "manager_id": "integer", "salary": "integer"}
+{"emp_id": "1", "name": "Alice", "dept_id": "10", "manager_id": "0", "salary": "200000"}
+{"emp_id": "2", "name": "Bob", "dept_id": "10", "manager_id": "1", "salary": "120000"}
+{"emp_id": "3", "name": "Carol", "dept_id": "10", "manager_id": "2", "salary": "90000"}
+{"emp_id": "4", "name": "Dave", "dept_id": "10", "manager_id": "2", "salary": "90000"}
+{"emp_id": "5", "name": "Eve", "dept_id": "20", "manager_id": "1", "salary": "100000"}
+{"emp_id": "6", "name": "Frank", "dept_id": "20", "manager_id": "5", "salary": "60000"}
+{"emp_id": "7", "name": "Grace", "dept_id": "30", "manager_id": "1", "salary": "80000"}
+{"emp_id": "8", "name": "Heidi", "dept_id": "30", "manager_id": "7", "salary": "50000"}
