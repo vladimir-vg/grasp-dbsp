@@ -1,0 +1,6 @@
+{"customer_id": "i64", "customer_name": "string", "country": "string"}
+{"customer_id": "1", "customer_name": "Alice", "country": "US"}
+{"customer_id": "2", "customer_name": "Bob", "country": "CA"}
+{"customer_id": "3", "customer_name": "Carol", "country": "US"}
+{"customer_id": "4", "customer_name": "Dave", "country": "UK"}
+{"customer_id": "5", "customer_name": "Eve", "country": "US"}

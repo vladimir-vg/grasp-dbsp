@@ -1,0 +1,5 @@
+{"product_id": "i64", "product_name": "string", "price_cents": "i64"}
+{"product_id": "101", "product_name": "Widget", "price_cents": "1000"}
+{"product_id": "102", "product_name": "Gadget", "price_cents": "2500"}
+{"product_id": "103", "product_name": "Gizmo", "price_cents": "500"}
+{"product_id": "104", "product_name": "Doohickey", "price_cents": "150"}

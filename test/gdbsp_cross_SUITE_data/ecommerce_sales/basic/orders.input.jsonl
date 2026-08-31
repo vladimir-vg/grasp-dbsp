@@ -1,0 +1,11 @@
+{"order_id": "i64", "customer_id": "i64", "product_id": "i64", "qty": "i64"}
+{"order_id": "1", "customer_id": "1", "product_id": "101", "qty": "2"}
+{"order_id": "2", "customer_id": "1", "product_id": "102", "qty": "1"}
+{"order_id": "3", "customer_id": "2", "product_id": "101", "qty": "1"}
+{"order_id": "4", "customer_id": "2", "product_id": "103", "qty": "4"}
+{"order_id": "5", "customer_id": "3", "product_id": "102", "qty": "2"}
+{"order_id": "6", "customer_id": "4", "product_id": "104", "qty": "10"}
+{"order_id": "7", "customer_id": "1", "product_id": "103", "qty": "2"}
+{"order_id": "8", "customer_id": "3", "product_id": "104", "qty": "4"}
+{"order_id": "9", "customer_id": "2", "product_id": "102", "qty": "1"}
+{"order_id": "10", "customer_id": "3", "product_id": "101", "qty": "1"}

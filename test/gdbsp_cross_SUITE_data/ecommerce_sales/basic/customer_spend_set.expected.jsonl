@@ -1,0 +1,5 @@
+{"customer_id": "i64", "customer_name": "string", "total_spend": "i64"}
+{"customer_id": "1", "customer_name": "Alice", "total_spend": "5500"}
+{"customer_id": "2", "customer_name": "Bob", "total_spend": "5500"}
+{"customer_id": "3", "customer_name": "Carol", "total_spend": "6600"}
+{"customer_id": "4", "customer_name": "Dave", "total_spend": "1500"}

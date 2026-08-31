@@ -1,0 +1,24 @@
+customers := source("customers")
+customers :: stream(struct("customer_id": i64, "customer_name": string("UTF-8"), "country": string("UTF-8")))
+
+products := source("products")
+products :: stream(struct("product_id": i64, "product_name": string("UTF-8"), "price_cents": i64))
+
+orders := source("orders")
+orders :: stream(struct("order_id": i64, "customer_id": i64, "product_id": i64, "qty": i64))
+
+lines := join(orders, products, on: ["product_id"])
+
+spend_fn :: aggregate_function((struct("product_id": i64, "order_id": i64, "customer_id": i64, "qty": i64, "product_name": string("UTF-8"), "price_cents": i64)) -> struct("total_spend": i64))
+spend_fn := function((row) -> struct("total_spend": std.agg_sum_i64(row.qty * row.price_cents)))
+
+per_customer := aggregate(lines, spend_fn, by: ["customer_id"])
+
+with_names := join(per_customer, customers, on: ["customer_id"])
+
+customer_spend_set := project(with_names, ["customer_id", "customer_name", "total_spend"])
+
+top_customers_seq := order(customer_spend_set, by: [["total_spend", "desc"], ["customer_id", "asc"]], rank_column: "rank", row_number_column: "row_number")
+
+excluded_customers := antijoin(customers, orders, on: ["customer_id"])
+dormant_customers_set := project(excluded_customers, ["customer_id", "customer_name"])
