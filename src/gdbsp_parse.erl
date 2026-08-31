@@ -258,6 +258,17 @@ collect_inline_call_args(Tokens, Acc) ->
             case Toks of
                 [{',', _} | Rest] ->
                     collect_inline_call_args(Rest, Acc);
+                [{'[', _} | Rest] ->
+                    {Items, Rest2} = collect_bracket_list(Rest, []),
+                    collect_inline_call_args(Rest2, [Items | Acc]);
+                [{identifier, _, KwName}, {':', _} | Rest] ->
+                    {KwVal, Rest2} = parse_kw_arg(Rest),
+                    collect_inline_call_args(Rest2,
+                        [{binary_to_atom(KwName, utf8), KwVal} | Acc]);
+                [{identifier, _, VarName}, {'(', _} | Rest] ->
+                    {CallArgs, Rest2} = collect_inline_call_args(Rest, []),
+                    collect_inline_call_args(Rest2,
+                        [{expr, {call, VarName, CallArgs}} | Acc]);
                 [{identifier, _, VarName}, {dot, _}, {identifier, _, F} | Rest] ->
                     collect_inline_call_args(Rest,
                         [{member_access, VarName, F} | Acc]);

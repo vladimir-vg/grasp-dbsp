@@ -184,14 +184,25 @@ b2a(B) -> binary_to_atom(B, utf8).
 
 norm_args([{Key, Items} | Rest]) when is_list(Items) ->
     [#{Key => [norm_arg_val(I) || I <- Items]} | norm_args(Rest)];
+norm_args([Items | Rest]) when is_list(Items) ->
+    [norm_bracket(Items) | norm_args(Rest)];
 norm_args([{Key, Val} | Rest]) ->
     [#{Key => norm_arg_val(Val)} | norm_args(Rest)];
 norm_args([]) -> [].
 
 norm_arg_val({var, B}) when is_binary(B) -> #{var => binary_to_atom(B, utf8)};
 norm_arg_val({string, B}) when is_binary(B) -> binary_to_atom(B, utf8);
+norm_arg_val({call, Op, CallArgs}) ->
+    #{op => b2a(Op), args => norm_args(CallArgs)};
 norm_arg_val(B) when is_binary(B) -> binary_to_atom(B, utf8);
 norm_arg_val(V) -> V.
+
+norm_bracket(Items) ->
+    [norm_bracket_item(I) || I <- Items].
+
+norm_bracket_item(B) when is_binary(B) -> b2a(B);
+norm_bracket_item(L) when is_list(L) -> norm_bracket(L);
+norm_bracket_item(V) -> V.
 
 typespec_to_stmt(#gdbsp_typespec{name = N, spec = {type, T}, line = L}) ->
     #{name => b2a(N), type => norm_type(T), line => L};
@@ -335,6 +346,8 @@ normalize_expected_item([{K, _} | _] = PropList)
                         {line, Line}])
             end
     end;
+normalize_expected_item(Other) when is_list(Other) ->
+    normalize_expected(Other);
 normalize_expected_item(Other) ->
     to_type_val(Other).
 

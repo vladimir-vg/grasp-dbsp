@@ -1,0 +1,61 @@
+- description: "nested antijoin inside project (kwargs + positional bracket list)"
+  input: |
+    a := source("t")
+    b := source("u")
+    out := project(antijoin(a, b, on: ["k"]), ["x"])
+  expected:
+    - {name: a, op: source, args: [{string: t}], line: 1}
+    - {name: b, op: source, args: [{string: u}], line: 2}
+    - name: out
+      op: project
+      args:
+        - expr:
+            op: antijoin
+            args:
+              - {var: a}
+              - {var: b}
+              - {on: [k]}
+        - [x]
+      line: 3
+
+- description: "deeply nested calls"
+  input: |
+    a := source("t")
+    b := source("u")
+    out := distinct(plus(filter(a, f), b))
+  expected:
+    - {name: a, op: source, args: [{string: t}], line: 1}
+    - {name: b, op: source, args: [{string: u}], line: 2}
+    - name: out
+      op: distinct
+      args:
+        - expr:
+            op: plus
+            args:
+              - expr:
+                  op: filter
+                  args:
+                    - {var: a}
+                    - {var: f}
+              - {var: b}
+      line: 3
+
+- description: "nested join with on kwargs inside map"
+  input: |
+    a := source("t")
+    b := source("u")
+    out := map(join(a, b, on: ["k"]), fn)
+  expected:
+    - {name: a, op: source, args: [{string: t}], line: 1}
+    - {name: b, op: source, args: [{string: u}], line: 2}
+    - name: out
+      op: map
+      args:
+        - expr:
+            op: join
+            args:
+              - {var: a}
+              - {var: b}
+              - {on: [k]}
+        - {var: fn}
+      line: 3

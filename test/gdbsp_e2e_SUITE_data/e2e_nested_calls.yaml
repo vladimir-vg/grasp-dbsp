@@ -1,0 +1,20 @@
+- source: |
+    left_src := source("left")
+    left_src :: stream(struct("k": i64, "a": i64))
+    right_src := source("right")
+    right_src :: stream(struct("k": i64, "b": i64))
+    joined_proj := project(join(left_src, right_src, on: ["k"]), ["k", "a", "b"])
+    anti := project(antijoin(left_src, right_src, on: ["k"]), ["k", "a"])
+
+  input:
+    - left:
+        - [1, {k: "1", a: "100"}]
+        - [1, {k: "2", a: "200"}]
+      right:
+        - [1, {k: "1", b: "300"}]
+
+  expected:
+    - joined_proj:
+        - [1, {k: "1", a: "100", b: "300"}]
+      anti:
+        - [1, {k: "2", a: "200"}]

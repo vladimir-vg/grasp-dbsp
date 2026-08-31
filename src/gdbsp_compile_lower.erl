@@ -146,17 +146,28 @@ build_consumers(NameTable) ->
     end, #{}, maps:to_list(NameTable)).
 
 node_refs_from_args(Args, NameTable) ->
-    lists:filtermap(fun
-        ({var, Name}) when is_binary(Name) ->
-            case maps:is_key(Name, NameTable) of true -> {true, Name}; false -> false end;
-        ({member_access, Var, _Field}) when is_binary(Var) ->
-            case maps:is_key(Var, NameTable) of true -> {true, Var}; false -> false end;
-        ({_Kw, {var, Name}}) when is_binary(Name) ->
-            case maps:is_key(Name, NameTable) of true -> {true, Name}; false -> false end;
-        ({_Kw, {member_access, Var, _Field}}) ->
-            case maps:is_key(Var, NameTable) of true -> {true, Var}; false -> false end;
-        (_) -> false
-    end, Args).
+    lists:flatmap(fun(Arg) -> node_refs_from_arg(Arg, NameTable) end, Args).
+
+node_refs_from_arg({var, Name}, NameTable) when is_binary(Name) ->
+    ref_if_node(Name, NameTable);
+node_refs_from_arg({member_access, Var, _Field}, NameTable) when is_binary(Var) ->
+    ref_if_node(Var, NameTable);
+node_refs_from_arg({_Kw, {var, Name}}, NameTable) ->
+    node_refs_from_arg({var, Name}, NameTable);
+node_refs_from_arg({_Kw, {member_access, Var, Field}}, NameTable) ->
+    node_refs_from_arg({member_access, Var, Field}, NameTable);
+node_refs_from_arg({_Kw, {expr, {call, _, CallArgs}}}, NameTable) ->
+    node_refs_from_args(CallArgs, NameTable);
+node_refs_from_arg({expr, {call, _, CallArgs}}, NameTable) ->
+    node_refs_from_args(CallArgs, NameTable);
+node_refs_from_arg(_, _NameTable) ->
+    [].
+
+ref_if_node(Name, NameTable) ->
+    case maps:is_key(Name, NameTable) of
+        true -> [Name];
+        false -> []
+    end.
 
 topo_loop(Queue, InDeg, Consumers, NameTable, Acc) ->
     case queue:out(Queue) of
