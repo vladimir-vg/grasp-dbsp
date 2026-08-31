@@ -1,0 +1,3 @@
+{"follower_id": "integer", "followee_id": "integer"}
+{"follower_id": "1", "followee_id": "2"}
+{"follower_id": "3", "followee_id": "4"}

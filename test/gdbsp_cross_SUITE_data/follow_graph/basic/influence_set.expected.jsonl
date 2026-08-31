@@ -1,0 +1,6 @@
+{"src": "integer", "reach_count": "integer"}
+{"src": "1", "reach_count": "6"}
+{"src": "2", "reach_count": "6"}
+{"src": "3", "reach_count": "2"}
+{"src": "4", "reach_count": "2"}
+{"src": "5", "reach_count": "1"}

@@ -1,0 +1,45 @@
+users := source("users")
+users :: stream(struct("user_id": integer, "name": string("UTF-8")))
+
+follows := source("follows")
+follows :: stream(struct("follower_id": integer, "followee_id": integer))
+
+to_edge :: function((struct("follower_id": integer, "followee_id": integer)) -> struct("src": integer, "dst": integer))
+to_edge := function((row) -> struct("src": row.follower_id, "dst": row.followee_id))
+
+edge := map(follows, to_edge)
+
+circuit reach_body(edge: e, reach: p):
+    p_ready := map(p, p_for_join)
+    e_ready := map(e, e_for_join)
+    joined := join(e_ready, p_ready, on: ["key"])
+    joined_proj := project(joined, ["src", "dst"])
+    reach := distinct(plus(e, joined_proj))
+
+e_for_join :: function((struct("src": integer, "dst": integer)) -> struct("key": integer, "src": integer))
+e_for_join := function((row) -> struct("key": row.dst, "src": row.src))
+
+p_for_join :: function((struct("src": integer, "dst": integer)) -> struct("key": integer, "dst": integer))
+p_for_join := function((row) -> struct("key": row.src, "dst": row.dst))
+
+fp := fixpoint(reach_body(edge: edge, reach: empty()))
+reach_set := fp.reach
+
+cnt_fn :: aggregate_function((struct("src": integer, "dst": integer)) -> struct("reach_count": integer))
+cnt_fn := function((row) -> struct("reach_count": std.agg_count()))
+
+influence_set := aggregate(fp.reach, cnt_fn, by: ["src"])
+
+swap :: function((struct("follower_id": integer, "followee_id": integer)) -> struct("follower_id": integer, "followee_id": integer))
+swap := function((row) -> struct("follower_id": row.followee_id, "followee_id": row.follower_id))
+
+swapped := map(follows, swap)
+
+mutual_dup := join(follows, swapped, on: ["follower_id", "followee_id"])
+
+lt_fn :: function((struct("follower_id": integer, "followee_id": integer)) -> enum("false","true"))
+lt_fn := function((row) -> row.follower_id < row.followee_id)
+
+mutual := filter(mutual_dup, lt_fn)
+
+mutual_set := project(mutual, ["follower_id", "followee_id"])
