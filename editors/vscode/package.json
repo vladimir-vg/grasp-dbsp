@@ -1,0 +1,44 @@
+{
+  "name": "grasp-dbsp-language",
+  "displayName": "Grasp DBSP",
+  "description": "Syntax highlighting for the Grasp DBSP language",
+  "version": "0.1.0",
+  "engines": {
+    "vscode": "^1.106.1"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "scripts": {
+    "build-grammar": "node build-grammar.js",
+    "test": "node test-tokenize.js",
+    "vscode:prepublish": "npm run build-grammar"
+  },
+  "devDependencies": {
+    "js-yaml": "^4.2.0",
+    "vscode-oniguruma": "^2.0.1",
+    "vscode-textmate": "^9.3.2"
+  },
+  "contributes": {
+    "languages": [
+      {
+        "id": "gdbsp",
+        "aliases": [
+          "Grasp DBSP",
+          "gdbsp"
+        ],
+        "extensions": [
+          ".gdbsp"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "gdbsp",
+        "scopeName": "source.gdbsp",
+        "path": "./syntaxes/gdbsp.tmLanguage.json"
+      }
+    ]
+  }
+}

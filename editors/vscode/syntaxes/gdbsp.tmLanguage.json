@@ -1,0 +1,721 @@
+{
+	"$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+	"name": "Grasp DBSP",
+	"scopeName": "source.gdbsp",
+	"fileTypes": [
+		".gdbsp"
+	],
+	"patterns": [
+		{
+			"include": "#comments"
+		},
+		{
+			"include": "#circuit-header"
+		},
+		{
+			"include": "#typespec"
+		},
+		{
+			"include": "#fn-def"
+		},
+		{
+			"include": "#node-def"
+		},
+		{
+			"include": "#expr"
+		}
+	],
+	"repository": {
+		"comments": {
+			"patterns": [
+				{
+					"match": "#.*$",
+					"name": "comment.line.number-sign.gdbsp"
+				}
+			]
+		},
+		"circuit-header": {
+			"name": "meta.circuit-header.gdbsp",
+			"begin": "^[\\t ]*\\b(circuit)\\b[\\t ]+([A-Za-z_][A-Za-z0-9_]*)",
+			"beginCaptures": {
+				"1": {
+					"name": "keyword.control.gdbsp"
+				},
+				"2": {
+					"name": "entity.name.type.gdbsp"
+				}
+			},
+			"end": "$",
+			"patterns": [
+				{
+					"match": "\\b([a-z_][A-Za-z0-9_]*)[\\t ]*(:)",
+					"captures": {
+						"1": {
+							"name": "entity.other.attribute-name.gdbsp"
+						},
+						"2": {
+							"name": "punctuation.separator.key-value.gdbsp"
+						}
+					}
+				},
+				{
+					"match": "(,)",
+					"name": "punctuation.separator.gdbsp"
+				},
+				{
+					"match": "(\\))",
+					"name": "punctuation.section.parens.end.gdbsp"
+				},
+				{
+					"match": "(\\()",
+					"name": "punctuation.section.parens.begin.gdbsp"
+				},
+				{
+					"match": "(:)",
+					"name": "punctuation.separator.key-value.gdbsp"
+				},
+				{
+					"include": "#comments"
+				}
+			]
+		},
+		"typespec": {
+			"name": "meta.typespec.gdbsp",
+			"begin": "^[\\t ]*([A-Za-z_][A-Za-z0-9_]*(?:\\.[A-Za-z_][A-Za-z0-9_]*)*)[\\t ]*(::)[\\t ]*(stream|function|aggregate_function)\\b",
+			"beginCaptures": {
+				"1": {
+					"name": "entity.name.function.gdbsp"
+				},
+				"2": {
+					"name": "keyword.operator.gdbsp"
+				},
+				"3": {
+					"name": "storage.type.gdbsp"
+				}
+			},
+			"end": "$",
+			"patterns": [
+				{
+					"match": "(->)",
+					"name": "keyword.operator.gdbsp"
+				},
+				{
+					"match": "\\b([a-z_][A-Za-z0-9_]*)[\\t ]*(:)",
+					"captures": {
+						"1": {
+							"name": "entity.other.attribute-name.gdbsp"
+						},
+						"2": {
+							"name": "punctuation.separator.key-value.gdbsp"
+						}
+					}
+				},
+				{
+					"match": "(\\()",
+					"name": "punctuation.section.parens.begin.gdbsp"
+				},
+				{
+					"match": "(\\))",
+					"name": "punctuation.section.parens.end.gdbsp"
+				},
+				{
+					"match": "(,)",
+					"name": "punctuation.separator.gdbsp"
+				},
+				{
+					"include": "#types"
+				},
+				{
+					"include": "#comments"
+				}
+			]
+		},
+		"fn-def": {
+			"name": "meta.function-definition.gdbsp",
+			"begin": "^[\\t ]*([A-Za-z_][A-Za-z0-9_]*(?:\\.[A-Za-z_][A-Za-z0-9_]*)*)[\\t ]*(:=)[\\t ]*(function)\\b",
+			"beginCaptures": {
+				"1": {
+					"name": "entity.name.function.gdbsp"
+				},
+				"2": {
+					"name": "keyword.operator.gdbsp"
+				},
+				"3": {
+					"name": "keyword.control.gdbsp"
+				}
+			},
+			"end": "$",
+			"patterns": [
+				{
+					"include": "#expr"
+				},
+				{
+					"include": "#comments"
+				}
+			]
+		},
+		"node-def": {
+			"name": "meta.node-definition.gdbsp",
+			"begin": "^[\\t ]*([A-Za-z_][A-Za-z0-9_]*(?:\\.[A-Za-z_][A-Za-z0-9_]*)*)[\\t ]*(:=)",
+			"beginCaptures": {
+				"1": {
+					"name": "entity.name.function.gdbsp"
+				},
+				"2": {
+					"name": "keyword.operator.gdbsp"
+				}
+			},
+			"end": "$",
+			"patterns": [
+				{
+					"include": "#operator-name"
+				},
+				{
+					"include": "#expr"
+				},
+				{
+					"include": "#comments"
+				}
+			]
+		},
+		"operator-name": {
+			"match": "\\b(source|delay|integrate|differentiate|distinct|plus|neg|map|flat_map|join|aggregate|order|filter|project|antijoin|fixpoint|empty)\\b",
+			"name": "entity.name.function.operator.gdbsp"
+		},
+		"expr": {
+			"patterns": [
+				{
+					"include": "#string"
+				},
+				{
+					"include": "#bits"
+				},
+				{
+					"include": "#number"
+				},
+				{
+					"include": "#boolean-null"
+				},
+				{
+					"include": "#struct-literal"
+				},
+				{
+					"include": "#fncall"
+				},
+				{
+					"include": "#dot-access"
+				},
+				{
+					"include": "#array-literal"
+				},
+				{
+					"include": "#dict-literal"
+				},
+				{
+					"include": "#paren-expr"
+				},
+				{
+					"include": "#kw-arg"
+				},
+				{
+					"include": "#operators"
+				},
+				{
+					"include": "#boolean-ops"
+				},
+				{
+					"include": "#keywords"
+				},
+				{
+					"match": "\\b([a-z_][A-Za-z0-9_]*)\\b",
+					"name": "variable.other.gdbsp"
+				}
+			]
+		},
+		"string": {
+			"name": "string.quoted.double.gdbsp",
+			"begin": "\"",
+			"end": "\"",
+			"patterns": [
+				{
+					"name": "constant.character.escape.gdbsp",
+					"match": "\\\\."
+				}
+			]
+		},
+		"number": {
+			"match": "\\b\\d+\\.\\d+([eE][+-]?\\d+)?\\b|\\b\\d+[eE][+-]?\\d+\\b|\\b\\d+\\b",
+			"name": "constant.numeric.gdbsp"
+		},
+		"bits": {
+			"match": "\\b0b[01]+\\b",
+			"name": "constant.numeric.bit.gdbsp"
+		},
+		"boolean-null": {
+			"match": "\\b(true|false|null|absent)\\b",
+			"name": "constant.language.gdbsp"
+		},
+		"boolean-ops": {
+			"match": "\\b(not|and|or)\\b",
+			"name": "keyword.operator.gdbsp"
+		},
+		"keywords": {
+			"match": "\\b(function|aggregate_function|circuit|fixpoint|input|eval)\\b",
+			"name": "keyword.control.gdbsp"
+		},
+		"operators": {
+			"patterns": [
+				{
+					"match": "(\\*\\*|<<<|>>>|<<|>>|\\+\\+|!=|<=|>=|:=|::|->)",
+					"name": "keyword.operator.gdbsp"
+				},
+				{
+					"match": "([+\\-*/%&|^~=<>])",
+					"name": "keyword.operator.gdbsp"
+				}
+			]
+		},
+		"struct-literal": {
+			"name": "meta.struct.gdbsp",
+			"begin": "\\b(struct)\\b[\\t ]*(\\()",
+			"beginCaptures": {
+				"1": {
+					"name": "storage.type.gdbsp"
+				},
+				"2": {
+					"name": "punctuation.section.parens.begin.gdbsp"
+				}
+			},
+			"end": "(\\))",
+			"endCaptures": {
+				"1": {
+					"name": "punctuation.section.parens.end.gdbsp"
+				}
+			},
+			"patterns": [
+				{
+					"match": "(\"(?:[^\"\\\\]|\\\\.)*\")[\\t ]*(:)",
+					"captures": {
+						"1": {
+							"name": "string.quoted.double.gdbsp"
+						},
+						"2": {
+							"name": "punctuation.separator.key-value.gdbsp"
+						}
+					}
+				},
+				{
+					"match": "\\b([a-z_][A-Za-z0-9_]*)[\\t ]*(:)",
+					"captures": {
+						"1": {
+							"name": "entity.other.attribute-name.gdbsp"
+						},
+						"2": {
+							"name": "punctuation.separator.key-value.gdbsp"
+						}
+					}
+				},
+				{
+					"match": "(,)",
+					"name": "punctuation.separator.gdbsp"
+				},
+				{
+					"include": "#types"
+				},
+				{
+					"include": "#expr"
+				},
+				{
+					"include": "#comments"
+				}
+			]
+		},
+		"array-literal": {
+			"name": "meta.array.literal.gdbsp",
+			"begin": "(\\[)",
+			"beginCaptures": {
+				"1": {
+					"name": "punctuation.section.brackets.begin.gdbsp"
+				}
+			},
+			"end": "(\\])",
+			"endCaptures": {
+				"1": {
+					"name": "punctuation.section.brackets.end.gdbsp"
+				}
+			},
+			"patterns": [
+				{
+					"include": "#expr"
+				},
+				{
+					"match": "(\\*)[\\t ]*([a-z_][A-Za-z0-9_]*)",
+					"captures": {
+						"1": {
+							"name": "keyword.operator.gdbsp"
+						},
+						"2": {
+							"name": "variable.other.gdbsp"
+						}
+					}
+				},
+				{
+					"match": "(,)",
+					"name": "punctuation.separator.gdbsp"
+				},
+				{
+					"include": "#comments"
+				}
+			]
+		},
+		"dict-literal": {
+			"name": "meta.dict.literal.gdbsp",
+			"begin": "(\\{)",
+			"beginCaptures": {
+				"1": {
+					"name": "punctuation.section.braces.begin.gdbsp"
+				}
+			},
+			"end": "(\\})",
+			"endCaptures": {
+				"1": {
+					"name": "punctuation.section.braces.end.gdbsp"
+				}
+			},
+			"patterns": [
+				{
+					"include": "#expr"
+				},
+				{
+					"match": "(\\*\\*)[\\t ]*([a-z_][A-Za-z0-9_]*)",
+					"captures": {
+						"1": {
+							"name": "keyword.operator.gdbsp"
+						},
+						"2": {
+							"name": "variable.other.gdbsp"
+						}
+					}
+				},
+				{
+					"match": "(,)",
+					"name": "punctuation.separator.gdbsp"
+				},
+				{
+					"include": "#comments"
+				}
+			]
+		},
+		"paren-expr": {
+			"name": "meta.parens.gdbsp",
+			"begin": "(\\()",
+			"beginCaptures": {
+				"1": {
+					"name": "punctuation.section.parens.begin.gdbsp"
+				}
+			},
+			"end": "(\\))",
+			"endCaptures": {
+				"1": {
+					"name": "punctuation.section.parens.end.gdbsp"
+				}
+			},
+			"patterns": [
+				{
+					"include": "#expr"
+				}
+			]
+		},
+		"fncall": {
+			"name": "meta.function-call.gdbsp",
+			"begin": "((?:[A-Za-z_][A-Za-z0-9_]*\\.)*)([A-Za-z_][A-Za-z0-9_]*)(\\()",
+			"beginCaptures": {
+				"1": {
+					"name": "entity.name.namespace.gdbsp"
+				},
+				"2": {
+					"name": "entity.name.function.gdbsp"
+				},
+				"3": {
+					"name": "punctuation.section.parens.begin.gdbsp"
+				}
+			},
+			"end": "(\\))",
+			"endCaptures": {
+				"1": {
+					"name": "punctuation.section.parens.end.gdbsp"
+				}
+			},
+			"patterns": [
+				{
+					"include": "#kw-arg"
+				},
+				{
+					"include": "#expr"
+				},
+				{
+					"match": "(,)",
+					"name": "punctuation.separator.gdbsp"
+				},
+				{
+					"include": "#comments"
+				}
+			]
+		},
+		"dot-access": {
+			"match": "(\\.)([a-z_][A-Za-z0-9_]*)",
+			"captures": {
+				"1": {
+					"name": "punctuation.accessor.gdbsp"
+				},
+				"2": {
+					"name": "entity.other.attribute-name.gdbsp"
+				}
+			}
+		},
+		"kw-arg": {
+			"match": "\\b([a-z_][A-Za-z0-9_]*)[\\t ]*(:)",
+			"captures": {
+				"1": {
+					"name": "entity.other.attribute-name.gdbsp"
+				},
+				"2": {
+					"name": "punctuation.separator.key-value.gdbsp"
+				}
+			}
+		},
+		"types": {
+			"patterns": [
+				{
+					"include": "#struct-literal"
+				},
+				{
+					"include": "#type-closure"
+				},
+				{
+					"include": "#type-enum"
+				},
+				{
+					"include": "#type-array"
+				},
+				{
+					"include": "#type-map"
+				},
+				{
+					"include": "#type-optional"
+				},
+				{
+					"include": "#type-stream"
+				},
+				{
+					"include": "#type-parametric"
+				},
+				{
+					"include": "#typevar"
+				},
+				{
+					"include": "#scalar-type"
+				}
+			]
+		},
+		"scalar-type": {
+			"match": "\\b(timestamp_with_timezone|string_with_encoding|result_equivalent_closure|integer|timestamp|interval|numeric|dynamic|closure|optional|stream|struct|array|map|enum|json|i8|i16|i32|i64|u8|u16|u32|u64|f32|f64|string|bytes|bits|date|time)\\b",
+			"name": "storage.type.gdbsp"
+		},
+		"typevar": {
+			"match": "\\b([A-Z][A-Za-z0-9_]*)\\b",
+			"name": "support.type.gdbsp"
+		},
+		"type-closure": {
+			"name": "meta.type.closure.gdbsp",
+			"begin": "\\b(closure|result_equivalent_closure)\\b[\\t ]*(\\()",
+			"beginCaptures": {
+				"1": {
+					"name": "storage.type.gdbsp"
+				},
+				"2": {
+					"name": "punctuation.section.parens.begin.gdbsp"
+				}
+			},
+			"end": "(\\))",
+			"endCaptures": {
+				"1": {
+					"name": "punctuation.section.parens.end.gdbsp"
+				}
+			},
+			"patterns": [
+				{
+					"match": "(->)",
+					"name": "keyword.operator.gdbsp"
+				},
+				{
+					"include": "#types"
+				},
+				{
+					"match": "(,)",
+					"name": "punctuation.separator.gdbsp"
+				}
+			]
+		},
+		"type-enum": {
+			"name": "meta.type.enum.gdbsp",
+			"begin": "\\b(enum)\\b[\\t ]*(\\()",
+			"beginCaptures": {
+				"1": {
+					"name": "storage.type.gdbsp"
+				},
+				"2": {
+					"name": "punctuation.section.parens.begin.gdbsp"
+				}
+			},
+			"end": "(\\))",
+			"endCaptures": {
+				"1": {
+					"name": "punctuation.section.parens.end.gdbsp"
+				}
+			},
+			"patterns": [
+				{
+					"include": "#string"
+				},
+				{
+					"match": "(,)",
+					"name": "punctuation.separator.gdbsp"
+				}
+			]
+		},
+		"type-array": {
+			"name": "meta.type.array.gdbsp",
+			"begin": "\\b(array)\\b[\\t ]*(\\()",
+			"beginCaptures": {
+				"1": {
+					"name": "storage.type.gdbsp"
+				},
+				"2": {
+					"name": "punctuation.section.parens.begin.gdbsp"
+				}
+			},
+			"end": "(\\))",
+			"endCaptures": {
+				"1": {
+					"name": "punctuation.section.parens.end.gdbsp"
+				}
+			},
+			"patterns": [
+				{
+					"include": "#types"
+				},
+				{
+					"include": "#number"
+				},
+				{
+					"match": "(,)",
+					"name": "punctuation.separator.gdbsp"
+				}
+			]
+		},
+		"type-map": {
+			"name": "meta.type.map.gdbsp",
+			"begin": "\\b(map)\\b[\\t ]*(\\()",
+			"beginCaptures": {
+				"1": {
+					"name": "storage.type.gdbsp"
+				},
+				"2": {
+					"name": "punctuation.section.parens.begin.gdbsp"
+				}
+			},
+			"end": "(\\))",
+			"endCaptures": {
+				"1": {
+					"name": "punctuation.section.parens.end.gdbsp"
+				}
+			},
+			"patterns": [
+				{
+					"include": "#types"
+				},
+				{
+					"match": "(,)",
+					"name": "punctuation.separator.gdbsp"
+				}
+			]
+		},
+		"type-optional": {
+			"name": "meta.type.optional.gdbsp",
+			"begin": "\\b(optional)\\b[\\t ]*(\\()",
+			"beginCaptures": {
+				"1": {
+					"name": "storage.type.gdbsp"
+				},
+				"2": {
+					"name": "punctuation.section.parens.begin.gdbsp"
+				}
+			},
+			"end": "(\\))",
+			"endCaptures": {
+				"1": {
+					"name": "punctuation.section.parens.end.gdbsp"
+				}
+			},
+			"patterns": [
+				{
+					"include": "#types"
+				}
+			]
+		},
+		"type-stream": {
+			"name": "meta.type.stream.gdbsp",
+			"begin": "\\b(stream)\\b[\\t ]*(\\()",
+			"beginCaptures": {
+				"1": {
+					"name": "storage.type.gdbsp"
+				},
+				"2": {
+					"name": "punctuation.section.parens.begin.gdbsp"
+				}
+			},
+			"end": "(\\))",
+			"endCaptures": {
+				"1": {
+					"name": "punctuation.section.parens.end.gdbsp"
+				}
+			},
+			"patterns": [
+				{
+					"include": "#types"
+				}
+			]
+		},
+		"type-parametric": {
+			"name": "meta.type.parametric.gdbsp",
+			"begin": "\\b(numeric|string|bytes|bits)\\b[\\t ]*(\\()",
+			"beginCaptures": {
+				"1": {
+					"name": "storage.type.gdbsp"
+				},
+				"2": {
+					"name": "punctuation.section.parens.begin.gdbsp"
+				}
+			},
+			"end": "(\\))",
+			"endCaptures": {
+				"1": {
+					"name": "punctuation.section.parens.end.gdbsp"
+				}
+			},
+			"patterns": [
+				{
+					"include": "#string"
+				},
+				{
+					"include": "#number"
+				},
+				{
+					"match": "(,)",
+					"name": "punctuation.separator.gdbsp"
+				}
+			]
+		}
+	}
+}

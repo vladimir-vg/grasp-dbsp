@@ -3,3 +3,5 @@ _build/
 src/gdbsp_lexer_core.erl
 erl_crash.dump
 rebar3.crashdump
+editors/vscode/node_modules/
+editors/vscode/*.vsix

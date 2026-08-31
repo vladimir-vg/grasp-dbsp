@@ -1,0 +1,8 @@
+.vscode/**
+.gitignore
+build-grammar.js
+test-tokenize.js
+syntaxes/gdbsp.tmLanguage.yml
+examples/**
+node_modules/**
+package-lock.json

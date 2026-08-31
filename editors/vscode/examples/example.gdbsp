@@ -1,0 +1,84 @@
+# Example Grasp DBSP program — exercises the full syntax surface for
+# syntax-highlighting verification. Comments start with '#'.
+
+# ===== Sources and stream typespecs =====
+
+src := source("data")
+src :: stream(struct("k": i64, "v": i64))
+
+# ===== Function typespec + inline definition =====
+
+is_pos :: function((struct("k": i64, "v": i64)) -> enum("false", "true"))
+is_pos := function((row) -> row.v >= 0 and row.k != 0)
+
+# ===== Aggregate function =====
+
+agg_fn :: aggregate_function((struct("k": i64, "v": i64)) -> struct("total": i64, "cnt": integer))
+agg_fn := function((row) -> struct("total": std.agg_sum_i64(row.v), "cnt": std.agg_count()))
+
+# ===== Operators and kwargs =====
+
+filtered := filter(src, is_pos)
+totals := aggregate(src, agg_fn, by: ["k"])
+joined := join(src, filtered, on: ["k"])
+sorted := order(src, by: [["k", "desc"], ["v", "asc"]], rank_column: "rank", row_number_column: "row_number")
+projected := project(sorted, ["k", "v"])
+negated := neg(src)
+distincted := distinct(src)
+delayed := delay(src)
+integrated := integrate(src)
+differentiated := differentiate(src)
+flat := flat_map(src, is_pos)
+kept := antijoin(src, filtered, on: ["k"])
+emptied := empty()
+
+# ===== Circuit definition with indented body =====
+
+circuit tc_body(edge: e, path: p):
+    path_ready := map(p, path_for_join)
+    joined := join(e, path_ready, on: ["key"])
+    path := distinct(plus(e, joined))
+
+# ===== Fixpoint and member access =====
+
+fp := fixpoint(tc_body(edge: src, path: empty()))
+reach_set := fp.path
+
+# ===== Expression forms (literals, operators, collections) =====
+
+demo :: function(() -> struct("v": i64))
+demo := function(() -> struct("v": std.abs_i64(-3)))
+
+literals :: function(() -> i64)
+literals := function(() -> 0b1010 + 42 + 1.5 + 1e10 + 1.5e-3)
+
+bools :: function(() -> enum("false", "true"))
+bools := function(() -> not (true and false or null))
+
+spread_arr :: function(() -> i64)
+spread_arr := function(() -> std.array_size([1, 2, *[3, 4]]))
+
+spread_dict :: function(() -> i64)
+spread_dict := function(() -> std.map_size({"x": 1, **{"y": 2}}))
+
+slices :: function(() -> i64)
+slices := function(() -> std.array_size([1, 2, 3][0:2]))
+
+# ===== Scalar and parametric types =====
+
+typed :: stream(struct(
+    "a": i8, "b": i16, "c": i32, "d": i64,
+    "e": u8, "f": u16, "g": u32, "h": u64,
+    "i": integer, "j": f32, "k": f64, "l": numeric,
+    "m": numeric(10, 2),
+    "n": string("UTF-8"),
+    "o": bytes, "p": bytes(4),
+    "q": bits, "r": bits(8),
+    "s": enum("a", "b", "c"),
+    "t": date, "u": time, "v": timestamp, "w": interval,
+    "x": json, "y": dynamic,
+    "z": array(i64),
+    "aa": array(i64, 4),
+    "bb": map(string("UTF-8"), i64),
+    "cc": optional(i64)
+))
