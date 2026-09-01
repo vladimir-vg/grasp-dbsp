@@ -10,13 +10,18 @@ JSONL or as a long-lived HTTP service. Changes stream through the circuit as
 weighted *deltas* (`+1` insert, `-1` retract), so results are maintained
 incrementally rather than recomputed.
 
+## Features
+
 - **Relational operators** — `join`, `aggregate`, `filter`, `project`,
   `antijoin`, `distinct`, `order`, and more.
 - **Recursive queries** — `fixpoint` instantiation maps `WITH RECURSIVE`
   CTEs to iterative circuits.
-- **Static types** — a rich type system (scalars, `string("UTF-8")`,
-  `numeric(p,s)`, `struct`, `array`, `map`, `enum`, `date`/`time`/`timestamp`,
-  …) with full inference.
+- **Static types** — typed streams and functions with full type inference,
+  using `integer`, `i64`, `string("UTF-8")`, `struct`, `map`, `array`, and
+  `enum`.
+- **Concurrent by construction** — every DBSP operator (including those
+  inside `fixpoint` circuits) runs as its own Erlang process, so multicore
+  machines are utilized with no extra configuration.
 - **Three ways to run it** — `validate`, offline `run`, and an HTTP `serve`
   mode — from a single `gdbsp` escript.
 
@@ -215,6 +220,22 @@ A Visual Studio Code syntax-highlighting extension ships in
 ```bash
 make test     # run the Common Test suite (renders circuit graphs via Graphviz)
 ```
+
+## Limitations
+
+- **Integer literals are `integer`** — numeric literals in expressions are
+  typed `integer` (not `i64`/`u64`/…), so combining a literal with a
+  fixed-width field — e.g. `row.x + 1` where `x` is `i64` — is a type error.
+- **Narrow test coverage** — the end-to-end SQL fixtures really exercise only
+  `integer` and `string("UTF-8")`; other types have shallow round-trip
+  coverage only.
+- **Standard library is a draft** — `std.*` has comprehensive type
+  signatures, but only a small subset has runtime implementations and tests.
+- **In-memory only** — all state is held in RAM with no spill-to-disk or
+  persistence, so it is not suited to datasets larger than memory.
+- **Raw delta output** — `run` and `serve` emit a stream of `+1`/`-1`
+  retractions rather than a materialized final table; consumers must sum
+  weights to obtain the current result.
 
 ## License
 
